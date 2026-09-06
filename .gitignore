@@ -1,0 +1,30 @@
+# Node / Next.js
+node_modules/
+.next/
+out/
+build/
+*.log
+
+# Python / Virtualenv
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+ENV/
+
+# Database & generated PDFs
+*.db
+*.sqlite3
+*.pdf
+
+# Environment variables & local configs
+.env
+.env.local
+.env.development.local
+.env.production.local
+
+# IDE & System
+.vscode/
+.idea/
+.DS_Store
