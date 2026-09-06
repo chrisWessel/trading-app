@@ -2,6 +2,7 @@
 
 import React, { useEffect, useState } from 'react';
 import { Bell, Zap, ArrowUpRight, ArrowDownRight, Volume2, VolumeX, Shield, Target, Play, Clock, Navigation } from 'lucide-react';
+import { API_BASE_URL } from '@/lib/apiConfig';
 
 interface TradeParams {
   entry: number;
@@ -63,7 +64,7 @@ export default function LiveSignalNotificationPanel({
 
   const fetchSignal = async () => {
     try {
-      const res = await fetch('http://127.0.0.1:8000/api/signals/check', {
+      const res = await fetch(`${API_BASE_URL}/api/signals/check`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ symbol, timeframe, force_dispatch: false }),

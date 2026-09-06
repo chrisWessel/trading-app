@@ -3,6 +3,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { createChart, IChartApi, ISeriesApi, ColorType, LineStyle, IPriceLine } from 'lightweight-charts';
 import { RefreshCw, Zap, ShieldAlert, ChevronDown, Clock, Radio, ArrowUpRight, Shield, Target, AlertOctagon } from 'lucide-react';
+import { API_BASE_URL, getWsUrl } from '@/lib/apiConfig';
 
 interface CandleData {
   time: number;
@@ -173,7 +174,7 @@ export default function TradingChart({
   const fetchInitialHistory = async () => {
     setError(null);
     try {
-      const res = await fetch(`http://127.0.0.1:8000/api/candles?symbol=${encodeURIComponent(symbol)}&timeframe=${timeframe}&limit=100`);
+      const res = await fetch(`${API_BASE_URL}/api/candles?symbol=${encodeURIComponent(symbol)}&timeframe=${timeframe}&limit=100`);
       if (!res.ok) {
         throw new Error(`API error: ${res.statusText}`);
       }
@@ -192,7 +193,7 @@ export default function TradingChart({
       }
 
       if (candlestickSeriesRef.current && data.candles && data.candles.length > 0) {
-        const sortedCandles = [...data.candles].sort((a, b) => a.time - b.time);
+        const sortedCandles = [...data.candles].sort((a: any, b: any) => a.time - b.time);
         
         const uniqueCandles: CandleData[] = [];
         const seenTimes = new Set();
@@ -209,15 +210,15 @@ export default function TradingChart({
           lastBarTimeRef.current = uniqueCandles[uniqueCandles.length - 1].time;
         }
 
-        candlestickSeriesRef.current.setData(uniqueCandles);
+        candlestickSeriesRef.current.setData(uniqueCandles as any);
 
         if (volumeSeriesRef.current) {
           const volumeData = uniqueCandles.map((c) => ({
-            time: c.time,
+            time: c.time as any,
             value: c.volume,
             color: c.close >= c.open ? 'rgba(16, 185, 129, 0.4)' : 'rgba(239, 68, 68, 0.4)',
           }));
-          volumeSeriesRef.current.setData(volumeData);
+          volumeSeriesRef.current.setData(volumeData as any);
         }
 
         drawTechnicalPriceLines(data.support, data.resistance, data.latest_price);
@@ -272,6 +273,9 @@ export default function TradingChart({
       color: '#3B82F6',
       priceFormat: { type: 'volume' },
       priceScaleId: '',
+    } as any);
+
+    volumeSeries.priceScale().applyOptions({
       scaleMargins: { top: 0.8, bottom: 0 },
     });
 
@@ -303,7 +307,7 @@ export default function TradingChart({
 
     const connectWebSocket = () => {
       try {
-        const wsUrl = `ws://127.0.0.1:8000/ws/candles/${encodeURIComponent(symbol)}`;
+        const wsUrl = getWsUrl(`/ws/candles/${encodeURIComponent(symbol)}`);
         ws = new WebSocket(wsUrl);
 
         ws.onopen = () => {

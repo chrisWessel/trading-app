@@ -2,6 +2,7 @@
 
 import React, { useEffect, useState } from 'react';
 import { Layers, Gauge } from 'lucide-react';
+import { API_BASE_URL } from '@/lib/apiConfig';
 
 interface OrderBookData {
   symbol: string;
@@ -22,7 +23,7 @@ export default function OrderBookOBIGauge({ symbol }: OrderBookOBIGaugeProps) {
 
   const fetchOrderBook = async () => {
     try {
-      const res = await fetch(`http://127.0.0.1:8000/api/orderbook?symbol=${encodeURIComponent(symbol)}`);
+      const res = await fetch(`${API_BASE_URL}/api/orderbook?symbol=${encodeURIComponent(symbol)}`);
       if (res.ok) {
         const data = await res.json();
         setOrderbook(data);

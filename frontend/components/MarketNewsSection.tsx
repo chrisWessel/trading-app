@@ -2,6 +2,7 @@
 
 import React, { useEffect, useState } from 'react';
 import { Newspaper, ExternalLink, TrendingUp, TrendingDown, MinusCircle, AlertCircle, RefreshCw } from 'lucide-react';
+import { API_BASE_URL } from '@/lib/apiConfig';
 
 interface NewsItem {
   id: string;
@@ -27,7 +28,7 @@ export default function MarketNewsSection({ symbol }: MarketNewsSectionProps) {
   const fetchNews = async () => {
     setLoading(true);
     try {
-      const res = await fetch(`http://127.0.0.1:8000/api/news?symbol=${encodeURIComponent(symbol)}`);
+      const res = await fetch(`${API_BASE_URL}/api/news?symbol=${encodeURIComponent(symbol)}`);
       if (res.ok) {
         const data = await res.json();
         setNews(data.news || []);

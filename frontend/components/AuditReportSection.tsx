@@ -2,6 +2,7 @@
 
 import React, { useEffect, useState } from 'react';
 import { Database, FileText, Download, TrendingUp, ShieldCheck } from 'lucide-react';
+import { API_BASE_URL } from '@/lib/apiConfig';
 
 interface TradeLog {
   id: number;
@@ -20,17 +21,17 @@ interface TradeLog {
 }
 
 interface AuditReportSectionProps {
-  refreshTrigger: number;
+  refreshTrigger?: number;
 }
 
-export default function AuditReportSection({ refreshTrigger }: AuditReportSectionProps) {
+export default function AuditReportSection({ refreshTrigger = 0 }: AuditReportSectionProps) {
   const [trades, setTrades] = useState<TradeLog[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [downloadingPdf, setDownloadingPdf] = useState<boolean>(false);
 
   const fetchTradeHistory = async () => {
     try {
-      const res = await fetch('http://127.0.0.1:8000/api/trades/history');
+      const res = await fetch(`${API_BASE_URL}/api/trades/history`);
       if (res.ok) {
         const data = await res.json();
         setTrades(data.trades || []);
@@ -49,7 +50,7 @@ export default function AuditReportSection({ refreshTrigger }: AuditReportSectio
   const handleDownloadPdf = async () => {
     setDownloadingPdf(true);
     try {
-      const res = await fetch('http://127.0.0.1:8000/api/report/pdf');
+      const res = await fetch(`${API_BASE_URL}/api/report/pdf`);
       if (res.ok) {
         const blob = await res.blob();
         const url = window.URL.createObjectURL(blob);

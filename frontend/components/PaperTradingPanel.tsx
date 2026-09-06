@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { Play, CheckCircle, XCircle, DollarSign, Target, Shield, ArrowUpRight, ArrowDownRight, RefreshCw } from 'lucide-react';
+import { API_BASE_URL } from '@/lib/apiConfig';
 
 interface PaperTradingPanelProps {
   symbol: string;
@@ -105,7 +106,7 @@ export default function PaperTradingPanel({
       : (outcome === 'WIN' ? activePosition.tp1 : activePosition.stop_loss);
 
     try {
-      const res = await fetch('http://127.0.0.1:8000/api/trade/close', {
+      const res = await fetch(`${API_BASE_URL}/api/trade/close`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

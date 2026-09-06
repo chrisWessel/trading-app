@@ -2,6 +2,7 @@
 
 import React, { useEffect, useState } from 'react';
 import { Send, AlertTriangle, CheckCircle2, XCircle, Radio, Sparkles, Clock } from 'lucide-react';
+import { API_BASE_URL } from '@/lib/apiConfig';
 
 interface SignalAnalysis {
   symbol: string;
@@ -65,7 +66,7 @@ export default function SignalsStream({ symbol, timeframe }: SignalsStreamProps)
   const checkSignals = async (forceDispatch: boolean = false) => {
     if (forceDispatch) setLoading(true);
     try {
-      const res = await fetch('http://127.0.0.1:8000/api/signals/check', {
+      const res = await fetch(`${API_BASE_URL}/api/signals/check`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
