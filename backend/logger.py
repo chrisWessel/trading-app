@@ -9,29 +9,61 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 
 DB_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_NAME = os.path.join(DB_DIR, "trade_signals.db")
+DATABASE_URL = os.getenv("DATABASE_URL")
+
+def get_db_connection():
+    if DATABASE_URL:
+        import psycopg2
+        url = DATABASE_URL
+        if url.startswith("postgres://"):
+            url = url.replace("postgres://", "postgresql://", 1)
+        return psycopg2.connect(url)
+    return sqlite3.connect(DB_NAME)
 
 def init_db():
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS closed_signals (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            timestamp TEXT NOT NULL,
-            symbol TEXT NOT NULL,
-            signal_type TEXT NOT NULL,
-            entry_price REAL NOT NULL,
-            exit_price REAL NOT NULL,
-            stop_loss REAL NOT NULL,
-            take_profit REAL NOT NULL,
-            position_size_usd REAL NOT NULL,
-            outcome TEXT NOT NULL,
-            pnl_usd REAL NOT NULL,
-            pnl_percentage REAL NOT NULL,
-            rationale TEXT
-        )
-    """)
-    conn.commit()
-    conn.close()
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        if DATABASE_URL:
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS closed_signals (
+                    id SERIAL PRIMARY KEY,
+                    timestamp VARCHAR(50) NOT NULL,
+                    symbol VARCHAR(20) NOT NULL,
+                    signal_type VARCHAR(20) NOT NULL,
+                    entry_price DOUBLE PRECISION NOT NULL,
+                    exit_price DOUBLE PRECISION NOT NULL,
+                    stop_loss DOUBLE PRECISION NOT NULL,
+                    take_profit DOUBLE PRECISION NOT NULL,
+                    position_size_usd DOUBLE PRECISION DEFAULT 100.0,
+                    outcome VARCHAR(10) NOT NULL,
+                    pnl_usd DOUBLE PRECISION NOT NULL,
+                    pnl_percentage DOUBLE PRECISION NOT NULL,
+                    rationale TEXT
+                );
+            """)
+        else:
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS closed_signals (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    signal_type TEXT NOT NULL,
+                    entry_price REAL NOT NULL,
+                    exit_price REAL NOT NULL,
+                    stop_loss REAL NOT NULL,
+                    take_profit REAL NOT NULL,
+                    position_size_usd REAL NOT NULL,
+                    outcome TEXT NOT NULL,
+                    pnl_usd REAL NOT NULL,
+                    pnl_percentage REAL NOT NULL,
+                    rationale TEXT
+                )
+            """)
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"Error initializing DB: {e}")
 
 def log_closed_trade(symbol, signal_type, entry, exit_p, sl, tp, size_usd, outcome, rationale=""):
     if any(k in signal_type.upper() for k in ["BUY", "LONG"]):
@@ -42,13 +74,15 @@ def log_closed_trade(symbol, signal_type, entry, exit_p, sl, tp, size_usd, outco
     pnl_usd = size_usd * (pnl_pct / 100)
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("""
+    placeholder = "%s" if DATABASE_URL else "?"
+    query = f"""
         INSERT INTO closed_signals 
         (timestamp, symbol, signal_type, entry_price, exit_price, stop_loss, take_profit, position_size_usd, outcome, pnl_usd, pnl_percentage, rationale)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (timestamp, symbol, signal_type, entry, exit_p, sl, tp, size_usd, outcome, pnl_usd, pnl_pct, rationale))
+        VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder})
+    """
+    cursor.execute(query, (timestamp, symbol, signal_type, entry, exit_p, sl, tp, size_usd, outcome, pnl_usd, pnl_pct, rationale))
     conn.commit()
     conn.close()
 
@@ -56,7 +90,7 @@ def generate_pdf_monthly_report(year_month=None):
     if year_month is None:
         year_month = datetime.now().strftime("%Y-%m")
         
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_db_connection()
     query = f"SELECT * FROM closed_signals WHERE timestamp LIKE '{year_month}%'"
     df = pd.read_sql_query(query, conn)
     conn.close()
@@ -104,9 +138,9 @@ def generate_pdf_monthly_report(year_month=None):
     log_rows = []
     for _, row in df.iterrows():
         log_rows.append([
-            str(row['timestamp'])[:16], row['symbol'], row['signal_type'],
-            f"${row['entry_price']:.4f}", f"${row['exit_price']:.4f}",
-            row['outcome'], f"${row['pnl_usd']:.2f}"
+            str(row['timestamp'])[:16], str(row['symbol']), str(row['signal_type']),
+            f"${float(row['entry_price']):.4f}", f"${float(row['exit_price']):.4f}",
+            str(row['outcome']), f"${float(row['pnl_usd']):.2f}"
         ])
 
     t_log = Table(log_headers + log_rows, colWidths=[100, 70, 50, 70, 70, 70, 70])
@@ -122,7 +156,7 @@ def generate_pdf_monthly_report(year_month=None):
     return pdf_filename
 
 def get_all_closed_trades():
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT id, timestamp, symbol, signal_type, entry_price, exit_price, stop_loss, take_profit, position_size_usd, outcome, pnl_usd, pnl_percentage, rationale FROM closed_signals ORDER BY id DESC")
     rows = cursor.fetchall()
@@ -132,21 +166,21 @@ def get_all_closed_trades():
     for row in rows:
         trades.append({
             "id": row[0],
-            "timestamp": row[1],
+            "timestamp": str(row[1]),
             "symbol": row[2],
             "signal_type": row[3],
-            "entry_price": row[4],
-            "exit_price": row[5],
-            "stop_loss": row[6],
-            "take_profit": row[7],
-            "position_size_usd": row[8],
+            "entry_price": float(row[4]),
+            "exit_price": float(row[5]),
+            "stop_loss": float(row[6]),
+            "take_profit": float(row[7]),
+            "position_size_usd": float(row[8]),
             "outcome": row[9],
-            "pnl_usd": row[10],
-            "pnl_percentage": row[11],
+            "pnl_usd": float(row[10]),
+            "pnl_percentage": float(row[11]),
             "rationale": row[12]
         })
     return trades
 
 if __name__ == "__main__":
     init_db()
-    print("Database initialized successfully at:", DB_NAME)
+    print("Database initialized successfully!")
