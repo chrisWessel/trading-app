@@ -10,7 +10,8 @@ import LiveSignalNotificationPanel from '@/components/LiveSignalNotificationPane
 import MarketNewsSection from '@/components/MarketNewsSection';
 import AuditReportSection from '@/components/AuditReportSection';
 import MarketSessionClocks from '@/components/MarketSessionClocks';
-import { Activity, ShieldCheck, Cpu, Radio, Coins, Search, Globe, Eye, Monitor, Terminal } from 'lucide-react';
+import PositionSizingGuide from '@/components/PositionSizingGuide';
+import { Activity, ShieldCheck, Cpu, Radio, Coins, Search, Globe, Eye, Monitor, Terminal, Calculator, Sparkles } from 'lucide-react';
 
 interface AssetOption {
   symbol: string;
@@ -33,7 +34,7 @@ const PRESET_ASSETS: AssetOption[] = [
   { symbol: 'REXT/USD', label: 'REXT / USD', category: 'Crypto' },
   { symbol: 'BTC/USDT', label: 'BTC / USDT', category: 'Crypto' },
   { symbol: 'ETH/USDT', label: 'ETH / USDT', category: 'Crypto' },
-  { symbol: 'SOL/USDT', label: 'SOL / USDT', category: 'Crypto' },
+  { symbol: 'SOL/USDT', label: 'SOL / USD', category: 'Crypto' },
 ];
 
 export default function DashboardPage() {
@@ -44,6 +45,7 @@ export default function DashboardPage() {
   const [currentPrice, setCurrentPrice] = useState<number>(4310.37);
   const [refreshAuditCount, setRefreshAuditCount] = useState<number>(0);
   const [chartMode, setChartMode] = useState<'TradingViewDirect' | 'CustomEngine'>('TradingViewDirect');
+  const [showPositionGuide, setShowPositionGuide] = useState<boolean>(false);
 
   const filteredAssets = activeCategory === 'All'
     ? PRESET_ASSETS
@@ -101,8 +103,15 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        {/* System Status Badges */}
+        {/* System Status Badges & Sizing Guide Launcher */}
         <div className="flex flex-wrap items-center gap-3 text-xs font-mono">
+          <button
+            onClick={() => setShowPositionGuide(true)}
+            className="flex items-center gap-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-bold px-3.5 py-1.5 rounded-lg shadow-lg shadow-blue-900/50 transition border border-blue-400"
+          >
+            <Calculator className="w-4 h-4 text-amber-300" />
+            <span>📐 Position Sizer & PU Prime Guide</span>
+          </button>
           <div className="flex items-center gap-1.5 bg-slate-950 border border-slate-800 px-3 py-1.5 rounded-lg text-slate-300">
             <Cpu className="w-4 h-4 text-emerald-400" />
             <span>FastAPI Engine: <strong className="text-emerald-400">ONLINE (8000)</strong></span>
@@ -110,10 +119,6 @@ export default function DashboardPage() {
           <div className="flex items-center gap-1.5 bg-slate-950 border border-slate-800 px-3 py-1.5 rounded-lg text-slate-300">
             <Radio className="w-4 h-4 text-rose-400 animate-pulse" />
             <span>Telegram Bot: <strong className="text-slate-200">ACTIVE</strong></span>
-          </div>
-          <div className="flex items-center gap-1.5 bg-slate-950 border border-slate-800 px-3 py-1.5 rounded-lg text-slate-300">
-            <ShieldCheck className="w-4 h-4 text-blue-400" />
-            <span>Database: <strong className="text-blue-400">trade_signals.db</strong></span>
           </div>
         </div>
       </header>
@@ -274,6 +279,14 @@ export default function DashboardPage() {
       <footer className="text-center text-xs text-slate-500 py-4 border-t border-slate-900 font-mono">
         WesSignal Terminal Pro • Left Sidebar Navigation Layout • REXT/USDT & REXT/USD Engine • Google Antigravity Architecture
       </footer>
+
+      {showPositionGuide && (
+        <PositionSizingGuide
+          initialSymbol={symbol}
+          isModal={true}
+          onClose={() => setShowPositionGuide(false)}
+        />
+      )}
     </div>
   );
 }

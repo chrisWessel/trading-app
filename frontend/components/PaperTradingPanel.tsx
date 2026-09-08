@@ -1,8 +1,9 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { Play, CheckCircle, XCircle, DollarSign, Target, Shield, ArrowUpRight, ArrowDownRight, RefreshCw } from 'lucide-react';
+import { Play, CheckCircle, XCircle, DollarSign, Target, Shield, ArrowUpRight, ArrowDownRight, RefreshCw, Calculator, HelpCircle } from 'lucide-react';
 import { API_BASE_URL } from '@/lib/apiConfig';
+import PositionSizingGuide from '@/components/PositionSizingGuide';
 
 interface PaperTradingPanelProps {
   symbol: string;
@@ -33,6 +34,9 @@ export default function PaperTradingPanel({
   const [tp1, setTp1] = useState<number>(0);
   const [tp2, setTp2] = useState<number>(0);
   const [positionSizeUsd, setPositionSizeUsd] = useState<number>(500);
+  const [sizeMode, setSizeMode] = useState<'USD' | 'LOTS'>('USD');
+  const [lotsInput, setLotsInput] = useState<number>(0.05);
+  const [showGuideModal, setShowGuideModal] = useState<boolean>(false);
 
   const [activePosition, setActivePosition] = useState<ActivePosition | null>(null);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
@@ -285,13 +289,63 @@ export default function PaperTradingPanel({
             </div>
 
             <div>
-              <label className="text-slate-400 text-[11px] block mb-1">POSITION SIZE ($USD)</label>
-              <input
-                type="number"
-                value={positionSizeUsd}
-                onChange={(e) => setPositionSizeUsd(parseFloat(e.target.value))}
-                className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-white font-bold focus:outline-none focus:border-blue-500"
-              />
+              <div className="flex items-center justify-between mb-1">
+                <div className="flex items-center gap-1 bg-slate-950 px-1 py-0.5 rounded border border-slate-800 text-[10px]">
+                  <button
+                    type="button"
+                    onClick={() => setSizeMode('USD')}
+                    className={`px-1.5 py-0.5 rounded font-bold transition ${sizeMode === 'USD' ? 'bg-blue-600 text-white' : 'text-slate-400'}`}
+                  >
+                    $ USD
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSizeMode('LOTS')}
+                    className={`px-1.5 py-0.5 rounded font-bold transition ${sizeMode === 'LOTS' ? 'bg-blue-600 text-white' : 'text-slate-400'}`}
+                  >
+                    Lots
+                  </button>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowGuideModal(true)}
+                  className="text-[10px] text-amber-400 hover:underline flex items-center gap-0.5"
+                  title="Open PU Prime Lot & Position Sizer Guide"
+                >
+                  <Calculator className="w-2.5 h-2.5" />
+                  <span>Guide</span>
+                </button>
+              </div>
+
+              {sizeMode === 'USD' ? (
+                <input
+                  type="number"
+                  value={positionSizeUsd}
+                  onChange={(e) => {
+                    const usd = parseFloat(e.target.value) || 0;
+                    setPositionSizeUsd(usd);
+                    // Approximate lot sizing for display/sync
+                    const contractSize = symbol.includes('XAU') ? 100 : 100000;
+                    setLotsInput(Number((usd / (contractSize * (currentPrice || 1))).toFixed(2)));
+                  }}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-white font-bold focus:outline-none focus:border-blue-500"
+                  placeholder="Position Size ($USD)"
+                />
+              ) : (
+                <input
+                  type="number"
+                  step="0.01"
+                  value={lotsInput}
+                  onChange={(e) => {
+                    const lots = parseFloat(e.target.value) || 0.01;
+                    setLotsInput(lots);
+                    const contractSize = symbol.includes('XAU') ? 100 : 100000;
+                    setPositionSizeUsd(Number((lots * contractSize * (currentPrice || 1)).toFixed(2)));
+                  }}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-amber-400 font-mono font-bold focus:outline-none focus:border-blue-500"
+                  placeholder="Volume in Lots"
+                />
+              )}
             </div>
           </div>
 
@@ -338,6 +392,14 @@ export default function PaperTradingPanel({
             <span>Open Simulated Position ({symbol})</span>
           </button>
         </form>
+      )}
+
+      {showGuideModal && (
+        <PositionSizingGuide
+          initialSymbol={symbol}
+          isModal={true}
+          onClose={() => setShowGuideModal(false)}
+        />
       )}
     </div>
   );
