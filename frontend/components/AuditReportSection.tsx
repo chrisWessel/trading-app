@@ -120,17 +120,17 @@ export default function AuditReportSection({ refreshTrigger = 0 }: AuditReportSe
 
       {/* Database Table */}
       <div className="bg-slate-950 border border-slate-800 rounded-lg overflow-x-auto">
-        <table className="w-full text-left text-xs font-mono">
+        <table className="w-full text-left text-xs font-mono table-fixed">
           <thead className="bg-slate-900 text-slate-400 text-[11px] border-b border-slate-800">
             <tr>
-              <th className="p-2.5">ID</th>
-              <th className="p-2.5">TIMESTAMP (UK)</th>
-              <th className="p-2.5">SYMBOL</th>
-              <th className="p-2.5">TYPE</th>
-              <th className="p-2.5">ENTRY ($)</th>
-              <th className="p-2.5">EXIT ($)</th>
-              <th className="p-2.5">REALIZED PnL ($)</th>
-              <th className="p-2.5">OUTCOME</th>
+              <th className="p-2.5 w-[5%] whitespace-nowrap">ID</th>
+              <th className="p-2.5 w-[18%] whitespace-nowrap">TIMESTAMP (UK)</th>
+              <th className="p-2.5 w-[10%] whitespace-nowrap">SYMBOL</th>
+              <th className="p-2.5 w-[12%] whitespace-nowrap">TYPE</th>
+              <th className="p-2.5 w-[12%] whitespace-nowrap text-right">ENTRY ($)</th>
+              <th className="p-2.5 w-[12%] whitespace-nowrap text-right">EXIT ($)</th>
+              <th className="p-2.5 w-[18%] whitespace-nowrap text-right">REALIZED PnL ($)</th>
+              <th className="p-2.5 w-[13%] whitespace-nowrap text-center">OUTCOME</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-800/60">
@@ -146,10 +146,10 @@ export default function AuditReportSection({ refreshTrigger = 0 }: AuditReportSe
                 const prec = isHigh ? 2 : 4;
                 return (
                   <tr key={t.id} className="hover:bg-slate-900/50 transition">
-                    <td className="p-2.5 text-slate-400">#{t.id}</td>
-                    <td className="p-2.5 text-slate-300">{t.timestamp}</td>
-                    <td className="p-2.5 text-white font-bold">{t.symbol}</td>
-                    <td className="p-2.5">
+                    <td className="p-2.5 text-slate-400 whitespace-nowrap">#{t.id}</td>
+                    <td className="p-2.5 text-slate-300 whitespace-nowrap truncate">{t.timestamp}</td>
+                    <td className="p-2.5 text-white font-bold whitespace-nowrap">{t.symbol}</td>
+                    <td className="p-2.5 whitespace-nowrap">
                       <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
                         t.signal_type?.includes('BUY')
                           ? 'bg-emerald-950 text-emerald-400 border border-emerald-800'
@@ -158,12 +158,12 @@ export default function AuditReportSection({ refreshTrigger = 0 }: AuditReportSe
                         {t.signal_type}
                       </span>
                     </td>
-                    <td className="p-2.5 text-slate-200">${t.entry_price.toFixed(prec)}</td>
-                    <td className="p-2.5 text-slate-200">${t.exit_price.toFixed(prec)}</td>
-                    <td className={`p-2.5 font-bold ${t.pnl_usd >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                    <td className="p-2.5 text-slate-200 text-right whitespace-nowrap">${t.entry_price.toFixed(prec)}</td>
+                    <td className="p-2.5 text-slate-200 text-right whitespace-nowrap">${t.exit_price.toFixed(prec)}</td>
+                    <td className={`p-2.5 font-bold text-right whitespace-nowrap ${t.pnl_usd >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
                       ${t.pnl_usd.toFixed(2)} ({t.pnl_percentage >= 0 ? '+' : ''}{t.pnl_percentage.toFixed(2)}%)
                     </td>
-                    <td className="p-2.5">
+                    <td className="p-2.5 text-center whitespace-nowrap">
                       <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
                         t.outcome === 'WIN' ? 'bg-emerald-600 text-white' : 'bg-rose-600 text-white'
                       }`}>

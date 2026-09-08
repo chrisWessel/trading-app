@@ -107,7 +107,7 @@ export default function LiveSignalNotificationPanel({
           rationale: a.trade_params.rationale,
         };
 
-        setNotifications((prev) => [newNotif, ...prev.slice(0, 15)]);
+        setNotifications((prev) => [newNotif, ...prev.slice(0, 50)]);
       }
     } catch (e) {
       console.error('Signal notification error:', e);
@@ -123,7 +123,7 @@ export default function LiveSignalNotificationPanel({
   const latestNotif = notifications[0];
 
   return (
-    <aside className="bg-slate-900 border border-slate-800 rounded-xl p-4 shadow-2xl flex flex-col justify-between h-full min-h-[850px] space-y-4 font-mono">
+    <aside className="bg-slate-900 border border-slate-800 rounded-xl p-4 shadow-2xl flex flex-col h-full max-h-[calc(100vh-2rem)] sticky top-4 space-y-4 font-mono overflow-hidden">
       {/* Sidebar Top Header */}
       <div className="space-y-3 pb-3 border-b border-slate-800 shrink-0">
         <div className="flex items-center justify-between">
@@ -221,11 +221,11 @@ export default function LiveSignalNotificationPanel({
       )}
 
       {/* Vertical Navigation Signal Feed History (Stretches down to bottom) */}
-      <div className="flex-1 min-h-[300px] flex flex-col space-y-2 overflow-hidden">
-        <h4 className="text-[11px] font-bold text-slate-40 font-sans uppercase tracking-wider border-b border-slate-800 pb-1">
+      <div className="flex-1 min-h-0 flex flex-col space-y-2 overflow-hidden">
+        <h4 className="text-[11px] font-bold text-slate-400 font-sans uppercase tracking-wider border-b border-slate-800 pb-1 shrink-0">
           Live Action History Log
         </h4>
-        <div className="flex-1 overflow-y-auto space-y-2 pr-1">
+        <div className="flex-1 min-h-0 overflow-y-auto space-y-2 pr-1 scrollbar-thin">
           {notifications.slice(1).map((item) => (
             <div
               key={item.id}

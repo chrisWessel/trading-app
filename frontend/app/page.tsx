@@ -9,6 +9,7 @@ import SignalsStream from '@/components/SignalsStream';
 import LiveSignalNotificationPanel from '@/components/LiveSignalNotificationPanel';
 import MarketNewsSection from '@/components/MarketNewsSection';
 import AuditReportSection from '@/components/AuditReportSection';
+import MarketSessionClocks from '@/components/MarketSessionClocks';
 import { Activity, ShieldCheck, Cpu, Radio, Coins, Search, Globe, Eye, Monitor, Terminal } from 'lucide-react';
 
 interface AssetOption {
@@ -116,6 +117,9 @@ export default function DashboardPage() {
           </div>
         </div>
       </header>
+
+      {/* Market Session Clocks — NY, London, Asia */}
+      <MarketSessionClocks />
 
       {/* Multi-Category Asset Switcher & Chart View Mode Toggle Bar */}
       <div className="bg-slate-900 border border-slate-800 p-4 rounded-xl space-y-3 shadow-xl">
