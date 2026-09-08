@@ -122,7 +122,7 @@ export default function PositionSizingGuide({
   onClose,
   isModal = false
 }: PositionSizingGuideProps) {
-  const [activeTab, setActiveTab] = useState<'calculator' | 'guide' | 'assistant' | 'cheatsheet'>('calculator');
+  const [activeTab, setActiveTab] = useState<'calculator' | 'guide' | 'assistant' | 'cheatsheet' | 'depositMatrix'>('calculator');
   
   // Calculator States
   const [balance, setBalance] = useState<number>(5000);
@@ -131,6 +131,9 @@ export default function PositionSizingGuide({
   const [stopLossPips, setStopLossPips] = useState<number>(ASSET_SPECS[initialSymbol]?.defaultSlPips || 30);
   const [leverage, setLeverage] = useState<number>(500); // 1:500 default PU Prime
   const [customPrice, setCustomPrice] = useState<number>(2650);
+
+  // Matrix Filter States
+  const [matrixSlPips, setMatrixSlPips] = useState<number>(30);
 
   // Assistant Wizard States
   const [assistCapital, setAssistCapital] = useState<number>(1000);
@@ -242,6 +245,18 @@ export default function PositionSizingGuide({
         </button>
 
         <button
+          onClick={() => setActiveTab('depositMatrix')}
+          className={`flex items-center gap-2 px-4 py-2.5 rounded-t-lg font-semibold transition border-b-2 ${
+            activeTab === 'depositMatrix'
+              ? 'bg-slate-950 text-emerald-400 border-emerald-500 shadow-sm'
+              : 'text-slate-400 hover:text-slate-200 border-transparent hover:bg-slate-850'
+          }`}
+        >
+          <DollarSign className="w-4 h-4 text-emerald-400" />
+          <span>4. Deposit Tier Lot Matrix ($10 - $100k)</span>
+        </button>
+
+        <button
           onClick={() => setActiveTab('cheatsheet')}
           className={`flex items-center gap-2 px-4 py-2.5 rounded-t-lg font-semibold transition border-b-2 ${
             activeTab === 'cheatsheet'
@@ -250,7 +265,7 @@ export default function PositionSizingGuide({
           }`}
         >
           <Layers className="w-4 h-4" />
-          <span>4. Asset Contract Cheat Sheet</span>
+          <span>5. Asset Contract Specs</span>
         </button>
       </div>
 
@@ -685,6 +700,124 @@ export default function PositionSizingGuide({
                         </td>
                       </tr>
                     ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* TAB 4: DEPOSIT TIER LOT MATRIX ($10 TO $100,000 USD) */}
+        {activeTab === 'depositMatrix' && (
+          <div className="space-y-6">
+            <div className="bg-slate-950 border border-slate-800 rounded-xl overflow-hidden shadow-xl">
+              {/* Header bar with filters */}
+              <div className="bg-slate-900 p-4 border-b border-slate-800 flex flex-wrap items-center justify-between gap-4">
+                <div>
+                  <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                    <DollarSign className="w-4 h-4 text-emerald-400" />
+                    <span>Deposit Amount vs. Required Lot Sizes ($10 to $100,000 USD)</span>
+                  </h3>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    Recommended lot sizes for PU Prime based on account balance and risk management rules.
+                  </p>
+                </div>
+
+                {/* Stop Loss Filter for Matrix */}
+                <div className="flex items-center gap-2 bg-slate-950 px-3 py-1.5 rounded-lg border border-slate-800 text-xs font-mono">
+                  <span className="text-slate-400">Assumed Stop Loss:</span>
+                  <button
+                    type="button"
+                    onClick={() => setMatrixSlPips(15)}
+                    className={`px-2 py-0.5 rounded font-bold transition ${matrixSlPips === 15 ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-white'}`}
+                  >
+                    15 Pips (Scalp)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setMatrixSlPips(30)}
+                    className={`px-2 py-0.5 rounded font-bold transition ${matrixSlPips === 30 ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-white'}`}
+                  >
+                    30 Pips (Day Trade)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setMatrixSlPips(50)}
+                    className={`px-2 py-0.5 rounded font-bold transition ${matrixSlPips === 50 ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-white'}`}
+                  >
+                    50 Pips (Swing)
+                  </button>
+                </div>
+              </div>
+
+              {/* Table */}
+              <div className="p-4 overflow-x-auto">
+                <table className="w-full text-xs text-left text-slate-300 font-mono">
+                  <thead className="bg-slate-900 text-slate-400 border-b border-slate-800">
+                    <tr>
+                      <th className="p-3">Deposit Amount ($)</th>
+                      <th className="p-3 text-blue-400">1% Risk (Cons.)</th>
+                      <th className="p-3 text-emerald-400">2% Risk (Mod.)</th>
+                      <th className="p-3 text-rose-400">4% Risk (Agg.)</th>
+                      <th className="p-3 text-amber-400 font-bold">Recommended PU Prime Volume</th>
+                      <th className="p-3">Min Margin (1:500)</th>
+                      <th className="p-3">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-850">
+                    {[
+                      { amount: 10, label: '$10 USD (Micro Starter)' },
+                      { amount: 25, label: '$25 USD' },
+                      { amount: 50, label: '$50 USD' },
+                      { amount: 100, label: '$100 USD (Standard Micro)' },
+                      { amount: 250, label: '$250 USD' },
+                      { amount: 500, label: '$500 USD' },
+                      { amount: 1000, label: '$1,000 USD (Mini Account)' },
+                      { amount: 2500, label: '$2,500 USD' },
+                      { amount: 5000, label: '$5,000 USD' },
+                      { amount: 10000, label: '$10,000 USD (Standard Account)' },
+                      { amount: 25000, label: '$25,000 USD (Funded Tier)' },
+                      { amount: 50000, label: '$50,000 USD' },
+                      { amount: 100000, label: '$100,000 USD (Institutional Tier)' },
+                    ].map((tier) => {
+                      const risk1 = (tier.amount * 0.01) / (matrixSlPips * 10);
+                      const risk2 = (tier.amount * 0.02) / (matrixSlPips * 10);
+                      const risk4 = (tier.amount * 0.04) / (matrixSlPips * 10);
+
+                      const lot1 = Math.max(0.01, Number(risk1.toFixed(2)));
+                      const lot2 = Math.max(0.01, Number(risk2.toFixed(2)));
+                      const lot4 = Math.max(0.01, Number(risk4.toFixed(2)));
+
+                      const margin = (lot2 * 100000) / 500;
+
+                      return (
+                        <tr key={tier.amount} className="hover:bg-slate-900/60 transition">
+                          <td className="p-3 font-bold text-white font-sans">
+                            <span className="text-emerald-400 font-mono font-extrabold">{tier.label}</span>
+                          </td>
+                          <td className="p-3 text-blue-400 font-bold">{lot1.toFixed(2)} Lot</td>
+                          <td className="p-3 text-emerald-400 font-bold">{lot2.toFixed(2)} Lot</td>
+                          <td className="p-3 text-rose-400 font-bold">{lot4.toFixed(2)} Lot</td>
+                          <td className="p-3 text-amber-300 font-bold bg-amber-950/20 rounded">
+                            {lot1 === lot2 ? `${lot1.toFixed(2)} Lot` : `${lot1.toFixed(2)} - ${lot2.toFixed(2)} Lots`}
+                          </td>
+                          <td className="p-3 text-slate-400">${margin.toFixed(2)}</td>
+                          <td className="p-3">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setBalance(tier.amount);
+                                setStopLossPips(matrixSlPips);
+                                setActiveTab('calculator');
+                              }}
+                              className="bg-blue-600/30 hover:bg-blue-600 text-blue-300 hover:text-white px-2.5 py-1 rounded text-[11px] font-sans font-semibold transition border border-blue-500/40"
+                            >
+                              Load in Sizer →
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
