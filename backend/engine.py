@@ -69,7 +69,7 @@ def map_symbol_to_yahoo_ticker(symbol: str) -> str:
 def get_asset_base_config(symbol: str) -> Tuple[float, int]:
     clean = clean_symbol_string(symbol)
     if "XAU" in clean or "GOLD" in clean or "PAXG" in clean:
-        return 4310.37, 2
+        return 4440.00, 2
     elif "JPY" in clean:
         return 152.50, 2
     elif "EUR" in clean:
@@ -85,7 +85,7 @@ def get_asset_base_config(symbol: str) -> Tuple[float, int]:
     elif "NZD" in clean:
         return 0.6050, 4
     elif "BTC" in clean:
-        return 64850.00, 2
+        return 79450.00, 2
     elif "ETH" in clean:
         return 3480.00, 2
     elif "SOL" in clean:
@@ -95,13 +95,80 @@ def get_asset_base_config(symbol: str) -> Tuple[float, int]:
     else:
         return 100.00, 2
 
+def fetch_real_ohlcv_from_market(symbol: str, timeframe: str = "1m", limit: int = 100) -> Optional[pd.DataFrame]:
+    clean = clean_symbol_string(symbol)
+    ticker = map_symbol_to_yahoo_ticker(symbol)
+    
+    tf_map = {
+        '1s': ('1m', '1d'), '5s': ('1m', '1d'), '15s': ('1m', '1d'), '30s': ('1m', '1d'),
+        '1m': ('1m', '1d'), '2m': ('2m', '1d'), '3m': ('2m', '1d'), '5m': ('5m', '1d'),
+        '15m': ('15m', '5d'), '30m': ('30m', '5d'), '45m': ('30m', '5d'),
+        '1h': ('60m', '1mo'), '2h': ('60m', '1mo'), '4h': ('60m', '1mo'),
+        '1d': ('1d', '3mo'), '1w': ('1wk', '1y'), '1M': ('1mo', '2y')
+    }
+    interval, range_str = tf_map.get(timeframe, ('1m', '1d'))
+    
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?interval={interval}&range={range_str}"
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+    
+    try:
+        r = requests.get(url, headers=headers, timeout=2.5)
+        if r.status_code == 200:
+            data = r.json()
+            result = data.get('chart', {}).get('result', [])
+            if result and result[0].get('timestamp') and result[0].get('indicators', {}).get('quote', []):
+                res0 = result[0]
+                timestamps = [ts * 1000 for ts in res0['timestamp']]
+                quote = res0['indicators']['quote'][0]
+                
+                opens = quote.get('open', [])
+                highs = quote.get('high', [])
+                lows = quote.get('low', [])
+                closes = quote.get('close', [])
+                volumes = quote.get('volume', [])
+                
+                records = []
+                for i in range(len(timestamps)):
+                    if closes[i] is not None and opens[i] is not None:
+                        records.append({
+                            'timestamp': timestamps[i],
+                            'open': float(opens[i]),
+                            'high': float(highs[i]),
+                            'low': float(lows[i]),
+                            'close': float(closes[i]),
+                            'volume': float(volumes[i]) if (i < len(volumes) and volumes[i] is not None) else 100.0
+                        })
+                
+                if len(records) > 0:
+                    df = pd.DataFrame(records)
+                    _, precision = get_asset_base_config(symbol)
+                    for col in ['open', 'high', 'low', 'close']:
+                        df[col] = df[col].round(precision)
+                    
+                    latest_p = float(df['close'].iloc[-1])
+                    UNIVERSAL_PRICE_HUB[clean] = latest_p
+                    
+                    if len(df) > limit:
+                        df = df.tail(limit).reset_index(drop=True)
+                    return df
+    except Exception as e:
+        print(f"Market fetch notice for {symbol}: {e}")
+        
+    return None
+
 def get_synchronized_live_price(symbol: str) -> float:
     clean = clean_symbol_string(symbol)
-    base_price, precision = get_asset_base_config(symbol)
 
-    if clean in UNIVERSAL_PRICE_HUB:
+    if clean in UNIVERSAL_PRICE_HUB and UNIVERSAL_PRICE_HUB[clean] > 0:
         return UNIVERSAL_PRICE_HUB[clean]
 
+    real_df = fetch_real_ohlcv_from_market(symbol=symbol, timeframe="1m", limit=5)
+    if real_df is not None and not real_df.empty:
+        p = float(real_df['close'].iloc[-1])
+        UNIVERSAL_PRICE_HUB[clean] = p
+        return p
+
+    base_price, precision = get_asset_base_config(symbol)
     UNIVERSAL_PRICE_HUB[clean] = base_price
     return base_price
 
@@ -189,6 +256,11 @@ def fetch_ohlcv(symbol: str = "EUR/USD", timeframe: str = "1m", limit: int = 100
             synced_p = get_synchronized_live_price(symbol)
             df.at[df.index[-1], 'close'] = synced_p
             return df
+
+    real_df = fetch_real_ohlcv_from_market(symbol=symbol, timeframe=timeframe, limit=limit)
+    if real_df is not None and not real_df.empty:
+        OHLCV_CACHE[cache_key] = (now, real_df)
+        return real_df.copy()
 
     fetched_df = generate_live_ticking_ohlcv(symbol=symbol, timeframe=timeframe, limit=limit)
     synced_p = get_synchronized_live_price(symbol)
@@ -283,24 +355,73 @@ def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m") ->
     price_position_pct = (latest_price - support) / price_range * 100
     vol_ratio = latest_vol / vol_ma_10 if vol_ma_10 > 0 else 1.0
 
-    # Multi-Tier Active Signal Logic
+    # Technical Trend Analysis (Moving Averages & Momentum)
+    df['sma_20'] = df['close'].rolling(window=min(20, len(df)), min_periods=3).mean()
+    df['sma_50'] = df['close'].rolling(window=min(50, len(df)), min_periods=5).mean()
+    
+    sma_20_curr = float(df['sma_20'].iloc[-1])
+    sma_50_curr = float(df['sma_50'].iloc[-1])
+    
+    # 5-period momentum/slope of SMA_20
+    if len(df) >= 6:
+        sma_20_prev = float(df['sma_20'].iloc[-6])
+        sma_slope = (sma_20_curr - sma_20_prev) / sma_20_prev * 100
+    else:
+        sma_slope = 0.0
+
+    # Classify market regime: DOWNTREND, UPTREND, or RANGEBOUND
+    if latest_price < sma_20_curr and (sma_20_curr < sma_50_curr or sma_slope < -0.01):
+        trend = "DOWNTREND"
+    elif latest_price > sma_20_curr and (sma_20_curr > sma_50_curr or sma_slope > 0.01):
+        trend = "UPTREND"
+    elif latest_price < sma_20_curr and sma_slope < -0.03:
+        trend = "DOWNTREND"
+    elif latest_price > sma_20_curr and sma_slope > 0.03:
+        trend = "UPTREND"
+    else:
+        trend = "RANGEBOUND"
+
+    # Multi-Tier Trend-Aware Active Signal Logic
     cond_support_zone = (price_position_pct <= 45.0) or (latest_low <= support * 1.002)
     cond_resistance_zone = (price_position_pct >= 55.0) or (latest_high >= resistance * 0.998)
     cond_bullish_obi = (obi_score >= 0.02)
     cond_bearish_obi = (obi_score <= -0.02)
 
-    if cond_support_zone and cond_bullish_obi:
-        signal_type = "BUY/LONG"
-    elif cond_resistance_zone and cond_bearish_obi:
-        signal_type = "SELL/SHORT"
-    elif vol_ratio >= 1.3 and obi_score > 0.10:
-        signal_type = "BUY/LONG"
-    elif vol_ratio >= 1.3 and obi_score < -0.10:
-        signal_type = "SELL/SHORT"
-    elif price_position_pct <= 50.0:
-        signal_type = "BUY/LONG"
-    else:
-        signal_type = "SELL/SHORT"
+    if trend == "DOWNTREND":
+        # In a DOWNTREND: Strict filter against counter-trend BUY/LONG signals!
+        if cond_support_zone and cond_bullish_obi and vol_ratio >= 1.5 and obi_score >= 0.20:
+            signal_type = "BUY/LONG"
+        elif cond_resistance_zone or cond_bearish_obi or obi_score < 0.0 or price_position_pct >= 35.0:
+            signal_type = "SELL/SHORT"
+        else:
+            signal_type = "SELL/SHORT"
+
+    elif trend == "UPTREND":
+        # In an UPTREND: Prefer BUY/LONG on pullbacks or breakout momentum
+        if cond_resistance_zone and cond_bearish_obi and vol_ratio >= 1.5 and obi_score <= -0.20:
+            signal_type = "SELL/SHORT"
+        elif cond_support_zone or cond_bullish_obi or obi_score > 0.0 or price_position_pct <= 65.0:
+            signal_type = "BUY/LONG"
+        else:
+            signal_type = "BUY/LONG"
+
+    else:  # RANGEBOUND
+        if cond_support_zone and cond_bullish_obi:
+            signal_type = "BUY/LONG"
+        elif cond_resistance_zone and cond_bearish_obi:
+            signal_type = "SELL/SHORT"
+        elif vol_ratio >= 1.3 and obi_score > 0.10:
+            signal_type = "BUY/LONG"
+        elif vol_ratio >= 1.3 and obi_score < -0.10:
+            signal_type = "SELL/SHORT"
+        elif obi_score > 0.05:
+            signal_type = "BUY/LONG"
+        elif obi_score < -0.05:
+            signal_type = "SELL/SHORT"
+        elif price_position_pct <= 45.0:
+            signal_type = "BUY/LONG" if obi_score >= -0.01 else "SELL/SHORT"
+        else:
+            signal_type = "SELL/SHORT"
 
     _, precision = get_asset_base_config(symbol)
     entry_price = latest_price
@@ -318,11 +439,11 @@ def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m") ->
     tf_sl_multipliers = {
         '1s': 1.1, '5s': 1.2, '15s': 1.3, '30s': 1.4,
         '1m': 1.5, '2m': 1.6, '3m': 1.7, '5m': 1.8, '15m': 2.0,
-        '30m': 2.2,  # ⭐ User Preferred High Win-Rate Timeframe
+        '30m': 2.2,
         '45m': 2.4,
-        '1h': 2.6,   # ⭐ User Preferred High Win-Rate Timeframe
+        '1h': 2.6,
         '2h': 3.0,
-        '4h': 3.5,   # ⭐ User Preferred High Win-Rate Timeframe
+        '4h': 3.5,
         '1d': 4.5,
         '1w': 6.0,
         '1M': 8.0
@@ -332,14 +453,19 @@ def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m") ->
 
     if signal_type == "BUY/LONG":
         stop_loss = round(entry_price - risk_amount, precision)
-        tp1 = round(entry_price + (risk_amount * 1.5), precision)  # 1:1.5 R:R Conservative (80%+ Win Rate Target)
-        tp2 = round(entry_price + (risk_amount * 3.0), precision)  # 1:3.0 R:R Extended Runner Target
-        rationale = f"[{timeframe.upper()}] Bullish Accumulation (ATR ${atr:.{precision}f}). Risk SL: ${risk_amount:.{precision}f}, OBI {obi_score:+.2f}."
-    else:
+        tp1 = round(entry_price + (risk_amount * 1.5), precision)
+        tp2 = round(entry_price + (risk_amount * 3.0), precision)
+        rationale = f"[{timeframe.upper()}] [{trend}] Bullish Demand (ATR ${atr:.{precision}f}). Risk SL: ${risk_amount:.{precision}f}, OBI {obi_score:+.2f}."
+    elif signal_type == "SELL/SHORT":
         stop_loss = round(entry_price + risk_amount, precision)
-        tp1 = round(entry_price - (risk_amount * 1.5), precision)  # 1:1.5 R:R
-        tp2 = round(entry_price - (risk_amount * 3.0), precision)  # 1:3.0 R:R
-        rationale = f"[{timeframe.upper()}] Bearish Rejection (ATR ${atr:.{precision}f}). Risk SL: ${risk_amount:.{precision}f}, OBI {obi_score:+.2f}."
+        tp1 = round(entry_price - (risk_amount * 1.5), precision)
+        tp2 = round(entry_price - (risk_amount * 3.0), precision)
+        rationale = f"[{timeframe.upper()}] [{trend}] Bearish Rejection / Downtrend (ATR ${atr:.{precision}f}). Risk SL: ${risk_amount:.{precision}f}, OBI {obi_score:+.2f}."
+    else:
+        stop_loss = round(entry_price - risk_amount, precision)
+        tp1 = round(entry_price + (risk_amount * 1.5), precision)
+        tp2 = round(entry_price + (risk_amount * 3.0), precision)
+        rationale = f"[{timeframe.upper()}] [{trend}] Neutral Market - Monitoring Setup."
 
     return {
         "symbol": symbol,
@@ -347,6 +473,7 @@ def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m") ->
         "latest_price": entry_price,
         "support": support,
         "resistance": resistance,
+        "trend": trend,
         "atr": round(atr, precision),
         "risk_amount": risk_amount,
         "volume": latest_vol,
@@ -359,7 +486,7 @@ def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m") ->
             "volume_surge": vol_ratio >= 1.3,
             "obi_demand": cond_bullish_obi
         },
-        "signal_triggered": True,
+        "signal_triggered": signal_type != "NEUTRAL",
         "signal_type": signal_type,
         "trade_params": {
             "entry": entry_price,

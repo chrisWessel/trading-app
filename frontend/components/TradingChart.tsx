@@ -2,7 +2,7 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import { createChart, IChartApi, ISeriesApi, ColorType, LineStyle, IPriceLine } from 'lightweight-charts';
-import { RefreshCw, Zap, ShieldAlert, ChevronDown, Clock, Radio, ArrowUpRight, Shield, Target, AlertOctagon } from 'lucide-react';
+import { RefreshCw, Zap, ShieldAlert, ChevronDown, Clock, Radio, ArrowUpRight, ArrowDownRight, Shield, Target, AlertOctagon } from 'lucide-react';
 import { API_BASE_URL, getWsUrl } from '@/lib/apiConfig';
 
 interface CandleData {
@@ -86,6 +86,9 @@ export default function TradingChart({
   const [wsConnected, setWsConnected] = useState<boolean>(false);
   const [showDropdown, setShowDropdown] = useState<boolean>(false);
 
+  const [signalType, setSignalType] = useState<string>('BUY/LONG');
+  const [tradeParams, setTradeParams] = useState<any>(null);
+
   const isHighValueAsset = latestPrice > 10.0;
   const precision = isHighValueAsset ? 2 : 4;
 
@@ -107,12 +110,13 @@ export default function TradingChart({
     }
   };
 
-  const drawTechnicalPriceLines = (supp: number, resis: number, price: number) => {
+  const drawTechnicalPriceLines = (supp: number, resis: number, price: number, sigType?: string, tp?: any) => {
     if (!candlestickSeriesRef.current) return;
     clearPriceLines();
 
-    const sl = Number((supp * 0.985).toFixed(precision));
-    const tp = Number((price + ((price - sl) * 1.5)).toFixed(precision));
+    const isSell = sigType === 'SELL/SHORT';
+    const sl = tp?.stop_loss ?? (isSell ? Number((resis * 1.015).toFixed(precision)) : Number((supp * 0.985).toFixed(precision)));
+    const takeProfit = tp?.tp1 ?? (isSell ? Number((price - Math.abs(price - sl) * 1.5).toFixed(precision)) : Number((price + Math.abs(price - sl) * 1.5).toFixed(precision)));
 
     try {
       // 🔴 Resistance Line
@@ -135,14 +139,14 @@ export default function TradingChart({
         title: `🟢 SUPPORT: $${supp.toFixed(precision)}`,
       });
 
-      // 🔵 Optimal BUY Entry Line
-      const buyLine = candlestickSeriesRef.current.createPriceLine({
+      // Entry Line
+      const entryLine = candlestickSeriesRef.current.createPriceLine({
         price: price,
-        color: '#3B82F6',
+        color: isSell ? '#EF4444' : '#3B82F6',
         lineWidth: 2,
         lineStyle: LineStyle.Solid,
         axisLabelVisible: true,
-        title: `🔵 BUY ENTRY: $${price.toFixed(precision)}`,
+        title: isSell ? `🔴 SELL ENTRY: $${price.toFixed(precision)}` : `🔵 BUY ENTRY: $${price.toFixed(precision)}`,
       });
 
       // 🛑 Stop Loss Line
@@ -157,15 +161,15 @@ export default function TradingChart({
 
       // 🎯 Take Profit Line
       const tpLine = candlestickSeriesRef.current.createPriceLine({
-        price: tp,
+        price: takeProfit,
         color: '#10B981',
         lineWidth: 2,
         lineStyle: LineStyle.Solid,
         axisLabelVisible: true,
-        title: `🎯 TAKE PROFIT: $${tp.toFixed(precision)}`,
+        title: `🎯 TAKE PROFIT: $${takeProfit.toFixed(precision)}`,
       });
 
-      priceLinesRef.current = [resLine, suppLine, buyLine, slLine, tpLine];
+      priceLinesRef.current = [resLine, suppLine, entryLine, slLine, tpLine];
     } catch (e) {
       console.error('Failed to draw price lines:', e);
     }
@@ -190,6 +194,28 @@ export default function TradingChart({
           support: data.support,
           resistance: data.resistance,
         });
+      }
+
+      // Check active signal parameters to draw trend-aware price lines
+      let fetchedSigType = 'BUY/LONG';
+      let fetchedParams = null;
+      try {
+        const sigRes = await fetch(`${API_BASE_URL}/api/signals/check`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ symbol, timeframe }),
+        });
+        if (sigRes.ok) {
+          const sigData = await sigRes.json();
+          if (sigData.analysis) {
+            fetchedSigType = sigData.analysis.signal_type;
+            fetchedParams = sigData.analysis.trade_params;
+            setSignalType(sigData.analysis.signal_type);
+            setTradeParams(sigData.analysis.trade_params);
+          }
+        }
+      } catch (e) {
+        // Quiet fail
       }
 
       if (candlestickSeriesRef.current && data.candles && data.candles.length > 0) {
@@ -221,7 +247,7 @@ export default function TradingChart({
           volumeSeriesRef.current.setData(volumeData as any);
         }
 
-        drawTechnicalPriceLines(data.support, data.resistance, data.latest_price);
+        drawTechnicalPriceLines(data.support, data.resistance, data.latest_price, fetchedSigType, fetchedParams);
         chartRef.current?.timeScale().fitContent();
       }
     } catch (err: any) {
@@ -475,39 +501,75 @@ export default function TradingChart({
       </div>
 
       {/* Visual Technical Trading Decision Lines Guide Bar */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs font-mono">
-        <div className="bg-slate-950 p-2 rounded-lg border border-blue-800/60 flex items-center justify-between">
-          <div>
-            <span className="text-blue-400 block text-[10px] font-bold">🔵 WHEN TO BUY (ENTRY)</span>
-            <span className="text-white font-bold">${buyEntryPrice.toFixed(precision)}</span>
+      {signalType === 'SELL/SHORT' ? (
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs font-mono">
+          <div className="bg-slate-950 p-2 rounded-lg border border-rose-800/60 flex items-center justify-between">
+            <div>
+              <span className="text-rose-400 block text-[10px] font-bold">🔴 WHEN TO SELL / SHORT (ENTRY)</span>
+              <span className="text-white font-bold">${latestPrice.toFixed(precision)}</span>
+            </div>
+            <ArrowDownRight className="w-4 h-4 text-rose-400" />
           </div>
-          <ArrowUpRight className="w-4 h-4 text-blue-400" />
-        </div>
 
-        <div className="bg-slate-950 p-2 rounded-lg border border-rose-800/60 flex items-center justify-between">
-          <div>
-            <span className="text-rose-400 block text-[10px] font-bold">🛑 STOP LOSS LINE</span>
-            <span className="text-rose-300 font-bold">${stopLossPrice.toFixed(precision)}</span>
+          <div className="bg-slate-950 p-2 rounded-lg border border-rose-800/60 flex items-center justify-between">
+            <div>
+              <span className="text-rose-400 block text-[10px] font-bold">🛑 STOP LOSS LINE</span>
+              <span className="text-rose-300 font-bold">${(tradeParams?.stop_loss ?? stopLossPrice).toFixed(precision)}</span>
+            </div>
+            <Shield className="w-4 h-4 text-rose-400" />
           </div>
-          <Shield className="w-4 h-4 text-rose-400" />
-        </div>
 
-        <div className="bg-slate-950 p-2 rounded-lg border border-emerald-800/60 flex items-center justify-between">
-          <div>
-            <span className="text-emerald-400 block text-[10px] font-bold">🎯 TAKE PROFIT (SELL)</span>
-            <span className="text-emerald-300 font-bold">${takeProfitPrice.toFixed(precision)}</span>
+          <div className="bg-slate-950 p-2 rounded-lg border border-emerald-800/60 flex items-center justify-between">
+            <div>
+              <span className="text-emerald-400 block text-[10px] font-bold">🎯 TAKE PROFIT (BUY BACK)</span>
+              <span className="text-emerald-300 font-bold">${(tradeParams?.tp1 ?? takeProfitPrice).toFixed(precision)}</span>
+            </div>
+            <Target className="w-4 h-4 text-emerald-400" />
           </div>
-          <Target className="w-4 h-4 text-emerald-400" />
-        </div>
 
-        <div className="bg-slate-950 p-2 rounded-lg border border-amber-800/60 flex items-center justify-between">
-          <div>
-            <span className="text-amber-400 block text-[10px] font-bold">⛔ WHEN NOT TO BUY</span>
-            <span className="text-slate-300 text-[10px]">OBI &lt; 0 or Near Resistance</span>
+          <div className="bg-slate-950 p-2 rounded-lg border border-amber-800/60 flex items-center justify-between">
+            <div>
+              <span className="text-amber-400 block text-[10px] font-bold">⛔ WHEN NOT TO SELL</span>
+              <span className="text-slate-300 text-[10px]">OBI &gt; 0 or Near Support</span>
+            </div>
+            <AlertOctagon className="w-4 h-4 text-amber-400" />
           </div>
-          <AlertOctagon className="w-4 h-4 text-amber-400" />
         </div>
-      </div>
+      ) : (
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs font-mono">
+          <div className="bg-slate-950 p-2 rounded-lg border border-blue-800/60 flex items-center justify-between">
+            <div>
+              <span className="text-blue-400 block text-[10px] font-bold">🔵 WHEN TO BUY (ENTRY)</span>
+              <span className="text-white font-bold">${buyEntryPrice.toFixed(precision)}</span>
+            </div>
+            <ArrowUpRight className="w-4 h-4 text-blue-400" />
+          </div>
+
+          <div className="bg-slate-950 p-2 rounded-lg border border-rose-800/60 flex items-center justify-between">
+            <div>
+              <span className="text-rose-400 block text-[10px] font-bold">🛑 STOP LOSS LINE</span>
+              <span className="text-rose-300 font-bold">${(tradeParams?.stop_loss ?? stopLossPrice).toFixed(precision)}</span>
+            </div>
+            <Shield className="w-4 h-4 text-rose-400" />
+          </div>
+
+          <div className="bg-slate-950 p-2 rounded-lg border border-emerald-800/60 flex items-center justify-between">
+            <div>
+              <span className="text-emerald-400 block text-[10px] font-bold">🎯 TAKE PROFIT (SELL)</span>
+              <span className="text-emerald-300 font-bold">${(tradeParams?.tp1 ?? takeProfitPrice).toFixed(precision)}</span>
+            </div>
+            <Target className="w-4 h-4 text-emerald-400" />
+          </div>
+
+          <div className="bg-slate-950 p-2 rounded-lg border border-amber-800/60 flex items-center justify-between">
+            <div>
+              <span className="text-amber-400 block text-[10px] font-bold">⛔ WHEN NOT TO BUY</span>
+              <span className="text-slate-300 text-[10px]">Downtrend or Near Resistance</span>
+            </div>
+            <AlertOctagon className="w-4 h-4 text-amber-400" />
+          </div>
+        </div>
+      )}
 
       {/* Chart Canvas (Flash 0ms Load) */}
       <div className="relative w-full h-[420px] rounded-lg overflow-hidden border border-slate-950">

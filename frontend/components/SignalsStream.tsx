@@ -134,20 +134,28 @@ export default function SignalsStream({ symbol, timeframe }: SignalsStreamProps)
 
       {/* Signal Status Header Banner */}
       <div className={`p-4 rounded-xl border flex items-center justify-between transition-all ${
-        isTriggered
+        analysis?.signal_type === 'BUY/LONG'
           ? 'bg-emerald-950/80 border-emerald-500 text-emerald-300 shadow-lg shadow-emerald-950'
+          : analysis?.signal_type === 'SELL/SHORT'
+          ? 'bg-rose-950/80 border-rose-500 text-rose-300 shadow-lg shadow-rose-950'
           : 'bg-slate-950 border-slate-800 text-slate-300'
       }`}>
         <div className="flex items-center gap-3">
-          {isTriggered ? (
+          {analysis?.signal_type === 'BUY/LONG' ? (
             <Sparkles className="w-6 h-6 text-emerald-400 animate-bounce" />
+          ) : analysis?.signal_type === 'SELL/SHORT' ? (
+            <AlertTriangle className="w-6 h-6 text-rose-400 animate-pulse" />
           ) : (
             <AlertTriangle className="w-6 h-6 text-amber-400" />
           )}
           <div>
             <div className="flex items-center gap-2">
               <span className="font-bold text-sm">
-                {isTriggered ? `🚨 SIGNAL TRIGGERED: BUY/LONG [${timeframe.toUpperCase()}]` : 'SYSTEM STATUS: MONITORING MARKET'}
+                {analysis?.signal_type === 'BUY/LONG'
+                  ? `🚨 SIGNAL TRIGGERED: BUY/LONG [${timeframe.toUpperCase()}]`
+                  : analysis?.signal_type === 'SELL/SHORT'
+                  ? `🚨 SIGNAL TRIGGERED: SELL/SHORT [${timeframe.toUpperCase()}]`
+                  : 'SYSTEM STATUS: MONITORING MARKET'}
               </span>
             </div>
             <p className="text-xs text-slate-400 mt-0.5 font-mono">

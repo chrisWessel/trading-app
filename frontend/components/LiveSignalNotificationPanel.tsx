@@ -36,7 +36,7 @@ interface NotificationItem {
   id: string;
   time_harare: string;
   timeframe: string;
-  type: 'BUY_NOW' | 'SELL_NOW' | 'STOP_LOSS_ALERT';
+  type: 'BUY_NOW' | 'SELL_NOW' | 'STOP_LOSS_ALERT' | 'MONITORING';
   title: string;
   message: string;
   entry: number;
@@ -87,16 +87,23 @@ export default function LiveSignalNotificationPanel({
           second: '2-digit',
         });
 
-        const isBuy = a.signal_type.includes('BUY') || a.signal_type.includes('LONG');
-        const notifType: 'BUY_NOW' | 'SELL_NOW' | 'STOP_LOSS_ALERT' = isBuy ? 'BUY_NOW' : 'SELL_NOW';
+        const isBuy = a.signal_type === 'BUY/LONG';
+        const isSell = a.signal_type === 'SELL/SHORT';
+        const notifType: 'BUY_NOW' | 'SELL_NOW' | 'MONITORING' = isBuy ? 'BUY_NOW' : isSell ? 'SELL_NOW' : 'MONITORING';
         
-        const notifTitle = isBuy
-          ? `🟢 BUY NOW! [${timeframe.toUpperCase()}] ENTRY FOR ${symbol}`
-          : `🔴 SELL NOW! [${timeframe.toUpperCase()}] SHORT FOR ${symbol}`;
+        let notifTitle = '';
+        let notifMsg = '';
 
-        const notifMsg = isBuy
-          ? `Bullish Demand on ${timeframe} timeframe at $${a.latest_price.toFixed(precision)}. Stop Loss: $${a.trade_params.stop_loss.toFixed(precision)}`
-          : `Bearish Rejection on ${timeframe} timeframe at $${a.latest_price.toFixed(precision)}. Stop Loss: $${a.trade_params.stop_loss.toFixed(precision)}`;
+        if (isBuy) {
+          notifTitle = `🟢 BUY NOW! [${timeframe.toUpperCase()}] ENTRY FOR ${symbol}`;
+          notifMsg = `Bullish Demand on ${timeframe} timeframe at $${a.latest_price.toFixed(precision)}. Stop Loss: $${a.trade_params.stop_loss.toFixed(precision)}`;
+        } else if (isSell) {
+          notifTitle = `🔴 SELL NOW! [${timeframe.toUpperCase()}] SHORT FOR ${symbol}`;
+          notifMsg = `Bearish Rejection / Downtrend on ${timeframe} timeframe at $${a.latest_price.toFixed(precision)}. Stop Loss: $${a.trade_params.stop_loss.toFixed(precision)}`;
+        } else {
+          notifTitle = `⏸️ MARKET STANDBY [${timeframe.toUpperCase()}] FOR ${symbol}`;
+          notifMsg = `Consolidation on ${timeframe}. Monitoring market for high-probability setups.`;
+        }
 
         const newNotif: NotificationItem = {
           id: Math.random().toString(36).substring(2, 9),
@@ -112,7 +119,13 @@ export default function LiveSignalNotificationPanel({
           rationale: a.trade_params.rationale,
         };
 
-        setNotifications((prev) => [newNotif, ...prev.filter(n => n.timeframe === timeframe).slice(0, 49)]);
+        setNotifications((prev) => {
+          const top = prev[0];
+          if (top && top.type === notifType && top.title === notifTitle && top.timeframe === timeframe) {
+            return [{ ...top, time_harare: harareTime, entry: a.trade_params.entry, stop_loss: a.trade_params.stop_loss, tp1: a.trade_params.tp1, tp2: a.trade_params.tp2, message: notifMsg }, ...prev.slice(1)];
+          }
+          return [newNotif, ...prev.filter(n => n.timeframe === timeframe).slice(0, 49)];
+        });
       }
     } catch (e) {
       console.error('Signal notification error:', e);
@@ -193,7 +206,9 @@ export default function LiveSignalNotificationPanel({
           className={`p-3.5 rounded-xl border shadow-xl space-y-3 shrink-0 transition-all ${
             latestNotif.type === 'BUY_NOW'
               ? 'bg-gradient-to-b from-emerald-950/90 to-slate-950 border-emerald-600/80'
-              : 'bg-gradient-to-b from-rose-950/90 to-slate-950 border-rose-600/80'
+              : latestNotif.type === 'SELL_NOW'
+              ? 'bg-gradient-to-b from-rose-950/90 to-slate-950 border-rose-600/80'
+              : 'bg-gradient-to-b from-slate-900 to-slate-950 border-amber-600/60'
           }`}
         >
           <div className="flex items-center justify-between">
@@ -201,9 +216,13 @@ export default function LiveSignalNotificationPanel({
               <span className="px-2.5 py-1 bg-emerald-600 text-white font-extrabold text-xs rounded-lg animate-pulse flex items-center gap-1">
                 <ArrowUpRight className="w-4 h-4" /> BUY NOW [{latestNotif.timeframe.toUpperCase()}]
               </span>
-            ) : (
+            ) : latestNotif.type === 'SELL_NOW' ? (
               <span className="px-2.5 py-1 bg-rose-600 text-white font-extrabold text-xs rounded-lg animate-pulse flex items-center gap-1">
                 <ArrowDownRight className="w-4 h-4" /> SELL NOW [{latestNotif.timeframe.toUpperCase()}]
+              </span>
+            ) : (
+              <span className="px-2.5 py-1 bg-amber-600 text-white font-extrabold text-xs rounded-lg flex items-center gap-1">
+                <Clock className="w-4 h-4" /> STANDBY [{latestNotif.timeframe.toUpperCase()}]
               </span>
             )}
             <span className="text-[11px] text-slate-300 font-bold flex items-center gap-1">
@@ -238,7 +257,7 @@ export default function LiveSignalNotificationPanel({
           </div>
 
           {/* Quick Auto-Fill Execution Button */}
-          {onExecuteTradeParams && (
+          {onExecuteTradeParams && latestNotif.type !== 'MONITORING' && (
             <button
               onClick={() =>
                 onExecuteTradeParams({
@@ -249,7 +268,11 @@ export default function LiveSignalNotificationPanel({
                   tp2: latestNotif.tp2,
                 })
               }
-              className="w-full py-2 bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold rounded-lg shadow-lg transition flex items-center justify-center gap-1.5"
+              className={`w-full py-2 text-white text-xs font-bold rounded-lg shadow-lg transition flex items-center justify-center gap-1.5 ${
+                latestNotif.type === 'BUY_NOW'
+                  ? 'bg-emerald-600 hover:bg-emerald-500'
+                  : 'bg-rose-600 hover:bg-rose-500'
+              }`}
             >
               <Play className="w-3.5 h-3.5 fill-white" />
               <span>Auto-Fill Paper Order ({latestNotif.timeframe})</span>
@@ -275,7 +298,9 @@ export default function LiveSignalNotificationPanel({
                   className={`px-1.5 py-0.5 rounded font-bold ${
                     item.type === 'BUY_NOW'
                       ? 'bg-emerald-950 text-emerald-400 border border-emerald-800'
-                      : 'bg-rose-950 text-rose-400 border border-rose-800'
+                      : item.type === 'SELL_NOW'
+                      ? 'bg-rose-950 text-rose-400 border border-rose-800'
+                      : 'bg-amber-950 text-amber-400 border border-amber-800'
                   }`}
                 >
                   {item.type}
