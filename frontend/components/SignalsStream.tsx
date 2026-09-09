@@ -102,12 +102,21 @@ export default function SignalsStream({ symbol, timeframe }: SignalsStreamProps)
   const isHighValue = (analysis?.latest_price || 0) > 10.0;
   const precision = isHighValue ? 2 : 4;
 
+  const isRecommendedTf = ['30m', '1h', '4h'].includes(timeframe);
+
   return (
-    <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-xl flex flex-col gap-4">
+    <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-xl flex flex-col justify-between h-full space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 pb-3">
         <div className="flex items-center gap-2">
           <Radio className="w-5 h-5 text-rose-400 animate-pulse" />
           <h2 className="text-lg font-bold text-white">Signal Engine & Telegram Dispatcher</h2>
+          <span className={`text-[10px] px-2 py-0.5 rounded-full font-mono font-bold border transition ${
+            isRecommendedTf
+              ? 'bg-amber-950/80 text-amber-300 border-amber-600 animate-pulse'
+              : 'bg-blue-950 text-blue-400 border-blue-800'
+          }`}>
+            {isRecommendedTf ? `⭐ ${timeframe.toUpperCase()} (80%+ WIN RATE TARGET)` : `TIMEFRAME: ${timeframe.toUpperCase()}`}
+          </span>
         </div>
 
         {/* Live Ticking Clock (Harare Time) */}
@@ -138,7 +147,7 @@ export default function SignalsStream({ symbol, timeframe }: SignalsStreamProps)
           <div>
             <div className="flex items-center gap-2">
               <span className="font-bold text-sm">
-                {isTriggered ? '🚨 SIGNAL TRIGGERED: BUY/LONG' : 'SYSTEM STATUS: MONITORING MARKET'}
+                {isTriggered ? `🚨 SIGNAL TRIGGERED: BUY/LONG [${timeframe.toUpperCase()}]` : 'SYSTEM STATUS: MONITORING MARKET'}
               </span>
             </div>
             <p className="text-xs text-slate-400 mt-0.5 font-mono">
@@ -150,7 +159,7 @@ export default function SignalsStream({ symbol, timeframe }: SignalsStreamProps)
         <button
           onClick={() => checkSignals(true)}
           disabled={loading}
-          className="bg-blue-600 hover:bg-blue-500 text-white font-semibold px-3.5 py-2 rounded-lg text-xs flex items-center gap-1.5 shadow-md shadow-blue-950 transition"
+          className="bg-blue-600 hover:bg-blue-500 text-white font-semibold px-3.5 py-2 rounded-lg text-xs flex items-center gap-1.5 shadow-md shadow-blue-950 transition shrink-0"
         >
           <Send className="w-3.5 h-3.5" />
           <span>Dispatch Telegram Alert</span>

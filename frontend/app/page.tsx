@@ -237,9 +237,9 @@ export default function DashboardPage() {
         {/* RIGHT CONTENT COLUMN: Charts, Signals, Trading Panel & Orderbook (9 cols) */}
         <div className="lg:col-span-9 space-y-6">
           {/* Main Chart & Signals Grid */}
-          <div className="grid grid-cols-1 xl:grid-cols-12 gap-6 items-start">
+          <div className="grid grid-cols-1 xl:grid-cols-12 gap-6 items-stretch">
             {/* Chart Area (8 cols) */}
-            <div className="xl:col-span-8 flex flex-col gap-6">
+            <div className="xl:col-span-8 flex flex-col gap-6 justify-between">
               {chartMode === 'TradingViewDirect' && !isRextAsset ? (
                 <TradingViewDirectChart
                   symbol={symbol}
@@ -257,7 +257,9 @@ export default function DashboardPage() {
               )}
 
               {/* Signals Stream & Telegram Broadcaster Component */}
-              <SignalsStream symbol={symbol} timeframe={timeframe} />
+              <div className="flex-1 flex flex-col">
+                <SignalsStream symbol={symbol} timeframe={timeframe} />
+              </div>
             </div>
 
             {/* Trading & Order Book Column (4 cols) */}
@@ -271,7 +273,7 @@ export default function DashboardPage() {
               />
 
               {/* Order Book Depth & OBI Gauge */}
-              <div className="flex-1 min-h-[300px]">
+              <div className="flex-1 flex flex-col">
                 <OrderBookOBIGauge symbol={symbol} />
               </div>
             </div>

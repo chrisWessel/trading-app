@@ -48,14 +48,14 @@ export default function OrderBookOBIGauge({ symbol }: OrderBookOBIGaugeProps) {
   const precision = isHighValue ? 2 : 4;
 
   return (
-    <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-xl flex flex-col gap-4 h-full min-h-[460px]">
+    <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-xl flex flex-col justify-between h-full space-y-4">
       <div className="flex items-center justify-between border-b border-slate-800 pb-3">
         <div className="flex items-center gap-2">
           <Layers className="w-5 h-5 text-blue-400" />
           <h2 className="text-lg font-bold text-white">Order Book & OBI Gauge</h2>
         </div>
         <span className="text-xs bg-slate-950 text-slate-400 border border-slate-800 px-2.5 py-1 rounded-full font-mono">
-          Depth 20 Levels
+          Depth 10 Levels
         </span>
       </div>
 
@@ -92,7 +92,7 @@ export default function OrderBookOBIGauge({ symbol }: OrderBookOBIGaugeProps) {
             <span>QTY</span>
           </div>
           <div className="space-y-1">
-            {orderbook?.bids?.slice(0, 16).map(([price, vol], idx) => (
+            {orderbook?.bids?.slice(0, 10).map(([price, vol], idx) => (
               <div key={idx} className="flex justify-between text-[11px] hover:bg-emerald-950/30 px-1 py-0.5 rounded transition">
                 <span className="text-emerald-400 font-bold">${price.toFixed(precision)}</span>
                 <span className="text-slate-300">{vol.toLocaleString()}</span>
@@ -108,7 +108,7 @@ export default function OrderBookOBIGauge({ symbol }: OrderBookOBIGaugeProps) {
             <span>QTY</span>
           </div>
           <div className="space-y-1">
-            {orderbook?.asks?.slice(0, 16).map(([price, vol], idx) => (
+            {orderbook?.asks?.slice(0, 10).map(([price, vol], idx) => (
               <div key={idx} className="flex justify-between text-[11px] hover:bg-rose-950/30 px-1 py-0.5 rounded transition">
                 <span className="text-rose-400 font-bold">${price.toFixed(precision)}</span>
                 <span className="text-slate-300">{vol.toLocaleString()}</span>
