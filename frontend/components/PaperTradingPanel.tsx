@@ -5,21 +5,43 @@ import { Play, CheckCircle, XCircle, DollarSign, Target, Shield, ArrowUpRight, A
 import { API_BASE_URL } from '@/lib/apiConfig';
 import PositionSizingGuide from '@/components/PositionSizingGuide';
 
+export interface ExternalTradeParams {
+  signal_type: string;
+  entry: number;
+  stop_loss: number;
+  tp1: number;
+  tp2: number;
+}
+
 interface PaperTradingPanelProps {
   symbol: string;
   currentPrice: number;
   onTradeClosed: () => void;
+  externalParams?: ExternalTradeParams | null;
 }
+
+export type MTOrderType = 
+  | 'Market Execution'
+  | 'Buy Limit'
+  | 'Sell Limit'
+  | 'Buy Stop'
+  | 'Sell Stop'
+  | 'Buy Stop Limit'
+  | 'Sell Stop Limit';
 
 interface ActivePosition {
   id: string;
   symbol: string;
   signal_type: 'BUY/LONG' | 'SELL/SHORT';
+  order_type: MTOrderType;
   entry_price: number;
   stop_loss: number;
   tp1: number;
   tp2: number;
   position_size_usd: number;
+  lots: number;
+  margin_usd: number;
+  target_mode: 'TP1' | 'TP2';
   timestamp: string;
 }
 
@@ -27,16 +49,20 @@ export default function PaperTradingPanel({
   symbol,
   currentPrice,
   onTradeClosed,
+  externalParams,
 }: PaperTradingPanelProps) {
   const [signalType, setSignalType] = useState<'BUY/LONG' | 'SELL/SHORT'>('BUY/LONG');
+  const [orderType, setOrderType] = useState<MTOrderType>('Market Execution');
+  const [targetChoice, setTargetChoice] = useState<'TP1' | 'TP2'>('TP1');
   const [entryPrice, setEntryPrice] = useState<number>(currentPrice || 100);
   const [stopLoss, setStopLoss] = useState<number>(0);
   const [tp1, setTp1] = useState<number>(0);
   const [tp2, setTp2] = useState<number>(0);
   const [positionSizeUsd, setPositionSizeUsd] = useState<number>(500);
-  const [sizeMode, setSizeMode] = useState<'USD' | 'LOTS'>('USD');
-  const [lotsInput, setLotsInput] = useState<number>(0.05);
+  const [sizeMode, setSizeMode] = useState<'USD' | 'LOTS'>('LOTS');
+  const [lotsInput, setLotsInput] = useState<number>(0.01);
   const [showGuideModal, setShowGuideModal] = useState<boolean>(false);
+  const [showMTGuideModal, setShowMTGuideModal] = useState<boolean>(false);
 
   const [activePosition, setActivePosition] = useState<ActivePosition | null>(null);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
@@ -45,9 +71,23 @@ export default function PaperTradingPanel({
   const isHighValueAsset = currentPrice > 10.0;
   const precision = isHighValueAsset ? 2 : 4;
 
-  // Auto-sync entry price, stop loss, and target prices when asset or current price changes
+  // Sync with external signal parameters when user clicks "Auto-Fill Paper Order"
   useEffect(() => {
-    if (currentPrice && currentPrice > 0) {
+    if (externalParams) {
+      const type = externalParams.signal_type.includes('BUY') ? 'BUY/LONG' : 'SELL/SHORT';
+      setSignalType(type);
+      setEntryPrice(externalParams.entry);
+      setStopLoss(externalParams.stop_loss);
+      setTp1(externalParams.tp1);
+      setTp2(externalParams.tp2);
+      setStatusMessage(`✅ Synchronized trade parameters with live signal (${type} at $${externalParams.entry.toFixed(precision)})`);
+      setTimeout(() => setStatusMessage(null), 3000);
+    }
+  }, [externalParams]);
+
+  // Auto-sync default entry price, stop loss, and target prices when current price changes (if not external)
+  useEffect(() => {
+    if (!externalParams && currentPrice && currentPrice > 0) {
       setEntryPrice(currentPrice);
       if (signalType === 'BUY/LONG') {
         setStopLoss(Number((currentPrice * 0.985).toFixed(precision)));
@@ -60,6 +100,11 @@ export default function PaperTradingPanel({
       }
     }
   }, [currentPrice, symbol, signalType]);
+
+  // Calculated Lots & Margin
+  const computedLots = sizeMode === 'LOTS' ? lotsInput : Math.max(0.01, Number((positionSizeUsd / (currentPrice * 100)).toFixed(2)));
+  const estimatedNotionalUsd = symbol.includes('XAU') ? computedLots * 100 * (entryPrice || currentPrice) : computedLots * 100000;
+  const estimatedMarginUsd = estimatedNotionalUsd / 500; // 1:500 leverage default
 
   const handleUseCurrentPrice = () => {
     if (currentPrice > 0) {
@@ -85,19 +130,23 @@ export default function PaperTradingPanel({
     }
     const harareTimeStr = new Date().toLocaleTimeString('en-US', { timeZone: 'Africa/Harare' });
     const newPos: ActivePosition = {
-      id: 'SIM-' + Math.floor(Math.random() * 10000),
+      id: 'MT5-' + Math.floor(Math.random() * 10000),
       symbol: symbol,
       signal_type: signalType,
+      order_type: orderType,
       entry_price: entryPrice,
       stop_loss: stopLoss,
       tp1: tp1,
       tp2: tp2,
       position_size_usd: positionSizeUsd,
+      lots: computedLots,
+      margin_usd: estimatedMarginUsd,
+      target_mode: targetChoice,
       timestamp: harareTimeStr,
     };
     setActivePosition(newPos);
-    setStatusMessage(`Simulated ${signalType} position opened on ${symbol} at $${entryPrice.toFixed(precision)} (Harare Time: ${harareTimeStr}).`);
-    setTimeout(() => setStatusMessage(null), 3500);
+    setStatusMessage(`Simulated MetaTrader [${orderType}] order placed on ${symbol} at $${entryPrice.toFixed(precision)} (${computedLots} Lots, Margin: ~$${estimatedMarginUsd.toFixed(2)} USD).`);
+    setTimeout(() => setStatusMessage(null), 4000);
   };
 
   // Close simulated position & log to SQLite DB via FastAPI endpoint
@@ -239,6 +288,35 @@ export default function PaperTradingPanel({
       ) : (
         /* Order Form to Open Position */
         <form onSubmit={handleOpenTrade} className="space-y-4 text-xs font-mono">
+          {/* Order Execution Type Dropdown (MT4/MT5 style) */}
+          <div>
+            <div className="flex items-center justify-between mb-1">
+              <label className="text-slate-400 text-[11px] font-bold">METATRADER ORDER TYPE</label>
+              <button
+                type="button"
+                onClick={() => setShowMTGuideModal(true)}
+                className="text-[10px] text-amber-400 hover:underline flex items-center gap-1 font-bold"
+              >
+                <HelpCircle className="w-3 h-3" />
+                <span>When to use which order?</span>
+              </button>
+            </div>
+            <select
+              value={orderType}
+              onChange={(e) => setOrderType(e.target.value as MTOrderType)}
+              className="w-full bg-slate-950 border border-slate-700 text-amber-300 font-bold px-3 py-2 rounded-lg focus:outline-none focus:border-amber-500 text-xs"
+            >
+              <option value="Market Execution">⚡ Market Execution (Instant Fill at Current Price)</option>
+              <option value="Buy Limit">📉 Buy Limit (Buy below current price on pullback)</option>
+              <option value="Sell Limit">📈 Sell Limit (Sell above current price on rejection)</option>
+              <option value="Buy Stop">🚀 Buy Stop (Buy above current price on breakout)</option>
+              <option value="Sell Stop">💥 Sell Stop (Sell below current price on breakdown)</option>
+              <option value="Buy Stop Limit">🔄 Buy Stop Limit (Breakout retest buy)</option>
+              <option value="Sell Stop Limit">🔁 Sell Stop Limit (Breakdown retest sell)</option>
+            </select>
+          </div>
+
+          {/* BUY / SELL Direction Switcher */}
           <div className="flex items-center justify-between bg-slate-950 p-1.5 rounded-lg border border-slate-800">
             <button
               type="button"
@@ -266,6 +344,7 @@ export default function PaperTradingPanel({
             </button>
           </div>
 
+          {/* Entry Price & Volume (Lot Size) Input */}
           <div className="grid grid-cols-2 gap-3">
             <div>
               <div className="flex items-center justify-between mb-1">
@@ -290,65 +369,24 @@ export default function PaperTradingPanel({
 
             <div>
               <div className="flex items-center justify-between mb-1">
-                <div className="flex items-center gap-1 bg-slate-950 px-1 py-0.5 rounded border border-slate-800 text-[10px]">
-                  <button
-                    type="button"
-                    onClick={() => setSizeMode('USD')}
-                    className={`px-1.5 py-0.5 rounded font-bold transition ${sizeMode === 'USD' ? 'bg-blue-600 text-white' : 'text-slate-400'}`}
-                  >
-                    $ USD
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setSizeMode('LOTS')}
-                    className={`px-1.5 py-0.5 rounded font-bold transition ${sizeMode === 'LOTS' ? 'bg-blue-600 text-white' : 'text-slate-400'}`}
-                  >
-                    Lots
-                  </button>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setShowGuideModal(true)}
-                  className="text-[10px] text-amber-400 hover:underline flex items-center gap-0.5"
-                  title="Open PU Prime Lot & Position Sizer Guide"
-                >
-                  <Calculator className="w-2.5 h-2.5" />
-                  <span>Guide</span>
-                </button>
+                <label className="text-slate-400 text-[11px]">VOLUME (LOTS)</label>
+                <span className="text-[10px] text-emerald-400 font-bold">
+                  Margin ≈ ${estimatedMarginUsd.toFixed(2)}
+                </span>
               </div>
-
-              {sizeMode === 'USD' ? (
-                <input
-                  type="number"
-                  value={positionSizeUsd}
-                  onChange={(e) => {
-                    const usd = parseFloat(e.target.value) || 0;
-                    setPositionSizeUsd(usd);
-                    // Approximate lot sizing for display/sync
-                    const contractSize = symbol.includes('XAU') ? 100 : 100000;
-                    setLotsInput(Number((usd / (contractSize * (currentPrice || 1))).toFixed(2)));
-                  }}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-white font-bold focus:outline-none focus:border-blue-500"
-                  placeholder="Position Size ($USD)"
-                />
-              ) : (
-                <input
-                  type="number"
-                  step="0.01"
-                  value={lotsInput}
-                  onChange={(e) => {
-                    const lots = parseFloat(e.target.value) || 0.01;
-                    setLotsInput(lots);
-                    const contractSize = symbol.includes('XAU') ? 100 : 100000;
-                    setPositionSizeUsd(Number((lots * contractSize * (currentPrice || 1)).toFixed(2)));
-                  }}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-amber-400 font-mono font-bold focus:outline-none focus:border-blue-500"
-                  placeholder="Volume in Lots"
-                />
-              )}
+              <input
+                type="number"
+                step="0.01"
+                min="0.01"
+                max="100"
+                value={lotsInput}
+                onChange={(e) => setLotsInput(parseFloat(e.target.value))}
+                className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-amber-300 font-bold focus:outline-none focus:border-amber-500"
+              />
             </div>
           </div>
 
+          {/* Stop Loss, TP1, and TP2 Grid */}
           <div className="grid grid-cols-3 gap-2">
             <div>
               <label className="text-slate-400 text-[10px] block mb-1">STOP LOSS ($)</label>
@@ -362,7 +400,7 @@ export default function PaperTradingPanel({
             </div>
 
             <div>
-              <label className="text-slate-400 text-[10px] block mb-1">TP 1 ($)</label>
+              <label className="text-slate-400 text-[10px] block mb-1">TP 1 (CONSERVATIVE)</label>
               <input
                 type="number"
                 step="any"
@@ -373,23 +411,51 @@ export default function PaperTradingPanel({
             </div>
 
             <div>
-              <label className="text-slate-400 text-[10px] block mb-1">TP 2 ($)</label>
+              <label className="text-slate-400 text-[10px] block mb-1">TP 2 (EXTENDED)</label>
               <input
                 type="number"
                 step="any"
                 value={tp2}
                 onChange={(e) => setTp2(parseFloat(e.target.value))}
-                className="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-emerald-400 font-bold focus:outline-none focus:border-emerald-500 text-xs"
+                className="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-blue-400 font-bold focus:outline-none focus:border-blue-500 text-xs"
               />
             </div>
           </div>
 
+          {/* TP1 vs TP2 Target Strategy Selector */}
+          <div className="bg-slate-950 p-2.5 rounded-lg border border-slate-800 flex items-center justify-between gap-2">
+            <span className="text-[10px] text-slate-400 font-bold">TARGET STRATEGY:</span>
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => setTargetChoice('TP1')}
+                className={`px-2.5 py-1 rounded text-[10px] font-bold transition ${
+                  targetChoice === 'TP1'
+                    ? 'bg-emerald-600 text-white'
+                    : 'bg-slate-900 text-slate-400 hover:text-white'
+                }`}
+              >
+                TP1 (Lock Profit)
+              </button>
+              <button
+                type="button"
+                onClick={() => setTargetChoice('TP2')}
+                className={`px-2.5 py-1 rounded text-[10px] font-bold transition ${
+                  targetChoice === 'TP2'
+                    ? 'bg-blue-600 text-white'
+                    : 'bg-slate-900 text-slate-400 hover:text-white'
+                }`}
+              >
+                TP2 (Runner Target)
+              </button>
+            </div>
+          </div>
           <button
             type="submit"
             className="w-full bg-blue-600 hover:bg-blue-500 text-white font-extrabold py-2.5 rounded-lg transition flex items-center justify-center gap-2 shadow-lg shadow-blue-950 text-sm"
           >
             <Play className="w-4 h-4 fill-white" />
-            <span>Open Simulated Position ({symbol})</span>
+            <span>Open Simulated MetaTrader Order ({symbol})</span>
           </button>
         </form>
       )}
@@ -399,6 +465,14 @@ export default function PaperTradingPanel({
           initialSymbol={symbol}
           isModal={true}
           onClose={() => setShowGuideModal(false)}
+        />
+      )}
+
+      {showMTGuideModal && (
+        <PositionSizingGuide
+          initialSymbol={symbol}
+          isModal={true}
+          onClose={() => setShowMTGuideModal(false)}
         />
       )}
     </div>

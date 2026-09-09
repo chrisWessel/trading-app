@@ -35,19 +35,21 @@ interface SignalAnalysis {
 interface NotificationItem {
   id: string;
   time_harare: string;
+  timeframe: string;
   type: 'BUY_NOW' | 'SELL_NOW' | 'STOP_LOSS_ALERT';
   title: string;
   message: string;
   entry: number;
   stop_loss: number;
-  take_profit: number;
+  tp1: number;
+  tp2: number;
   rationale: string;
 }
 
 interface LiveSignalNotificationPanelProps {
   symbol: string;
   timeframe: string;
-  onExecuteTradeParams?: (params: { signal_type: string; entry: number; stop_loss: number; take_profit: number }) => void;
+  onExecuteTradeParams?: (params: { signal_type: string; entry: number; stop_loss: number; tp1: number; tp2: number }) => void;
 }
 
 export default function LiveSignalNotificationPanel({
@@ -58,6 +60,7 @@ export default function LiveSignalNotificationPanel({
   const [analysis, setAnalysis] = useState<SignalAnalysis | null>(null);
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [soundEnabled, setSoundEnabled] = useState<boolean>(true);
+  const [showTpGuidance, setShowTpGuidance] = useState<boolean>(false);
 
   const isHighValue = (analysis?.latest_price || 0) > 10.0;
   const precision = isHighValue ? 2 : 4;
@@ -88,26 +91,28 @@ export default function LiveSignalNotificationPanel({
         const notifType: 'BUY_NOW' | 'SELL_NOW' | 'STOP_LOSS_ALERT' = isBuy ? 'BUY_NOW' : 'SELL_NOW';
         
         const notifTitle = isBuy
-          ? `🟢 BUY NOW! ENTRY FOR ${symbol}`
-          : `🔴 SELL NOW! SHORT FOR ${symbol}`;
+          ? `🟢 BUY NOW! [${timeframe.toUpperCase()}] ENTRY FOR ${symbol}`
+          : `🔴 SELL NOW! [${timeframe.toUpperCase()}] SHORT FOR ${symbol}`;
 
         const notifMsg = isBuy
-          ? `Bullish Demand at $${a.latest_price.toFixed(precision)}. Stop Loss: $${a.trade_params.stop_loss.toFixed(precision)}`
-          : `Bearish Rejection at $${a.latest_price.toFixed(precision)}. Stop Loss: $${a.trade_params.stop_loss.toFixed(precision)}`;
+          ? `Bullish Demand on ${timeframe} timeframe at $${a.latest_price.toFixed(precision)}. Stop Loss: $${a.trade_params.stop_loss.toFixed(precision)}`
+          : `Bearish Rejection on ${timeframe} timeframe at $${a.latest_price.toFixed(precision)}. Stop Loss: $${a.trade_params.stop_loss.toFixed(precision)}`;
 
         const newNotif: NotificationItem = {
           id: Math.random().toString(36).substring(2, 9),
           time_harare: harareTime,
+          timeframe: timeframe,
           type: notifType,
           title: notifTitle,
           message: notifMsg,
           entry: a.trade_params.entry,
           stop_loss: a.trade_params.stop_loss,
-          take_profit: a.trade_params.tp1,
+          tp1: a.trade_params.tp1,
+          tp2: a.trade_params.tp2,
           rationale: a.trade_params.rationale,
         };
 
-        setNotifications((prev) => [newNotif, ...prev.slice(0, 50)]);
+        setNotifications((prev) => [newNotif, ...prev.filter(n => n.timeframe === timeframe).slice(0, 49)]);
       }
     } catch (e) {
       console.error('Signal notification error:', e);
@@ -115,6 +120,7 @@ export default function LiveSignalNotificationPanel({
   };
 
   useEffect(() => {
+    setNotifications([]); // Clear stale notifications when switching timeframe or symbol
     fetchSignal();
     const interval = setInterval(fetchSignal, 3000);
     return () => clearInterval(interval);
@@ -133,25 +139,52 @@ export default function LiveSignalNotificationPanel({
             </div>
             <div>
               <h2 className="text-sm font-bold text-white tracking-tight">Signal Navigator</h2>
-              <span className="text-[10px] text-emerald-400 font-bold block">
-                ZIMBABWE HARARE ALERTS
+              <span className="text-[10px] text-emerald-400 font-bold block flex items-center gap-1">
+                <span>TIMEFRAME:</span>
+                <span className="bg-blue-950 text-blue-300 border border-blue-800 px-1.5 py-0.2 rounded font-mono">
+                  {timeframe.toUpperCase()}
+                </span>
               </span>
             </div>
           </div>
 
-          {/* Audio Toggle Button */}
-          <button
-            onClick={() => setSoundEnabled(!soundEnabled)}
-            className={`p-1.5 rounded-lg border transition ${
-              soundEnabled
-                ? 'bg-blue-950 text-blue-400 border-blue-800'
-                : 'bg-slate-950 text-slate-500 border-slate-800'
-            }`}
-            title={soundEnabled ? 'Mute Audio' : 'Enable Audio'}
-          >
-            {soundEnabled ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
-          </button>
+          {/* Audio Toggle & TP Help */}
+          <div className="flex items-center gap-1.5">
+            <button
+              onClick={() => setShowTpGuidance(!showTpGuidance)}
+              className="p-1.5 rounded-lg border border-amber-800 bg-amber-950 text-amber-300 text-[10px] font-bold transition hover:bg-amber-900"
+              title="When to use TP1 vs TP2"
+            >
+              TP1/TP2 Info
+            </button>
+            <button
+              onClick={() => setSoundEnabled(!soundEnabled)}
+              className={`p-1.5 rounded-lg border transition ${
+                soundEnabled
+                  ? 'bg-blue-950 text-blue-400 border-blue-800'
+                  : 'bg-slate-950 text-slate-500 border-slate-800'
+              }`}
+              title={soundEnabled ? 'Mute Audio' : 'Enable Audio'}
+            >
+              {soundEnabled ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
+            </button>
+          </div>
         </div>
+
+        {showTpGuidance && (
+          <div className="bg-slate-950 border border-amber-800/80 p-3 rounded-lg text-[10px] space-y-1.5 text-slate-300 font-sans">
+            <div className="font-bold text-amber-400 flex items-center gap-1">
+              <Target className="w-3.5 h-3.5" />
+              <span>When to use TP1 vs TP2:</span>
+            </div>
+            <div>
+              <strong className="text-emerald-400 font-mono">TP1 (Take Profit 1 - Conservative)</strong>: Lock in profits fast (1:1.5 Risk-Reward). Close 50-75% of your trade position at TP1 and move SL to Entry.
+            </div>
+            <div>
+              <strong className="text-blue-400 font-mono">TP2 (Take Profit 2 - Extended Runner)</strong>: Extended trend target (1:3+ Risk-Reward). Let the remaining 25% run with a trailing stop.
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Primary Active Action Card */}
@@ -166,11 +199,11 @@ export default function LiveSignalNotificationPanel({
           <div className="flex items-center justify-between">
             {latestNotif.type === 'BUY_NOW' ? (
               <span className="px-2.5 py-1 bg-emerald-600 text-white font-extrabold text-xs rounded-lg animate-pulse flex items-center gap-1">
-                <ArrowUpRight className="w-4 h-4" /> BUY NOW!
+                <ArrowUpRight className="w-4 h-4" /> BUY NOW [{latestNotif.timeframe.toUpperCase()}]
               </span>
             ) : (
               <span className="px-2.5 py-1 bg-rose-600 text-white font-extrabold text-xs rounded-lg animate-pulse flex items-center gap-1">
-                <ArrowDownRight className="w-4 h-4" /> SELL NOW!
+                <ArrowDownRight className="w-4 h-4" /> SELL NOW [{latestNotif.timeframe.toUpperCase()}]
               </span>
             )}
             <span className="text-[11px] text-slate-300 font-bold flex items-center gap-1">
@@ -195,8 +228,12 @@ export default function LiveSignalNotificationPanel({
               <span className="text-rose-300 font-bold">${latestNotif.stop_loss.toFixed(precision)}</span>
             </div>
             <div className="flex justify-between bg-slate-950/80 px-2 py-1 rounded border border-emerald-950">
-              <span className="text-emerald-400 font-bold">TAKE PROFIT:</span>
-              <span className="text-emerald-300 font-bold">${latestNotif.take_profit.toFixed(precision)}</span>
+              <span className="text-emerald-400 font-bold">TP 1 (Conservative):</span>
+              <span className="text-emerald-300 font-bold">${latestNotif.tp1.toFixed(precision)}</span>
+            </div>
+            <div className="flex justify-between bg-slate-950/80 px-2 py-1 rounded border border-blue-950">
+              <span className="text-blue-300 font-bold">TP 2 (Extended Runner):</span>
+              <span className="text-blue-200 font-bold">${latestNotif.tp2.toFixed(precision)}</span>
             </div>
           </div>
 
@@ -208,13 +245,14 @@ export default function LiveSignalNotificationPanel({
                   signal_type: latestNotif.type === 'BUY_NOW' ? 'BUY/LONG' : 'SELL/SHORT',
                   entry: latestNotif.entry,
                   stop_loss: latestNotif.stop_loss,
-                  take_profit: latestNotif.take_profit,
+                  tp1: latestNotif.tp1,
+                  tp2: latestNotif.tp2,
                 })
               }
               className="w-full py-2 bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold rounded-lg shadow-lg transition flex items-center justify-center gap-1.5"
             >
               <Play className="w-3.5 h-3.5 fill-white" />
-              <span>Auto-Fill Paper Order</span>
+              <span>Auto-Fill Paper Order ({latestNotif.timeframe})</span>
             </button>
           )}
         </div>

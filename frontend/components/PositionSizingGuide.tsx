@@ -122,7 +122,7 @@ export default function PositionSizingGuide({
   onClose,
   isModal = false
 }: PositionSizingGuideProps) {
-  const [activeTab, setActiveTab] = useState<'calculator' | 'guide' | 'assistant' | 'cheatsheet' | 'depositMatrix'>('calculator');
+  const [activeTab, setActiveTab] = useState<'calculator' | 'guide' | 'assistant' | 'cheatsheet' | 'depositMatrix' | 'mtOrderTypes'>('calculator');
   
   // Calculator States
   const [balance, setBalance] = useState<number>(5000);
@@ -184,14 +184,14 @@ export default function PositionSizingGuide({
           <div>
             <div className="flex items-center gap-2">
               <h2 className="text-lg font-bold text-white tracking-tight">
-                Position Sizing & PU Prime Trade Selection Guide
+                Position Sizing, MT4/MT5 Orders & Risk Guide
               </h2>
               <span className="text-[10px] bg-blue-950 text-blue-400 border border-blue-800 px-2 py-0.5 rounded-md font-mono font-bold">
-                PU PRIME COMPATIBLE
+                PU PRIME / METATRADER COMPATIBLE
               </span>
             </div>
             <p className="text-xs text-slate-400">
-              Calculate exact volume (Lots vs USD), calculate required margin, and know what to enter on PU Prime / MT4 / MT5.
+              Calculate exact volume (Lots vs USD), MetaTrader Order Types (Limit, Stop, Stop Limit), and Deposit Tier Matrices.
             </p>
           </div>
         </div>
@@ -209,39 +209,15 @@ export default function PositionSizingGuide({
       {/* Main Navigation Tabs */}
       <div className="bg-slate-900/90 border-b border-slate-800 px-5 pt-3 flex flex-wrap items-center gap-2 font-mono text-xs overflow-x-auto">
         <button
-          onClick={() => setActiveTab('calculator')}
+          onClick={() => setActiveTab('mtOrderTypes')}
           className={`flex items-center gap-2 px-4 py-2.5 rounded-t-lg font-semibold transition border-b-2 ${
-            activeTab === 'calculator'
-              ? 'bg-slate-950 text-blue-400 border-blue-500 shadow-sm'
+            activeTab === 'mtOrderTypes'
+              ? 'bg-slate-950 text-amber-400 border-amber-500 shadow-sm'
               : 'text-slate-400 hover:text-slate-200 border-transparent hover:bg-slate-850'
           }`}
         >
-          <Sliders className="w-4 h-4" />
-          <span>1. Live Lot & Margin Calculator</span>
-        </button>
-
-        <button
-          onClick={() => setActiveTab('guide')}
-          className={`flex items-center gap-2 px-4 py-2.5 rounded-t-lg font-semibold transition border-b-2 ${
-            activeTab === 'guide'
-              ? 'bg-slate-950 text-blue-400 border-blue-500 shadow-sm'
-              : 'text-slate-400 hover:text-slate-200 border-transparent hover:bg-slate-850'
-          }`}
-        >
-          <BookOpen className="w-4 h-4" />
-          <span>2. What is Lots vs. Volume vs. USD?</span>
-        </button>
-
-        <button
-          onClick={() => setActiveTab('assistant')}
-          className={`flex items-center gap-2 px-4 py-2.5 rounded-t-lg font-semibold transition border-b-2 ${
-            activeTab === 'assistant'
-              ? 'bg-slate-950 text-blue-400 border-blue-500 shadow-sm'
-              : 'text-slate-400 hover:text-slate-200 border-transparent hover:bg-slate-850'
-          }`}
-        >
-          <Sparkles className="w-4 h-4 text-amber-400" />
-          <span>3. What to Select on PU Prime (Assistant)</span>
+          <Zap className="w-4 h-4 text-amber-400" />
+          <span>1. MetaTrader Order Types Guide (MT4/MT5)</span>
         </button>
 
         <button
@@ -253,7 +229,43 @@ export default function PositionSizingGuide({
           }`}
         >
           <DollarSign className="w-4 h-4 text-emerald-400" />
-          <span>4. Deposit Tier Lot Matrix ($10 - $100k)</span>
+          <span>2. Deposit Tier Lot Matrix ($10 - $100k)</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('calculator')}
+          className={`flex items-center gap-2 px-4 py-2.5 rounded-t-lg font-semibold transition border-b-2 ${
+            activeTab === 'calculator'
+              ? 'bg-slate-950 text-blue-400 border-blue-500 shadow-sm'
+              : 'text-slate-400 hover:text-slate-200 border-transparent hover:bg-slate-850'
+          }`}
+        >
+          <Sliders className="w-4 h-4" />
+          <span>3. Live Lot & Margin Calculator</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('guide')}
+          className={`flex items-center gap-2 px-4 py-2.5 rounded-t-lg font-semibold transition border-b-2 ${
+            activeTab === 'guide'
+              ? 'bg-slate-950 text-blue-400 border-blue-500 shadow-sm'
+              : 'text-slate-400 hover:text-slate-200 border-transparent hover:bg-slate-850'
+          }`}
+        >
+          <BookOpen className="w-4 h-4" />
+          <span>4. Lots vs. Volume vs. USD</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('assistant')}
+          className={`flex items-center gap-2 px-4 py-2.5 rounded-t-lg font-semibold transition border-b-2 ${
+            activeTab === 'assistant'
+              ? 'bg-slate-950 text-blue-400 border-blue-500 shadow-sm'
+              : 'text-slate-400 hover:text-slate-200 border-transparent hover:bg-slate-850'
+          }`}
+        >
+          <Sparkles className="w-4 h-4 text-amber-400" />
+          <span>5. PU Prime Assistant</span>
         </button>
 
         <button
@@ -265,12 +277,215 @@ export default function PositionSizingGuide({
           }`}
         >
           <Layers className="w-4 h-4" />
-          <span>5. Asset Contract Specs</span>
+          <span>6. Asset Specs</span>
         </button>
       </div>
 
       {/* Tab Body */}
       <div className="p-6 space-y-6">
+        {/* TAB 0: METATRADER ORDER TYPES GUIDE */}
+        {activeTab === 'mtOrderTypes' && (
+          <div className="space-y-6">
+            <div className="bg-slate-950 border border-slate-800 p-5 rounded-xl border-l-4 border-l-amber-500">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-base font-bold text-white flex items-center gap-2">
+                    <Zap className="w-5 h-5 text-amber-400" />
+                    <span>MetaTrader (MT4 / MT5) Order Execution Types Master Guide</span>
+                  </h3>
+                  <p className="text-xs text-slate-400 mt-1">
+                    Complete reference for Market Execution, Limit Orders, Stop Orders, and Stop Limit Orders — as shown on MetaTrader 4/5 screens.
+                  </p>
+                </div>
+                <span className="bg-amber-950 text-amber-300 border border-amber-800 text-[10px] font-mono px-3 py-1 rounded-full font-bold">
+                  7 METATRADER TYPES
+                </span>
+              </div>
+            </div>
+
+            {/* Grid of 7 MetaTrader Order Types */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-5 font-mono text-xs">
+              {/* 1. Market Execution */}
+              <div className="bg-slate-950 border border-slate-800 p-5 rounded-xl space-y-3 relative overflow-hidden">
+                <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+                  <div className="flex items-center gap-2">
+                    <span className="w-6 h-6 rounded bg-blue-600 text-white font-bold text-xs flex items-center justify-center">1</span>
+                    <span className="font-bold text-sm text-white">Market Execution</span>
+                  </div>
+                  <span className="bg-blue-950 text-blue-400 border border-blue-800 text-[10px] px-2 py-0.5 rounded font-bold">
+                    INSTANT ENTRY
+                  </span>
+                </div>
+                <p className="text-slate-300 text-xs font-sans leading-relaxed">
+                  Fills your order immediately at the current live market price (Ask for Buy, Bid for Sell).
+                </p>
+                <div className="bg-slate-900 p-3 rounded-lg border border-slate-800 space-y-1">
+                  <div className="text-amber-400 font-bold">⚡ When to Use:</div>
+                  <div className="text-slate-300 text-[11px] font-sans">
+                    Use when momentum is strong right NOW, or when an urgent signal notification triggers on your dashboard.
+                  </div>
+                </div>
+                <div className="text-[10px] text-slate-400 border-t border-slate-900 pt-2 flex justify-between">
+                  <span>Price Condition: Immediate</span>
+                  <span className="text-emerald-400">Execution Speed: Instant (~35ms)</span>
+                </div>
+              </div>
+
+              {/* 2. Buy Limit */}
+              <div className="bg-slate-950 border border-slate-800 p-5 rounded-xl space-y-3 relative overflow-hidden">
+                <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+                  <div className="flex items-center gap-2">
+                    <span className="w-6 h-6 rounded bg-emerald-600 text-white font-bold text-xs flex items-center justify-center">2</span>
+                    <span className="font-bold text-sm text-white">Buy Limit</span>
+                  </div>
+                  <span className="bg-emerald-950 text-emerald-400 border border-emerald-800 text-[10px] px-2 py-0.5 rounded font-bold">
+                    PULLBACK BUY
+                  </span>
+                </div>
+                <p className="text-slate-300 text-xs font-sans leading-relaxed">
+                  Places an order <strong className="text-emerald-400">BELOW</strong> the current price. Triggers when price drops down to your key support level.
+                </p>
+                <div className="bg-slate-900 p-3 rounded-lg border border-slate-800 space-y-1">
+                  <div className="text-emerald-400 font-bold">📉 When to Use:</div>
+                  <div className="text-slate-300 text-[11px] font-sans">
+                    Use when Gold or Forex is in an uptrend, but you want to get a cheap entry on a dip to support. (e.g. Current $4403, Buy Limit at $4380).
+                  </div>
+                </div>
+                <div className="text-[10px] text-slate-400 border-t border-slate-900 pt-2 flex justify-between">
+                  <span>Order Price: &lt; Current Price</span>
+                  <span className="text-emerald-400">Direction: Expect Bounce UP</span>
+                </div>
+              </div>
+
+              {/* 3. Sell Limit */}
+              <div className="bg-slate-950 border border-slate-800 p-5 rounded-xl space-y-3 relative overflow-hidden">
+                <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+                  <div className="flex items-center gap-2">
+                    <span className="w-6 h-6 rounded bg-rose-600 text-white font-bold text-xs flex items-center justify-center">3</span>
+                    <span className="font-bold text-sm text-white">Sell Limit</span>
+                  </div>
+                  <span className="bg-rose-950 text-rose-400 border border-rose-800 text-[10px] px-2 py-0.5 rounded font-bold">
+                    REJECTION SELL
+                  </span>
+                </div>
+                <p className="text-slate-300 text-xs font-sans leading-relaxed">
+                  Places an order <strong className="text-rose-400">ABOVE</strong> the current price. Triggers when price rallies up to key resistance level.
+                </p>
+                <div className="bg-slate-900 p-3 rounded-lg border border-slate-800 space-y-1">
+                  <div className="text-rose-400 font-bold">📈 When to Use:</div>
+                  <div className="text-slate-300 text-[11px] font-sans">
+                    Use when market is in a downtrend, but you want to sell high at resistance rejection. (e.g. Current $4403, Sell Limit at $4423).
+                  </div>
+                </div>
+                <div className="text-[10px] text-slate-400 border-t border-slate-900 pt-2 flex justify-between">
+                  <span>Order Price: &gt; Current Price</span>
+                  <span className="text-rose-400">Direction: Expect Rejection DOWN</span>
+                </div>
+              </div>
+
+              {/* 4. Buy Stop */}
+              <div className="bg-slate-950 border border-slate-800 p-5 rounded-xl space-y-3 relative overflow-hidden">
+                <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+                  <div className="flex items-center gap-2">
+                    <span className="w-6 h-6 rounded bg-emerald-700 text-white font-bold text-xs flex items-center justify-center">4</span>
+                    <span className="font-bold text-sm text-white">Buy Stop</span>
+                  </div>
+                  <span className="bg-emerald-950 text-emerald-300 border border-emerald-800 text-[10px] px-2 py-0.5 rounded font-bold">
+                    BREAKOUT BUY
+                  </span>
+                </div>
+                <p className="text-slate-300 text-xs font-sans leading-relaxed">
+                  Places an order <strong className="text-emerald-400">ABOVE</strong> the current price. Triggers when price breaks out upwards through key resistance.
+                </p>
+                <div className="bg-slate-900 p-3 rounded-lg border border-slate-800 space-y-1">
+                  <div className="text-emerald-300 font-bold">🚀 When to Use:</div>
+                  <div className="text-slate-300 text-[11px] font-sans">
+                    Use to catch momentum when price breaks out of a consolidation pattern. (e.g. Current $4403, Buy Stop at $4415).
+                  </div>
+                </div>
+                <div className="text-[10px] text-slate-400 border-t border-slate-900 pt-2 flex justify-between">
+                  <span>Order Price: &gt; Current Price</span>
+                  <span className="text-emerald-400">Direction: Continuation UP</span>
+                </div>
+              </div>
+
+              {/* 5. Sell Stop */}
+              <div className="bg-slate-950 border border-slate-800 p-5 rounded-xl space-y-3 relative overflow-hidden">
+                <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+                  <div className="flex items-center gap-2">
+                    <span className="w-6 h-6 rounded bg-rose-700 text-white font-bold text-xs flex items-center justify-center">5</span>
+                    <span className="font-bold text-sm text-white">Sell Stop</span>
+                  </div>
+                  <span className="bg-rose-950 text-rose-300 border border-rose-800 text-[10px] px-2 py-0.5 rounded font-bold">
+                    BREAKDOWN SELL
+                  </span>
+                </div>
+                <p className="text-slate-300 text-xs font-sans leading-relaxed">
+                  Places an order <strong className="text-rose-400">BELOW</strong> the current price. Triggers when price breaks down downwards through key support.
+                </p>
+                <div className="bg-slate-900 p-3 rounded-lg border border-slate-800 space-y-1">
+                  <div className="text-rose-300 font-bold">💥 When to Use:</div>
+                  <div className="text-slate-300 text-[11px] font-sans">
+                    Use to catch panic selling when support fails. (e.g. Current $4403, Sell Stop at $4372).
+                  </div>
+                </div>
+                <div className="text-[10px] text-slate-400 border-t border-slate-900 pt-2 flex justify-between">
+                  <span>Order Price: &lt; Current Price</span>
+                  <span className="text-rose-400">Direction: Continuation DOWN</span>
+                </div>
+              </div>
+
+              {/* 6. Buy Stop Limit */}
+              <div className="bg-slate-950 border border-slate-800 p-5 rounded-xl space-y-3 relative overflow-hidden">
+                <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+                  <div className="flex items-center gap-2">
+                    <span className="w-6 h-6 rounded bg-blue-700 text-white font-bold text-xs flex items-center justify-center">6</span>
+                    <span className="font-bold text-sm text-white">Buy Stop Limit (MT5)</span>
+                  </div>
+                  <span className="bg-blue-950 text-blue-300 border border-blue-800 text-[10px] px-2 py-0.5 rounded font-bold">
+                    BREAKOUT RETEST BUY
+                  </span>
+                </div>
+                <p className="text-slate-300 text-xs font-sans leading-relaxed">
+                  Combines Buy Stop & Buy Limit. When price hits Stop Price (above current), it places a Buy Limit order at a lower price.
+                </p>
+                <div className="bg-slate-900 p-3 rounded-lg border border-slate-800 space-y-1">
+                  <div className="text-blue-300 font-bold">🔄 When to Use:</div>
+                  <div className="text-slate-300 text-[11px] font-sans">
+                    Use when you want to wait for price to break out AND THEN retest the breakout point before buying.
+                  </div>
+                </div>
+                <div className="text-[10px] text-slate-400 border-t border-slate-900 pt-2 flex justify-between">
+                  <span>Requires: Stop Price & Limit Price</span>
+                  <span className="text-blue-400">MT5 Advanced Type</span>
+                </div>
+              </div>
+
+              {/* 7. Sell Stop Limit */}
+              <div className="bg-slate-950 border border-slate-800 p-5 rounded-xl space-y-3 relative overflow-hidden md:col-span-2">
+                <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+                  <div className="flex items-center gap-2">
+                    <span className="w-6 h-6 rounded bg-indigo-700 text-white font-bold text-xs flex items-center justify-center">7</span>
+                    <span className="font-bold text-sm text-white">Sell Stop Limit (MT5)</span>
+                  </div>
+                  <span className="bg-indigo-950 text-indigo-300 border border-indigo-800 text-[10px] px-2 py-0.5 rounded font-bold">
+                    BREAKDOWN RETEST SELL
+                  </span>
+                </div>
+                <p className="text-slate-300 text-xs font-sans leading-relaxed">
+                  Combines Sell Stop & Sell Limit. When price hits Stop Price (below current), it places a Sell Limit order at a higher price for retest selling.
+                </p>
+                <div className="bg-slate-900 p-3 rounded-lg border border-slate-800 space-y-1">
+                  <div className="text-indigo-300 font-bold">🔁 When to Use:</div>
+                  <div className="text-slate-300 text-[11px] font-sans">
+                    Use when waiting for key support to break, followed by a pullback retest into broken support before opening a sell position.
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* TAB 1: LIVE CALCULATOR */}
         {activeTab === 'calculator' && (
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">

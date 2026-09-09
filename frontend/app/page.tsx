@@ -46,6 +46,7 @@ export default function DashboardPage() {
   const [refreshAuditCount, setRefreshAuditCount] = useState<number>(0);
   const [chartMode, setChartMode] = useState<'TradingViewDirect' | 'CustomEngine'>('TradingViewDirect');
   const [showPositionGuide, setShowPositionGuide] = useState<boolean>(false);
+  const [externalTradeParams, setExternalTradeParams] = useState<any>(null);
 
   const filteredAssets = activeCategory === 'All'
     ? PRESET_ASSETS
@@ -82,6 +83,10 @@ export default function DashboardPage() {
     }
   };
 
+  const handleAutoFillTrade = (params: any) => {
+    setExternalTradeParams(params);
+  };
+
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 p-4 md:p-6 space-y-6 max-w-[1700px] mx-auto">
       {/* Header Bar */}
@@ -110,7 +115,7 @@ export default function DashboardPage() {
             className="flex items-center gap-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-bold px-3.5 py-1.5 rounded-lg shadow-lg shadow-blue-900/50 transition border border-blue-400"
           >
             <Calculator className="w-4 h-4 text-amber-300" />
-            <span>📐 Position Sizer & PU Prime Guide</span>
+            <span>📐 MT4/MT5 Orders & Risk Guide</span>
           </button>
           <div className="flex items-center gap-1.5 bg-slate-950 border border-slate-800 px-3 py-1.5 rounded-lg text-slate-300">
             <Cpu className="w-4 h-4 text-emerald-400" />
@@ -222,7 +227,11 @@ export default function DashboardPage() {
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
         {/* LEFT COLUMN: Vertical Navigation Signal Sidebar (3 cols) */}
         <div className="lg:col-span-3 h-full">
-          <LiveSignalNotificationPanel symbol={symbol} timeframe={timeframe} />
+          <LiveSignalNotificationPanel
+            symbol={symbol}
+            timeframe={timeframe}
+            onExecuteTradeParams={handleAutoFillTrade}
+          />
         </div>
 
         {/* RIGHT CONTENT COLUMN: Charts, Signals, Trading Panel & Orderbook (9 cols) */}
@@ -254,6 +263,7 @@ export default function DashboardPage() {
                 symbol={symbol}
                 currentPrice={currentPrice}
                 onTradeClosed={handleTradeClosed}
+                externalParams={externalTradeParams}
               />
 
               {/* Order Book Depth & OBI Gauge */}
