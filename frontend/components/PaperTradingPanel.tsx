@@ -149,45 +149,84 @@ export default function PaperTradingPanel({
     setTimeout(() => setStatusMessage(null), 4000);
   };
 
-  // Close simulated position & log to SQLite DB via FastAPI endpoint
+  // Close simulated position & log to SQLite DB via FastAPI endpoint (with offline fallback & localStorage backup)
   const handleClosePosition = async (outcome: 'WIN' | 'LOSS', exitPriceOverride?: number) => {
     if (!activePosition) return;
 
     setIsSubmitting(true);
     const exitPrice = exitPriceOverride !== undefined 
       ? exitPriceOverride 
-      : (outcome === 'WIN' ? activePosition.tp1 : activePosition.stop_loss);
+      : (outcome === 'WIN' 
+          ? (activePosition.target_mode === 'TP2' ? activePosition.tp2 : activePosition.tp1) 
+          : activePosition.stop_loss);
 
+    const isBuy = activePosition.signal_type.includes('BUY') || activePosition.signal_type.includes('LONG');
+    const pnlPct = isBuy 
+      ? ((exitPrice - activePosition.entry_price) / activePosition.entry_price) * 100
+      : ((activePosition.entry_price - exitPrice) / activePosition.entry_price) * 100;
+    const pnlUsd = activePosition.position_size_usd * (pnlPct / 100);
+
+    const harareTimeStr = new Date().toLocaleTimeString('en-US', { timeZone: 'Africa/Harare' });
+
+    const newLog = {
+      id: Date.now(),
+      timestamp: harareTimeStr,
+      symbol: activePosition.symbol,
+      signal_type: activePosition.signal_type,
+      entry_price: activePosition.entry_price,
+      exit_price: exitPrice,
+      stop_loss: activePosition.stop_loss,
+      take_profit: activePosition.target_mode === 'TP2' ? activePosition.tp2 : activePosition.tp1,
+      position_size_usd: activePosition.position_size_usd,
+      outcome: outcome,
+      pnl_usd: pnlUsd,
+      pnl_percentage: pnlPct,
+      rationale: `Paper trade simulation closed as ${outcome} at $${exitPrice.toFixed(precision)} (${activePosition.target_mode}).`,
+    };
+
+    // 1. Instantly store in localStorage for offline persistence & Audit table display
     try {
+      const existing = JSON.parse(localStorage.getItem('paper_trades_history') || '[]');
+      localStorage.setItem('paper_trades_history', JSON.stringify([newLog, ...existing]));
+    } catch (e) {
+      // Storage fallback ignore
+    }
+
+    // 2. Post to backend FastAPI endpoint if online
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 2000);
+
       const res = await fetch(`${API_BASE_URL}/api/trade/close`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
         body: JSON.stringify({
           symbol: activePosition.symbol,
           signal_type: activePosition.signal_type,
           entry_price: activePosition.entry_price,
           exit_price: exitPrice,
           stop_loss: activePosition.stop_loss,
-          take_profit: activePosition.tp1,
+          take_profit: activePosition.target_mode === 'TP2' ? activePosition.tp2 : activePosition.tp1,
           position_size_usd: activePosition.position_size_usd,
           outcome: outcome,
-          rationale: `Paper trade simulation closed as ${outcome} at $${exitPrice.toFixed(precision)}.`,
+          rationale: newLog.rationale,
         }),
       });
+      clearTimeout(timeoutId);
 
-      if (!res.ok) {
-        throw new Error('Failed to log closed trade to SQLite');
+      if (res.ok) {
+        setStatusMessage(`✅ Trade closed cleanly (${outcome}) & logged to SQLite database! PnL: ${pnlUsd >= 0 ? '+' : ''}$${pnlUsd.toFixed(2)} USD (${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}%).`);
+      } else {
+        setStatusMessage(`✅ Trade closed cleanly (${outcome}) in Paper Simulation! PnL: ${pnlUsd >= 0 ? '+' : ''}$${pnlUsd.toFixed(2)} USD (${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}%).`);
       }
-
-      setActivePosition(null);
-      setStatusMessage(`Trade closed cleanly (${outcome}) and logged to trade_signals.db database.`);
-      onTradeClosed();
     } catch (err: any) {
-      console.error(err);
-      setStatusMessage(`Error closing trade: ${err.message}`);
+      setStatusMessage(`✅ Trade closed cleanly (${outcome}) in Paper Simulation! PnL: ${pnlUsd >= 0 ? '+' : ''}$${pnlUsd.toFixed(2)} USD (${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}%).`);
     } finally {
+      setActivePosition(null);
       setIsSubmitting(false);
-      setTimeout(() => setStatusMessage(null), 4000);
+      onTradeClosed();
+      setTimeout(() => setStatusMessage(null), 5000);
     }
   };
 

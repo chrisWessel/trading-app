@@ -237,11 +237,15 @@ export default function DashboardPage() {
         {/* RIGHT CONTENT COLUMN: Charts, Signals, Trading Panel & Orderbook (9 cols) */}
         <div className="lg:col-span-9 space-y-6">
           {/* Main Chart & Signals Grid */}
-          <div className="grid grid-cols-1 xl:grid-cols-12 gap-6 items-stretch">
+          <div className="grid grid-cols-1 xl:grid-cols-12 gap-6 items-start">
             {/* Chart Area (8 cols) */}
-            <div className="xl:col-span-8 flex flex-col gap-6 justify-between">
+            <div className="xl:col-span-8 flex flex-col gap-6">
               {chartMode === 'TradingViewDirect' && !isRextAsset ? (
-                <TradingViewDirectChart key={`tv_${symbol}_${timeframe}`} symbol={symbol} timeframe={timeframe} />
+                <TradingViewDirectChart
+                  symbol={symbol}
+                  timeframe={timeframe}
+                  onTimeframeChange={(tf) => setTimeframe(tf)}
+                />
               ) : (
                 <TradingChart
                   key={`tc_${symbol}_${timeframe}`}

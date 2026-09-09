@@ -30,17 +30,37 @@ export default function AuditReportSection({ refreshTrigger = 0 }: AuditReportSe
   const [downloadingPdf, setDownloadingPdf] = useState<boolean>(false);
 
   const fetchTradeHistory = async () => {
+    let dbTrades: TradeLog[] = [];
     try {
-      const res = await fetch(`${API_BASE_URL}/api/trades/history`);
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 2000);
+      const res = await fetch(`${API_BASE_URL}/api/trades/history`, { signal: controller.signal });
+      clearTimeout(timeoutId);
       if (res.ok) {
         const data = await res.json();
-        setTrades(data.trades || []);
+        dbTrades = data.trades || [];
       }
     } catch (err) {
-      console.error('Audit history fetch error:', err);
-    } finally {
-      setLoading(false);
+      // Backend offline fallback
     }
+
+    let localTrades: TradeLog[] = [];
+    try {
+      localTrades = JSON.parse(localStorage.getItem('paper_trades_history') || '[]');
+    } catch (e) {
+      // Ignore
+    }
+
+    // Merge and deduplicate
+    const combined = [...dbTrades];
+    for (const lt of localTrades) {
+      if (!combined.some((t) => t.timestamp === lt.timestamp && t.symbol === lt.symbol)) {
+        combined.push(lt);
+      }
+    }
+
+    setTrades(combined);
+    setLoading(false);
   };
 
   useEffect(() => {
