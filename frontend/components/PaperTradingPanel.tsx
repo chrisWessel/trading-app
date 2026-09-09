@@ -71,6 +71,54 @@ export default function PaperTradingPanel({
   const isHighValueAsset = currentPrice > 10.0;
   const precision = isHighValueAsset ? 2 : 4;
 
+  const getAssetOffsets = (sym: string, price: number) => {
+    const isGold = sym.toUpperCase().includes('XAU') || sym.toUpperCase().includes('GOLD');
+    const isCrypto = sym.toUpperCase().includes('BTC') || sym.toUpperCase().includes('ETH') || sym.toUpperCase().includes('SOL');
+    const isForex = !isGold && !isCrypto;
+
+    if (isGold) {
+      return { slOffset: 3.00, tp1Offset: 4.50, tp2Offset: 9.00 };
+    } else if (isCrypto) {
+      const mult = price > 10000 ? 150 : price > 1000 ? 15 : 1.5;
+      return { slOffset: mult, tp1Offset: mult * 1.5, tp2Offset: mult * 3.0 };
+    } else if (isForex) {
+      return { slOffset: 0.0015, tp1Offset: 0.0025, tp2Offset: 0.0050 };
+    }
+    return { slOffset: price * 0.005, tp1Offset: price * 0.01, tp2Offset: price * 0.02 };
+  };
+
+  const autoFixParameters = (targetOrderType?: MTOrderType, targetDir?: 'BUY/LONG' | 'SELL/SHORT') => {
+    const dir = targetDir || signalType;
+    const oType = targetOrderType || orderType;
+    const refPrice = currentPrice > 0 ? currentPrice : entryPrice || 100;
+    const offsets = getAssetOffsets(symbol, refPrice);
+
+    let newEntry = refPrice;
+    if (oType === 'Buy Limit') {
+      newEntry = Number((refPrice - offsets.slOffset * 0.5).toFixed(precision));
+    } else if (oType === 'Buy Stop') {
+      newEntry = Number((refPrice + offsets.slOffset * 0.5).toFixed(precision));
+    } else if (oType === 'Sell Limit') {
+      newEntry = Number((refPrice + offsets.slOffset * 0.5).toFixed(precision));
+    } else if (oType === 'Sell Stop') {
+      newEntry = Number((refPrice - offsets.slOffset * 0.5).toFixed(precision));
+    } else if (oType === 'Market Execution') {
+      newEntry = refPrice;
+    }
+
+    setEntryPrice(newEntry);
+
+    if (dir === 'BUY/LONG') {
+      setStopLoss(Number((newEntry - offsets.slOffset).toFixed(precision)));
+      setTp1(Number((newEntry + offsets.tp1Offset).toFixed(precision)));
+      setTp2(Number((newEntry + offsets.tp2Offset).toFixed(precision)));
+    } else {
+      setStopLoss(Number((newEntry + offsets.slOffset).toFixed(precision)));
+      setTp1(Number((newEntry - offsets.tp1Offset).toFixed(precision)));
+      setTp2(Number((newEntry - offsets.tp2Offset).toFixed(precision)));
+    }
+  };
+
   // Sync with external signal parameters when user clicks "Auto-Fill Paper Order"
   useEffect(() => {
     if (externalParams) {
@@ -85,21 +133,61 @@ export default function PaperTradingPanel({
     }
   }, [externalParams]);
 
-  // Auto-sync default entry price, stop loss, and target prices when current price changes (if not external)
+  // Initial setup for default entry price, stop loss, and target prices if empty
   useEffect(() => {
-    if (!externalParams && currentPrice && currentPrice > 0) {
-      setEntryPrice(currentPrice);
-      if (signalType === 'BUY/LONG') {
-        setStopLoss(Number((currentPrice * 0.985).toFixed(precision)));
-        setTp1(Number((currentPrice * 1.02).toFixed(precision)));
-        setTp2(Number((currentPrice * 1.04).toFixed(precision)));
-      } else {
-        setStopLoss(Number((currentPrice * 1.015).toFixed(precision)));
-        setTp1(Number((currentPrice * 0.98).toFixed(precision)));
-        setTp2(Number((currentPrice * 0.96).toFixed(precision)));
+    if (!externalParams && currentPrice && currentPrice > 0 && (entryPrice === 0 || stopLoss === 0)) {
+      autoFixParameters(orderType, signalType);
+    }
+  }, [currentPrice, symbol]);
+
+  const getMetaTraderValidationError = (): string | null => {
+    if (!entryPrice || isNaN(entryPrice) || entryPrice <= 0) {
+      return 'Invalid entry price. Please sync with live asset price.';
+    }
+    if (isNaN(stopLoss) || stopLoss <= 0) {
+      return 'Invalid Stop Loss price.';
+    }
+    if (isNaN(tp1) || tp1 <= 0) {
+      return 'Invalid Take Profit (TP1) price.';
+    }
+
+    const isBuy = signalType === 'BUY/LONG';
+    
+    // Check SL & TP direction
+    if (isBuy) {
+      if (stopLoss >= entryPrice) {
+        return `MetaTrader Error: For BUY orders, Stop Loss ($${stopLoss.toFixed(precision)}) must be BELOW Entry ($${entryPrice.toFixed(precision)}).`;
+      }
+      if (tp1 <= entryPrice) {
+        return `MetaTrader Error: For BUY orders, Take Profit ($${tp1.toFixed(precision)}) must be ABOVE Entry ($${entryPrice.toFixed(precision)}).`;
+      }
+    } else {
+      if (stopLoss <= entryPrice) {
+        return `MetaTrader Error: For SELL orders, Stop Loss ($${stopLoss.toFixed(precision)}) must be ABOVE Entry ($${entryPrice.toFixed(precision)}).`;
+      }
+      if (tp1 >= entryPrice) {
+        return `MetaTrader Error: For SELL orders, Take Profit ($${tp1.toFixed(precision)}) must be BELOW Entry ($${entryPrice.toFixed(precision)}).`;
       }
     }
-  }, [currentPrice, symbol, signalType]);
+
+    // Check Order Type Price Relationship vs current market price
+    if (orderType === 'Buy Limit' && entryPrice >= currentPrice) {
+      return `MetaTrader Rule: Buy Limit entry price ($${entryPrice.toFixed(precision)}) must be BELOW live price ($${currentPrice.toFixed(precision)}).`;
+    }
+    if (orderType === 'Buy Stop' && entryPrice <= currentPrice) {
+      return `MetaTrader Rule: Buy Stop entry price ($${entryPrice.toFixed(precision)}) must be ABOVE live price ($${currentPrice.toFixed(precision)}).`;
+    }
+    if (orderType === 'Sell Limit' && entryPrice <= currentPrice) {
+      return `MetaTrader Rule: Sell Limit entry price ($${entryPrice.toFixed(precision)}) must be ABOVE live price ($${currentPrice.toFixed(precision)}).`;
+    }
+    if (orderType === 'Sell Stop' && entryPrice >= currentPrice) {
+      return `MetaTrader Rule: Sell Stop entry price ($${entryPrice.toFixed(precision)}) must be BELOW live price ($${currentPrice.toFixed(precision)}).`;
+    }
+
+    return null;
+  };
+
+  const validationError = getMetaTraderValidationError();
 
   // Calculated Lots & Margin
   const computedLots = sizeMode === 'LOTS' ? lotsInput : Math.max(0.01, Number((positionSizeUsd / (currentPrice * 100)).toFixed(2)));
@@ -107,25 +195,14 @@ export default function PaperTradingPanel({
   const estimatedMarginUsd = estimatedNotionalUsd / 500; // 1:500 leverage default
 
   const handleUseCurrentPrice = () => {
-    if (currentPrice > 0) {
-      setEntryPrice(currentPrice);
-      if (signalType === 'BUY/LONG') {
-        setStopLoss(Number((currentPrice * 0.985).toFixed(precision)));
-        setTp1(Number((currentPrice * 1.02).toFixed(precision)));
-        setTp2(Number((currentPrice * 1.04).toFixed(precision)));
-      } else {
-        setStopLoss(Number((currentPrice * 1.015).toFixed(precision)));
-        setTp1(Number((currentPrice * 0.98).toFixed(precision)));
-        setTp2(Number((currentPrice * 0.96).toFixed(precision)));
-      }
-    }
+    autoFixParameters(orderType, signalType);
   };
 
   // Open simulated trade position
   const handleOpenTrade = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!entryPrice || entryPrice <= 0) {
-      setStatusMessage('Invalid entry price. Please sync with live asset price.');
+    if (validationError) {
+      setStatusMessage(validationError);
       return;
     }
     const harareTimeStr = new Date().toLocaleTimeString('en-US', { timeZone: 'Africa/Harare' });
@@ -342,7 +419,11 @@ export default function PaperTradingPanel({
             </div>
             <select
               value={orderType}
-              onChange={(e) => setOrderType(e.target.value as MTOrderType)}
+              onChange={(e) => {
+                const newType = e.target.value as MTOrderType;
+                setOrderType(newType);
+                autoFixParameters(newType, signalType);
+              }}
               className="w-full bg-slate-950 border border-slate-700 text-amber-300 font-bold px-3 py-2 rounded-lg focus:outline-none focus:border-amber-500 text-xs"
             >
               <option value="Market Execution">⚡ Market Execution (Instant Fill at Current Price)</option>
@@ -359,7 +440,10 @@ export default function PaperTradingPanel({
           <div className="flex items-center justify-between bg-slate-950 p-1.5 rounded-lg border border-slate-800">
             <button
               type="button"
-              onClick={() => setSignalType('BUY/LONG')}
+              onClick={() => {
+                setSignalType('BUY/LONG');
+                autoFixParameters(orderType, 'BUY/LONG');
+              }}
               className={`flex-1 py-2 rounded-md font-bold transition flex items-center justify-center gap-1.5 ${
                 signalType === 'BUY/LONG'
                   ? 'bg-emerald-600 text-white shadow-md shadow-emerald-950'
@@ -371,7 +455,10 @@ export default function PaperTradingPanel({
             </button>
             <button
               type="button"
-              onClick={() => setSignalType('SELL/SHORT')}
+              onClick={() => {
+                setSignalType('SELL/SHORT');
+                autoFixParameters(orderType, 'SELL/SHORT');
+              }}
               className={`flex-1 py-2 rounded-md font-bold transition flex items-center justify-center gap-1.5 ${
                 signalType === 'SELL/SHORT'
                   ? 'bg-rose-600 text-white shadow-md shadow-rose-950'
@@ -401,7 +488,7 @@ export default function PaperTradingPanel({
                 type="number"
                 step="any"
                 value={entryPrice}
-                onChange={(e) => setEntryPrice(parseFloat(e.target.value))}
+                onChange={(e) => setEntryPrice(parseFloat(e.target.value) || 0)}
                 className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-white font-bold focus:outline-none focus:border-blue-500"
               />
             </div>
@@ -419,7 +506,7 @@ export default function PaperTradingPanel({
                 min="0.01"
                 max="100"
                 value={lotsInput}
-                onChange={(e) => setLotsInput(parseFloat(e.target.value))}
+                onChange={(e) => setLotsInput(parseFloat(e.target.value) || 0.01)}
                 className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-amber-300 font-bold focus:outline-none focus:border-amber-500"
               />
             </div>
@@ -433,7 +520,7 @@ export default function PaperTradingPanel({
                 type="number"
                 step="any"
                 value={stopLoss}
-                onChange={(e) => setStopLoss(parseFloat(e.target.value))}
+                onChange={(e) => setStopLoss(parseFloat(e.target.value) || 0)}
                 className="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-rose-400 font-bold focus:outline-none focus:border-rose-500 text-xs"
               />
             </div>
@@ -444,7 +531,7 @@ export default function PaperTradingPanel({
                 type="number"
                 step="any"
                 value={tp1}
-                onChange={(e) => setTp1(parseFloat(e.target.value))}
+                onChange={(e) => setTp1(parseFloat(e.target.value) || 0)}
                 className="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-emerald-400 font-bold focus:outline-none focus:border-emerald-500 text-xs"
               />
             </div>
@@ -455,11 +542,29 @@ export default function PaperTradingPanel({
                 type="number"
                 step="any"
                 value={tp2}
-                onChange={(e) => setTp2(parseFloat(e.target.value))}
+                onChange={(e) => setTp2(parseFloat(e.target.value) || 0)}
                 className="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-blue-400 font-bold focus:outline-none focus:border-blue-500 text-xs"
               />
             </div>
           </div>
+
+          {/* Validation Error Banner & Auto-Fix Button */}
+          {validationError && (
+            <div className="bg-amber-950/80 border border-amber-600/80 rounded-lg p-2.5 space-y-2 text-amber-200 text-[11px] font-sans">
+              <div className="flex items-center gap-1.5 font-bold text-amber-300">
+                <HelpCircle className="w-4 h-4 text-amber-400" />
+                <span>MetaTrader Order Rule Check:</span>
+              </div>
+              <p>{validationError}</p>
+              <button
+                type="button"
+                onClick={() => autoFixParameters(orderType, signalType)}
+                className="w-full py-1.5 bg-amber-600 hover:bg-amber-500 text-slate-950 font-extrabold rounded text-xs transition shadow-md"
+              >
+                ⚡ Auto-Fix Order Parameters to Valid MetaTrader Levels
+              </button>
+            </div>
+          )}
 
           {/* TP1 vs TP2 Target Strategy Selector */}
           <div className="bg-slate-950 p-2.5 rounded-lg border border-slate-800 flex items-center justify-between gap-2">
@@ -491,7 +596,12 @@ export default function PaperTradingPanel({
           </div>
           <button
             type="submit"
-            className="w-full bg-blue-600 hover:bg-blue-500 text-white font-extrabold py-2.5 rounded-lg transition flex items-center justify-center gap-2 shadow-lg shadow-blue-950 text-sm"
+            disabled={!!validationError}
+            className={`w-full font-extrabold py-2.5 rounded-lg transition flex items-center justify-center gap-2 shadow-lg text-sm ${
+              validationError
+                ? 'bg-slate-800 text-slate-500 cursor-not-allowed border border-slate-700'
+                : 'bg-blue-600 hover:bg-blue-500 text-white shadow-blue-950'
+            }`}
           >
             <Play className="w-4 h-4 fill-white" />
             <span>Open Simulated MetaTrader Order ({symbol})</span>
