@@ -633,7 +633,6 @@ export default function PaperTradingPanel({
                   <span className="text-white font-bold text-[11px] font-mono">${entryPrice.toFixed(precision)}</span>
                 </div>
               </div>
-              </div>
             ) : (
               /* Fallback: manual entry input */
               <input
