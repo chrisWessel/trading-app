@@ -288,7 +288,13 @@ export default function DashboardPage() {
 
               {/* Signals Stream & Telegram Broadcaster Component */}
               <div className="flex-1 flex flex-col">
-                <SignalsStream symbol={symbol} timeframe={timeframe} />
+                <SignalsStream
+                  symbol={symbol}
+                  timeframe={timeframe}
+                  onPriceUpdate={(p) => {
+                    if (p > 0) setCurrentPrice(p);
+                  }}
+                />
               </div>
             </div>
 

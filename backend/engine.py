@@ -113,6 +113,53 @@ def get_pip_size(symbol: str) -> float:
 
 def fetch_real_ohlcv_from_market(symbol: str, timeframe: str = "1m", limit: int = 100) -> Optional[pd.DataFrame]:
     clean = clean_symbol_string(symbol)
+    
+    # ── PRIMARY SPOT FEED: Binance for Gold Spot (PAXGUSDT) & Crypto ──────
+    binance_symbol_map = {
+        'XAUUSD': 'PAXGUSDT', 'GOLD': 'PAXGUSDT', 'XAU': 'PAXGUSDT', 'PAXGUSDT': 'PAXGUSDT',
+        'BTCUSD': 'BTCUSDT', 'BTCUSDT': 'BTCUSDT',
+        'ETHUSD': 'ETHUSDT', 'ETHUSDT': 'ETHUSDT',
+        'SOLUSD': 'SOLUSDT', 'SOLUSDT': 'SOLUSDT'
+    }
+    
+    b_sym = binance_symbol_map.get(clean)
+    if b_sym:
+        b_tf_map = {
+            '1s': '1m', '5s': '1m', '15s': '1m', '30s': '1m',
+            '1m': '1m', '2m': '3m', '3m': '3m', '5m': '5m',
+            '15m': '15m', '30m': '30m', '45m': '30m',
+            '1h': '1h', '2h': '2h', '4h': '4h',
+            '1d': '1d', '1w': '1w', '1M': '1m'
+        }
+        b_tf = b_tf_map.get(timeframe, '1m')
+        try:
+            b_url = f"https://api.binance.com/api/v3/klines?symbol={b_sym}&interval={b_tf}&limit={limit}"
+            r = requests.get(b_url, timeout=2.5)
+            if r.status_code == 200:
+                klines = r.json()
+                if isinstance(klines, list) and len(klines) > 0:
+                    records = []
+                    for k in klines:
+                        records.append({
+                            'timestamp': int(k[0]),
+                            'open': float(k[1]),
+                            'high': float(k[2]),
+                            'low': float(k[3]),
+                            'close': float(k[4]),
+                            'volume': float(k[5])
+                        })
+                    df = pd.DataFrame(records)
+                    _, precision = get_asset_base_config(symbol)
+                    for col in ['open', 'high', 'low', 'close']:
+                        df[col] = df[col].round(precision)
+                    
+                    latest_p = float(df['close'].iloc[-1])
+                    UNIVERSAL_PRICE_HUB[clean] = latest_p
+                    return df
+        except Exception as e:
+            print(f"Binance spot fetch notice for {symbol}: {e}")
+
+    # ── SECONDARY FEED: Yahoo Finance (for Forex / Fallback) ──────
     ticker = map_symbol_to_yahoo_ticker(symbol)
     
     tf_map = {

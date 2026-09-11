@@ -33,9 +33,10 @@ interface SignalAnalysis {
 interface SignalsStreamProps {
   symbol: string;
   timeframe: string;
+  onPriceUpdate?: (price: number) => void;
 }
 
-export default function SignalsStream({ symbol, timeframe }: SignalsStreamProps) {
+export default function SignalsStream({ symbol, timeframe, onPriceUpdate }: SignalsStreamProps) {
   const [analysis, setAnalysis] = useState<SignalAnalysis | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
   const [telegramResult, setTelegramResult] = useState<any>(null);
@@ -78,6 +79,9 @@ export default function SignalsStream({ symbol, timeframe }: SignalsStreamProps)
       if (res.ok) {
         const json = await res.json();
         setAnalysis(json.analysis);
+        if (json.analysis?.latest_price && json.analysis.latest_price > 0 && onPriceUpdate) {
+          onPriceUpdate(json.analysis.latest_price);
+        }
         if (json.telegram_result) {
           setTelegramResult(json.telegram_result);
         }

@@ -245,10 +245,10 @@ export default function PaperTradingPanel({
 
   // Initial setup for default entry price, stop loss, and target prices if empty
   useEffect(() => {
-    if (!externalParams && currentPrice && currentPrice > 0 && (entryPrice === 0 || stopLoss === 0)) {
+    if (!externalParams && currentPrice > 0 && (entryPrice === 0 || stopLoss === 0)) {
       autoFixParameters(orderType, signalType);
     }
-  }, [symbol]);
+  }, [symbol, currentPrice]);
 
 
   const getMetaTraderValidationError = (): string | null => {
