@@ -11,6 +11,7 @@ import MarketNewsSection from '@/components/MarketNewsSection';
 import AuditReportSection from '@/components/AuditReportSection';
 import MarketSessionClocks from '@/components/MarketSessionClocks';
 import PositionSizingGuide from '@/components/PositionSizingGuide';
+import TrendCandlePanel from '@/components/TrendCandlePanel';
 import { Activity, ShieldCheck, Cpu, Radio, Coins, Search, Globe, Eye, Monitor, Terminal, Calculator, Sparkles } from 'lucide-react';
 
 interface AssetOption {
@@ -277,6 +278,11 @@ export default function DashboardPage() {
                 <OrderBookOBIGauge symbol={symbol} />
               </div>
             </div>
+          </div>
+
+          {/* Real-Time Financial & Crypto Market News Section */}
+          <div className="w-full">
+            <TrendCandlePanel symbol={symbol} timeframe={timeframe} />
           </div>
 
           {/* Real-Time Financial & Crypto Market News Section */}

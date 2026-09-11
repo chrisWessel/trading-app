@@ -23,7 +23,7 @@ import backend.engine
 importlib.reload(backend.engine)
 
 from backend.logger import init_db, log_closed_trade, generate_pdf_monthly_report, get_all_closed_trades
-from backend.engine import fetch_ohlcv, calculate_support_resistance, fetch_orderbook, analyze_signal_conditions
+from backend.engine import fetch_ohlcv, calculate_support_resistance, fetch_orderbook, analyze_signal_conditions, analyze_market_bias
 from backend.telegram_bot import send_telegram_signal
 from backend.ws_stream import ws_router
 
@@ -205,6 +205,15 @@ def check_signals(req: SignalCheckRequest):
 def get_news(symbol: str = Query("XAU/USD")):
     items = fetch_market_news(symbol)
     return {"symbol": symbol, "news": items}
+
+@app.get("/api/signals/market-bias")
+def get_market_bias(
+    symbol: str = Query("XAU/USD", description="Trading symbol"),
+    timeframe: str = Query("1m", description="Timeframe interval")
+):
+    """Returns trend direction, buyer/seller dominance, and candle pattern analysis."""
+    result = analyze_market_bias(symbol=symbol, timeframe=timeframe)
+    return {"status": "success", "bias": result}
 
 @app.post("/api/trade/close")
 def close_trade(req: TradeCloseRequest):

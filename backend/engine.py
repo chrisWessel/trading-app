@@ -570,3 +570,253 @@ def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m") ->
             "rationale": rationale
         }
     }
+
+
+# ═══════════════════════════════════════════════════════════════════
+# MARKET BIAS ANALYSIS — Trend Trading + Candle Trading
+# ═══════════════════════════════════════════════════════════════════
+
+def analyze_market_bias(symbol: str, timeframe: str) -> Dict[str, Any]:
+    """
+    Returns a full market bias snapshot for a symbol/timeframe:
+      - Trend block: SMA/EMA stack, buyer/seller volume split, trend strength, continuation signal
+      - Candle block: current candle type, named pattern, body ratio, candle signal
+    """
+    df = fetch_ohlcv(symbol=symbol, timeframe=timeframe, limit=120)
+    if df is None or len(df) < 55:
+        return {"error": "Insufficient candle data for market bias analysis."}
+
+    _, precision = get_asset_base_config(symbol)
+    latest_price = float(df['close'].iloc[-1])
+
+    # ── Moving Averages ───────────────────────────────────────────
+    df['sma20']  = df['close'].rolling(20).mean()
+    df['sma50']  = df['close'].rolling(50).mean()
+    df['ema8']   = df['close'].ewm(span=8,  adjust=False).mean()
+    df['ema21']  = df['close'].ewm(span=21, adjust=False).mean()
+    df['ema50']  = df['close'].ewm(span=50, adjust=False).mean()
+
+    sma20 = float(df['sma20'].iloc[-1])
+    sma50 = float(df['sma50'].iloc[-1])
+    ema8  = float(df['ema8'].iloc[-1])
+    ema21 = float(df['ema21'].iloc[-1])
+    ema50 = float(df['ema50'].iloc[-1])
+
+    # ── Trend Direction: SMA crossover + price position ──────────
+    sma_bull = sma20 > sma50
+    price_above_sma20 = latest_price > sma20
+    price_above_sma50 = latest_price > sma50
+
+    # EMA Stack alignment
+    ema_bull_stack = ema8 > ema21 > ema50      # perfectly aligned bullish
+    ema_bear_stack = ema8 < ema21 < ema50      # perfectly aligned bearish
+    if ema_bull_stack:
+        ema_stack = "ALIGNED_BULL"
+    elif ema_bear_stack:
+        ema_stack = "ALIGNED_BEAR"
+    else:
+        ema_stack = "MIXED"
+
+    # Combine signals into trend vote
+    bull_votes = sum([sma_bull, price_above_sma20, price_above_sma50, ema_bull_stack])
+    bear_votes = sum([not sma_bull, not price_above_sma20, not price_above_sma50, ema_bear_stack])
+
+    if bull_votes >= 3:
+        trend_direction = "BULL"
+    elif bear_votes >= 3:
+        trend_direction = "BEAR"
+    else:
+        trend_direction = "NEUTRAL"
+
+    # ── Trend Strength (via ATR vs price and EMA spread) ─────────
+    recent = df.iloc[-20:]
+    high_low   = recent['high'] - recent['low']
+    high_close = (recent['high'] - recent['close'].shift(1)).abs()
+    low_close  = (recent['low']  - recent['close'].shift(1)).abs()
+    tr         = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
+    atr14      = float(tr.rolling(14, min_periods=3).mean().iloc[-1])
+    if pd.isna(atr14) or atr14 <= 0:
+        atr14 = latest_price * 0.002
+
+    ema_spread_pct = abs(ema8 - ema50) / latest_price * 100
+    if ema_spread_pct > 0.4 or (atr14 / latest_price) > 0.003:
+        trend_strength = "STRONG"
+    elif ema_spread_pct > 0.15:
+        trend_strength = "MODERATE"
+    else:
+        trend_strength = "WEAK"
+
+    # ── Buyer / Seller Volume Split (last 20 bars) ────────────────
+    last20 = df.iloc[-20:]
+    bull_bars = last20[last20['close'] >= last20['open']]
+    bear_bars = last20[last20['close'] <  last20['open']]
+    bull_vol  = float(bull_bars['volume'].sum())
+    bear_vol  = float(bear_bars['volume'].sum())
+    total_vol = bull_vol + bear_vol if (bull_vol + bear_vol) > 0 else 1
+    buyers_pct  = round(bull_vol / total_vol * 100, 1)
+    sellers_pct = round(bear_vol / total_vol * 100, 1)
+
+    # OBI from last poll (recompute lightweight here)
+    try:
+        ob = fetch_orderbook(symbol=symbol, depth=15)
+        obi_score = round(float(ob.get("obi", 0.0)), 3)
+    except Exception:
+        obi_score = 0.0
+
+    # ── Continuation Signal ───────────────────────────────────────
+    if trend_direction == "BULL" and trend_strength in ("STRONG", "MODERATE"):
+        continuation_signal = "BUY_CONTINUATION"
+        continuation_text   = f"🟢 TREND IS BULLISH — CONTINUE BUYING ({trend_strength})"
+    elif trend_direction == "BEAR" and trend_strength in ("STRONG", "MODERATE"):
+        continuation_signal = "SELL_CONTINUATION"
+        continuation_text   = f"🔴 TREND IS BEARISH — CONTINUE SELLING ({trend_strength})"
+    elif trend_direction == "BULL" and trend_strength == "WEAK":
+        continuation_signal = "WEAK_BULL"
+        continuation_text   = "🟡 WEAK BULLISH TREND — Caution, wait for confirmation"
+    elif trend_direction == "BEAR" and trend_strength == "WEAK":
+        continuation_signal = "WEAK_BEAR"
+        continuation_text   = "🟡 WEAK BEARISH TREND — Caution, wait for confirmation"
+    else:
+        continuation_signal = "WAIT"
+        continuation_text   = "⏸️ MARKET NEUTRAL — Wait for a clear trend to develop"
+
+    # ════════════════════════════════════════════════════════════════
+    # CANDLE ANALYSIS — current candle + pattern detection
+    # ════════════════════════════════════════════════════════════════
+    c   = df.iloc[-1]  # current (live) candle
+    c_1 = df.iloc[-2]  # previous candle
+    c_2 = df.iloc[-3]  # candle before that
+
+    o, h, l, cl = float(c['open']), float(c['high']), float(c['low']), float(c['close'])
+    candle_range = h - l if (h - l) > 0 else 0.0001
+    body         = abs(cl - o)
+    upper_wick   = h - max(o, cl)
+    lower_wick   = min(o, cl) - l
+    body_ratio   = round(body / candle_range * 100, 1)
+    upper_wick_pct = round(upper_wick / candle_range * 100, 1)
+    lower_wick_pct = round(lower_wick / candle_range * 100, 1)
+    is_bull_candle = cl >= o
+
+    # Prev candle metrics
+    po, ph, pl, pcl = float(c_1['open']), float(c_1['high']), float(c_1['low']), float(c_1['close'])
+    prev_body = abs(pcl - po)
+
+    # ── Pattern Detection ─────────────────────────────────────────
+    candle_pattern = "NORMAL"
+
+    # Doji: tiny body (< 10% of range), wick both sides
+    if body_ratio < 10:
+        candle_pattern = "DOJI"
+
+    # Marubozu: body > 85%, almost no wicks
+    elif body_ratio > 85 and upper_wick_pct < 5 and lower_wick_pct < 5:
+        candle_pattern = "MARUBOZU_BULL" if is_bull_candle else "MARUBOZU_BEAR"
+
+    # Hammer / Hanging Man: small body at top, long lower wick (> 2x body)
+    elif (lower_wick > body * 2) and upper_wick_pct < 15 and body_ratio < 35:
+        # Hammer at bottom of down-move = bullish reversal
+        candle_pattern = "HAMMER"
+
+    # Shooting Star / Inverted Hammer: small body at bottom, long upper wick
+    elif (upper_wick > body * 2) and lower_wick_pct < 15 and body_ratio < 35:
+        candle_pattern = "SHOOTING_STAR"
+
+    # Bullish Engulfing: current bull candle body fully wraps previous bear candle body
+    elif (is_bull_candle and not (pcl >= po)
+          and o <= pcl and cl >= po
+          and body > prev_body):
+        candle_pattern = "ENGULFING_BULL"
+
+    # Bearish Engulfing: current bear candle body fully wraps previous bull candle body
+    elif (not is_bull_candle and (pcl >= po)
+          and o >= pcl and cl <= po
+          and body > prev_body):
+        candle_pattern = "ENGULFING_BEAR"
+
+    # Pinbar Bull: hammer-like but with strict wick ratios
+    elif lower_wick_pct > 55 and upper_wick_pct < 20 and body_ratio < 30:
+        candle_pattern = "PINBAR_BULL"
+
+    # Pinbar Bear: shooting-star-like
+    elif upper_wick_pct > 55 and lower_wick_pct < 20 and body_ratio < 30:
+        candle_pattern = "PINBAR_BEAR"
+
+    # Inside Bar: current candle's high/low completely inside previous candle
+    elif h <= ph and l >= pl:
+        candle_pattern = "INSIDE_BAR"
+
+    # Candle type label
+    if body_ratio < 10:
+        candle_type = "DOJI"
+    elif is_bull_candle:
+        candle_type = "BULLISH"
+    else:
+        candle_type = "BEARISH"
+
+    # ── Candle Bias and Signal ────────────────────────────────────
+    bull_patterns = {"HAMMER", "ENGULFING_BULL", "PINBAR_BULL", "MARUBOZU_BULL"}
+    bear_patterns = {"SHOOTING_STAR", "ENGULFING_BEAR", "PINBAR_BEAR", "MARUBOZU_BEAR"}
+
+    if candle_pattern in bull_patterns or (is_bull_candle and body_ratio > 50):
+        candle_bias   = "BUYERS_IN_CONTROL"
+        candle_signal = "BUY"
+        pattern_label = candle_pattern.replace("_", " ")
+        candle_signal_text = f"🟢 CANDLE IN BUYERS' FAVOR — {pattern_label}"
+    elif candle_pattern in bear_patterns or (not is_bull_candle and body_ratio > 50):
+        candle_bias   = "SELLERS_IN_CONTROL"
+        candle_signal = "SELL"
+        pattern_label = candle_pattern.replace("_", " ")
+        candle_signal_text = f"🔴 CANDLE IN SELLERS' FAVOR — {pattern_label}"
+    else:
+        candle_bias   = "INDECISION"
+        candle_signal = "WAIT"
+        candle_signal_text = f"⏸️ INDECISION — {candle_pattern.replace('_', ' ')} forming, wait for next candle"
+
+    # Last 3 candles summary
+    last_3 = []
+    for i, row in enumerate([df.iloc[-3], df.iloc[-2], df.iloc[-1]]):
+        rc, ro = float(row['close']), float(row['open'])
+        last_3.append({
+            "label": ["C-2", "C-1", "CURRENT"][i],
+            "direction": "BULL" if rc >= ro else "BEAR",
+            "close": round(rc, precision),
+            "body_pct": round(abs(rc - ro) / (float(row['high']) - float(row['low']) + 0.00001) * 100, 1)
+        })
+
+    return {
+        "symbol": symbol,
+        "timeframe": timeframe,
+        "latest_price": round(latest_price, precision),
+        "trend": {
+            "direction": trend_direction,
+            "strength": trend_strength,
+            "buyers_pct": buyers_pct,
+            "sellers_pct": sellers_pct,
+            "sma20": round(sma20, precision),
+            "sma50": round(sma50, precision),
+            "ema8":  round(ema8,  precision),
+            "ema21": round(ema21, precision),
+            "ema50": round(ema50, precision),
+            "sma20_vs_sma50": "BULL" if sma_bull else "BEAR",
+            "price_vs_sma20": "ABOVE" if price_above_sma20 else "BELOW",
+            "ema_stack": ema_stack,
+            "obi_score": obi_score,
+            "continuation_signal": continuation_signal,
+            "continuation_text": continuation_text,
+        },
+        "candle": {
+            "candle_type": candle_type,
+            "candle_pattern": candle_pattern,
+            "body_ratio": body_ratio,
+            "upper_wick_pct": upper_wick_pct,
+            "lower_wick_pct": lower_wick_pct,
+            "candle_bias": candle_bias,
+            "candle_signal": candle_signal,
+            "candle_signal_text": candle_signal_text,
+            "open":  round(o,  precision),
+            "high":  round(h,  precision),
+            "low":   round(l,  precision),
+            "close": round(cl, precision),
+            "last_3_candles": last_3,
+        }
+    }
