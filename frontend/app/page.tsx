@@ -1,6 +1,7 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
+import { API_BASE_URL } from '@/lib/apiConfig';
 import TradingChart from '@/components/TradingChart';
 import TradingViewDirectChart from '@/components/TradingViewDirectChart';
 import PaperTradingPanel from '@/components/PaperTradingPanel';
@@ -43,11 +44,39 @@ export default function DashboardPage() {
   const [activeCategory, setActiveCategory] = useState<'All' | 'Forex' | 'Gold' | 'Crypto'>('All');
   const [customSymbol, setCustomSymbol] = useState<string>('');
   const [timeframe, setTimeframe] = useState<string>('1m');
-  const [currentPrice, setCurrentPrice] = useState<number>(4310.37);
+  const [currentPrice, setCurrentPrice] = useState<number>(0);
+  const priceIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const [refreshAuditCount, setRefreshAuditCount] = useState<number>(0);
   const [chartMode, setChartMode] = useState<'TradingViewDirect' | 'CustomEngine'>('TradingViewDirect');
   const [showPositionGuide, setShowPositionGuide] = useState<boolean>(false);
   const [externalTradeParams, setExternalTradeParams] = useState<any>(null);
+
+  // ── LIVE PRICE POLLER: always keep currentPrice in sync with backend ──────
+  // This runs regardless of which chart is active (TradingView or CustomEngine).
+  // Polls every 3 seconds — same cadence as signal checks.
+  useEffect(() => {
+    const fetchLivePrice = async () => {
+      try {
+        const res = await fetch(
+          `${API_BASE_URL}/api/candles?symbol=${encodeURIComponent(symbol)}&timeframe=${encodeURIComponent(timeframe)}&limit=2`
+        );
+        if (res.ok) {
+          const data = await res.json();
+          if (data.latest_price && data.latest_price > 0) {
+            setCurrentPrice(data.latest_price);
+          }
+        }
+      } catch (_) {
+        // keep previous price on error
+      }
+    };
+
+    fetchLivePrice(); // immediate first fetch
+    priceIntervalRef.current = setInterval(fetchLivePrice, 3000);
+    return () => {
+      if (priceIntervalRef.current) clearInterval(priceIntervalRef.current);
+    };
+  }, [symbol, timeframe]);
 
   const filteredAssets = activeCategory === 'All'
     ? PRESET_ASSETS

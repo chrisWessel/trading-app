@@ -193,7 +193,7 @@ export default function PaperTradingPanel({
     // Entry zones from signal (useful for pending orders)
     const zones = externalParams.entry_zones ?? [];
     setEntryZones(zones);
-    setSelectedZoneIndex(2); // Zone 3 = signal price default
+    setSelectedZoneIndex(0); // Z1 = current market price (immediate entry)
     setSelectedTpLevelIndex(0);
 
     // ── KEY FIX: For Market Execution, ALWAYS use currentPrice as entry.
@@ -223,18 +223,23 @@ export default function PaperTradingPanel({
     }
   }, [orderType]);
 
-  // For Market Execution: keep entry pinned to current live price
-  // (runs whenever currentPrice updates — gentle, only when a signal is active)
+  // For Market Execution: always keep entry pinned to the live current price.
+  // Runs on every currentPrice update regardless of whether a signal is active.
   useEffect(() => {
-    if (
-      orderType === 'Market Execution' &&
-      signalSlOffset > 0 &&
-      currentPrice > 0 &&
-      !activePosition
-    ) {
+    if (orderType === 'Market Execution' && currentPrice > 0 && !activePosition) {
       const newEntry = currentPrice;
       setEntryPrice(newEntry);
-      recalcFromEntry(newEntry, signalDirection, signalSlOffset, signalTpOffsets, precision);
+      // If we have signal offsets (from auto-fill), recalculate SL/TPs from live entry
+      if (signalSlOffset > 0) {
+        recalcFromEntry(newEntry, signalDirection, signalSlOffset, signalTpOffsets, precision);
+      } else {
+        // No signal: just update entry price, keep relative SL/TP distances
+        const offsets = getAssetOffsets(symbol, newEntry);
+        const isBuy = signalType === 'BUY/LONG';
+        setStopLoss(Number((isBuy ? newEntry - offsets.slOffset : newEntry + offsets.slOffset).toFixed(precision)));
+        setTp1(Number((isBuy ? newEntry + offsets.tp1Offset : newEntry - offsets.tp1Offset).toFixed(precision)));
+        setTp2(Number((isBuy ? newEntry + offsets.tp2Offset : newEntry - offsets.tp2Offset).toFixed(precision)));
+      }
     }
   }, [currentPrice]);
 
@@ -592,12 +597,15 @@ export default function PaperTradingPanel({
 
             {/* Market Execution: live price is always the entry */}
             {orderType === 'Market Execution' ? (
-              <div className="bg-slate-950 border border-emerald-900/60 rounded-lg px-3 py-2 flex items-center justify-between">
+              <div className="bg-slate-950 border border-emerald-900/60 rounded-lg px-3 py-2.5 flex items-center justify-between">
                 <div>
-                  <div className="text-[9px] text-emerald-400 font-bold mb-0.5">LIVE MARKET PRICE (Market Execution)</div>
-                  <span className="text-white font-bold font-mono text-sm">${entryPrice.toFixed(precision)}</span>
+                  <div className="text-[9px] text-emerald-400 font-bold mb-0.5 flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse inline-block" />
+                    LIVE MARKET PRICE (Market Execution)
+                  </div>
+                  <span className="text-white font-bold font-mono text-sm">${currentPrice > 0 ? currentPrice.toFixed(precision) : '...'}</span>
                 </div>
-                <span className="text-[9px] text-slate-400 bg-slate-900 border border-slate-700 rounded px-1.5 py-0.5">Auto-synced</span>
+                <span className="text-[9px] text-emerald-500 bg-emerald-950 border border-emerald-900 rounded px-1.5 py-0.5">Auto-synced</span>
               </div>
             ) : entryZones.length > 0 ? (
               /* Zone Selector: 5 bracketed entry prices — for PENDING ORDERS only */
@@ -621,9 +629,9 @@ export default function PaperTradingPanel({
                           ? 'bg-blue-600 border-blue-400 text-white shadow-md shadow-blue-950'
                           : 'bg-slate-950 border-slate-700 text-slate-300 hover:border-blue-600 hover:text-blue-300'
                       }`}
-                      title={`Zone ${i + 1}${i === 2 ? ' (Signal Price)' : ''}`}
+                      title={i === 0 ? 'Z1 = Current Market Price (immediate entry)' : `Zone ${i + 1}`}
                     >
-                      <div className="text-[8px] opacity-70">Z{i + 1}{i === 2 ? '★' : ''}</div>
+                      <div className="text-[8px] opacity-70">{i === 0 ? 'NOW★' : `Z${i + 1}`}</div>
                       ${z.toFixed(precision)}
                     </button>
                   ))}
