@@ -1,14 +1,16 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { Bell, Zap, ArrowUpRight, ArrowDownRight, Volume2, VolumeX, Shield, Target, Play, Clock, Navigation } from 'lucide-react';
 import { API_BASE_URL } from '@/lib/apiConfig';
 
 interface TradeParams {
   entry: number;
+  entry_zones: number[];
   stop_loss: number;
   tp1: number;
   tp2: number;
+  tp_levels: number[];
   rationale: string;
 }
 
@@ -40,16 +42,30 @@ interface NotificationItem {
   title: string;
   message: string;
   entry: number;
+  entry_zones: number[];
   stop_loss: number;
   tp1: number;
   tp2: number;
+  tp_levels: number[];
   rationale: string;
+}
+
+// Frozen params are locked on the first signal trigger of a given direction.
+// They only reset when the signal direction changes (BUY → SELL or vice versa).
+interface FrozenParams {
+  signal_type: string;
+  entry: number;
+  entry_zones: number[];
+  stop_loss: number;
+  tp1: number;
+  tp2: number;
+  tp_levels: number[];
 }
 
 interface LiveSignalNotificationPanelProps {
   symbol: string;
   timeframe: string;
-  onExecuteTradeParams?: (params: { signal_type: string; entry: number; stop_loss: number; tp1: number; tp2: number }) => void;
+  onExecuteTradeParams?: (params: { signal_type: string; entry: number; stop_loss: number; tp1: number; tp2: number; tp_levels: number[]; entry_zones: number[] }) => void;
 }
 
 export default function LiveSignalNotificationPanel({
@@ -61,6 +77,12 @@ export default function LiveSignalNotificationPanel({
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [soundEnabled, setSoundEnabled] = useState<boolean>(true);
   const [showTpGuidance, setShowTpGuidance] = useState<boolean>(false);
+  const [selectedTpIndex, setSelectedTpIndex] = useState<number>(0); // which TP level is highlighted
+
+  // Frozen params — locked once per signal direction change.
+  // This prevents SL/TP from jittering on every 3-second poll.
+  const frozenRef = useRef<FrozenParams | null>(null);
+  const [frozenParams, setFrozenParams] = useState<FrozenParams | null>(null);
 
   const isHighValue = (analysis?.latest_price || 0) > 10.0;
   const precision = isHighValue ? 2 : 4;
@@ -90,7 +112,33 @@ export default function LiveSignalNotificationPanel({
         const isBuy = a.signal_type === 'BUY/LONG';
         const isSell = a.signal_type === 'SELL/SHORT';
         const notifType: 'BUY_NOW' | 'SELL_NOW' | 'MONITORING' = isBuy ? 'BUY_NOW' : isSell ? 'SELL_NOW' : 'MONITORING';
-        
+
+        // ── FREEZE SL/TP/ENTRY: lock parameters when a new direction fires.
+        // Only reset frozen params when signal direction changes.
+        const incoming_zones: number[] = a.trade_params.entry_zones || [];
+        const incoming_tp_levels: number[] = a.trade_params.tp_levels || [];
+
+        const prevFrozen = frozenRef.current;
+        if (
+          !prevFrozen ||
+          prevFrozen.signal_type !== a.signal_type
+        ) {
+          // New direction (or first signal): lock new params
+          const newFrozen: FrozenParams = {
+            signal_type: a.signal_type,
+            entry: a.trade_params.entry,
+            entry_zones: incoming_zones,
+            stop_loss: a.trade_params.stop_loss,
+            tp1: a.trade_params.tp1,
+            tp2: a.trade_params.tp2,
+            tp_levels: incoming_tp_levels,
+          };
+          frozenRef.current = newFrozen;
+          setFrozenParams(newFrozen);
+          setSelectedTpIndex(0); // reset TP selection on direction change
+        }
+        // If same direction: do NOT update frozen params — they stay constant.
+
         let notifTitle = '';
         let notifMsg = '';
 
@@ -113,16 +161,18 @@ export default function LiveSignalNotificationPanel({
           title: notifTitle,
           message: notifMsg,
           entry: a.trade_params.entry,
+          entry_zones: incoming_zones,
           stop_loss: a.trade_params.stop_loss,
           tp1: a.trade_params.tp1,
           tp2: a.trade_params.tp2,
+          tp_levels: incoming_tp_levels,
           rationale: a.trade_params.rationale,
         };
 
         setNotifications((prev) => {
           const top = prev[0];
           if (top && top.type === notifType && top.title === notifTitle && top.timeframe === timeframe) {
-            return [{ ...top, time_harare: harareTime, entry: a.trade_params.entry, stop_loss: a.trade_params.stop_loss, tp1: a.trade_params.tp1, tp2: a.trade_params.tp2, message: notifMsg }, ...prev.slice(1)];
+            return [{ ...top, time_harare: harareTime }, ...prev.slice(1)];
           }
           return [newNotif, ...prev.filter(n => n.timeframe === timeframe).slice(0, 49)];
         });
@@ -133,13 +183,36 @@ export default function LiveSignalNotificationPanel({
   };
 
   useEffect(() => {
-    setNotifications([]); // Clear stale notifications when switching timeframe or symbol
+    // Clear stale state when switching symbol or timeframe
+    setNotifications([]);
+    frozenRef.current = null;
+    setFrozenParams(null);
+    setSelectedTpIndex(0);
     fetchSignal();
     const interval = setInterval(fetchSignal, 3000);
     return () => clearInterval(interval);
   }, [symbol, timeframe]);
 
   const latestNotif = notifications[0];
+
+  // Use frozen params for display (constant); fall back to latest notif while loading
+  const displayEntry = frozenParams?.entry ?? latestNotif?.entry ?? 0;
+  const displayEntryZones = frozenParams?.entry_zones ?? latestNotif?.entry_zones ?? [];
+  const displaySL = frozenParams?.stop_loss ?? latestNotif?.stop_loss ?? 0;
+  const displayTpLevels = frozenParams?.tp_levels ?? latestNotif?.tp_levels ?? [];
+  const displayTp1 = frozenParams?.tp1 ?? latestNotif?.tp1 ?? 0;
+  const displayTp2 = frozenParams?.tp2 ?? latestNotif?.tp2 ?? 0;
+
+  // TP chip colors cycling green → teal → blue → purple
+  const tpColors = [
+    'border-emerald-700 text-emerald-300 bg-emerald-950/60',
+    'border-teal-700 text-teal-300 bg-teal-950/60',
+    'border-cyan-700 text-cyan-300 bg-cyan-950/60',
+    'border-sky-700 text-sky-300 bg-sky-950/60',
+    'border-blue-700 text-blue-300 bg-blue-950/60',
+    'border-indigo-700 text-indigo-300 bg-indigo-950/60',
+    'border-violet-700 text-violet-300 bg-violet-950/60',
+  ];
 
   return (
     <aside className="bg-slate-900 border border-slate-800 rounded-xl p-4 shadow-2xl flex flex-col h-full max-h-[calc(100vh-2rem)] sticky top-4 space-y-4 font-mono overflow-hidden">
@@ -166,9 +239,9 @@ export default function LiveSignalNotificationPanel({
             <button
               onClick={() => setShowTpGuidance(!showTpGuidance)}
               className="p-1.5 rounded-lg border border-amber-800 bg-amber-950 text-amber-300 text-[10px] font-bold transition hover:bg-amber-900"
-              title="When to use TP1 vs TP2"
+              title="When to use TP1 vs TP7"
             >
-              TP1/TP2 Info
+              TP Info
             </button>
             <button
               onClick={() => setSoundEnabled(!soundEnabled)}
@@ -188,14 +261,12 @@ export default function LiveSignalNotificationPanel({
           <div className="bg-slate-950 border border-amber-800/80 p-3 rounded-lg text-[10px] space-y-1.5 text-slate-300 font-sans">
             <div className="font-bold text-amber-400 flex items-center gap-1">
               <Target className="w-3.5 h-3.5" />
-              <span>When to use TP1 vs TP2:</span>
+              <span>Take Profit Level Strategy:</span>
             </div>
-            <div>
-              <strong className="text-emerald-400 font-mono">TP1 (Take Profit 1 - Conservative)</strong>: Lock in profits fast (1:1.5 Risk-Reward). Close 50-75% of your trade position at TP1 and move SL to Entry.
-            </div>
-            <div>
-              <strong className="text-blue-400 font-mono">TP2 (Take Profit 2 - Extended Runner)</strong>: Extended trend target (1:3+ Risk-Reward). Let the remaining 25% run with a trailing stop.
-            </div>
+            <div><strong className="text-emerald-400 font-mono">TP1–TP2 (Conservative):</strong> Lock in profits fast, close 50–75% of position here and move SL to entry.</div>
+            <div><strong className="text-sky-400 font-mono">TP3–TP5 (Standard):</strong> Strong momentum targets with 1:3–1:5 Risk-Reward.</div>
+            <div><strong className="text-violet-400 font-mono">TP6–TP7 (Runner):</strong> Extended trend — let 15–25% ride with a trailing stop. 1:6+ R:R.</div>
+            <div className="text-slate-400 pt-1 border-t border-slate-800">Each TP level is <span className="text-amber-300 font-bold">30 pips</span> apart. Entry zones are bracket scale-in levels around the signal price.</div>
           </div>
         )}
       </div>
@@ -236,36 +307,92 @@ export default function LiveSignalNotificationPanel({
             <p className="text-[11px] text-slate-300 mt-1 leading-snug">{latestNotif.message}</p>
           </div>
 
-          {/* Trade Parameters List */}
-          <div className="space-y-1.5 pt-2 border-t border-slate-800 text-[11px]">
-            <div className="flex justify-between bg-slate-950/80 px-2 py-1 rounded border border-blue-950">
-              <span className="text-blue-400 font-bold">ENTRY:</span>
-              <span className="text-white font-bold">${latestNotif.entry.toFixed(precision)}</span>
+          {/* Trade Parameters — FROZEN (constant across polls) */}
+          <div className="space-y-2 pt-2 border-t border-slate-800 text-[11px]">
+
+            {/* Stop Loss — single constant value */}
+            <div className="flex justify-between bg-slate-950/80 px-2 py-1.5 rounded border border-rose-950">
+              <span className="text-rose-400 font-bold flex items-center gap-1">
+                <Shield className="w-3 h-3" /> STOP LOSS (FIXED):
+              </span>
+              <span className="text-rose-300 font-bold font-mono">${displaySL.toFixed(precision)}</span>
             </div>
-            <div className="flex justify-between bg-slate-950/80 px-2 py-1 rounded border border-rose-950">
-              <span className="text-rose-400 font-bold">STOP LOSS:</span>
-              <span className="text-rose-300 font-bold">${latestNotif.stop_loss.toFixed(precision)}</span>
+
+            {/* Entry Zone Range — 5 levels */}
+            <div className="bg-slate-950/80 px-2 py-1.5 rounded border border-blue-950 space-y-1">
+              <span className="text-blue-400 font-bold block">ENTRY ZONE (5 LEVELS):</span>
+              <div className="grid grid-cols-5 gap-1">
+                {displayEntryZones.length > 0
+                  ? displayEntryZones.map((z, i) => (
+                      <div
+                        key={i}
+                        className={`text-center rounded px-1 py-0.5 border text-[9px] font-bold ${
+                          i === 2
+                            ? 'bg-blue-700 border-blue-500 text-white'  // Zone 3 = current price
+                            : 'bg-slate-900 border-slate-700 text-slate-300'
+                        }`}
+                        title={`Zone ${i + 1}${i === 2 ? ' (Signal Price)' : ''}`}
+                      >
+                        <div className="text-slate-400 text-[8px]">Z{i + 1}</div>
+                        ${z.toFixed(precision)}
+                      </div>
+                    ))
+                  : <span className="col-span-5 text-slate-500 text-[10px]">${displayEntry.toFixed(precision)}</span>
+                }
+              </div>
             </div>
-            <div className="flex justify-between bg-slate-950/80 px-2 py-1 rounded border border-emerald-950">
-              <span className="text-emerald-400 font-bold">TP 1 (Conservative):</span>
-              <span className="text-emerald-300 font-bold">${latestNotif.tp1.toFixed(precision)}</span>
-            </div>
-            <div className="flex justify-between bg-slate-950/80 px-2 py-1 rounded border border-blue-950">
-              <span className="text-blue-300 font-bold">TP 2 (Extended Runner):</span>
-              <span className="text-blue-200 font-bold">${latestNotif.tp2.toFixed(precision)}</span>
+
+            {/* 7 TP Levels — selectable chips */}
+            <div className="bg-slate-950/80 px-2 py-1.5 rounded border border-emerald-950 space-y-1">
+              <span className="text-emerald-400 font-bold block">TAKE PROFIT LEVELS (7 × 30 pips):</span>
+              <div className="grid grid-cols-4 gap-1">
+                {displayTpLevels.length > 0
+                  ? displayTpLevels.map((tp, i) => (
+                      <button
+                        key={i}
+                        type="button"
+                        onClick={() => setSelectedTpIndex(i)}
+                        className={`text-center rounded px-1 py-1 border text-[9px] font-bold transition ${
+                          selectedTpIndex === i
+                            ? tpColors[i].replace('/60', '') + ' ring-1 ring-white/30'
+                            : tpColors[i]
+                        }`}
+                        title={`TP${i + 1}`}
+                      >
+                        <div className="text-[8px] opacity-70">TP{i + 1}</div>
+                        ${tp.toFixed(precision)}
+                      </button>
+                    ))
+                  : <>
+                      <div className="bg-emerald-950 border border-emerald-800 rounded px-1 py-1 text-emerald-300 text-[9px] font-bold">
+                        <div className="text-[8px] opacity-70">TP1</div>${displayTp1.toFixed(precision)}
+                      </div>
+                      <div className="col-span-3 bg-blue-950 border border-blue-800 rounded px-1 py-1 text-blue-300 text-[9px] font-bold">
+                        <div className="text-[8px] opacity-70">TP2</div>${displayTp2.toFixed(precision)}
+                      </div>
+                    </>
+                }
+              </div>
+              {displayTpLevels.length > 0 && (
+                <div className="text-[9px] text-slate-400 pt-0.5">
+                  Selected: <span className="text-white font-bold">TP{selectedTpIndex + 1}</span> at <span className="text-emerald-300 font-bold">${displayTpLevels[selectedTpIndex]?.toFixed(precision)}</span>
+                </div>
+              )}
             </div>
           </div>
 
-          {/* Quick Auto-Fill Execution Button */}
+          {/* Quick Auto-Fill Execution Button — always shown for BUY/SELL signals */}
           {onExecuteTradeParams && latestNotif.type !== 'MONITORING' && (
             <button
               onClick={() =>
                 onExecuteTradeParams({
                   signal_type: latestNotif.type === 'BUY_NOW' ? 'BUY/LONG' : 'SELL/SHORT',
-                  entry: latestNotif.entry,
-                  stop_loss: latestNotif.stop_loss,
-                  tp1: latestNotif.tp1,
-                  tp2: latestNotif.tp2,
+                  entry: displayEntry,
+                  stop_loss: displaySL,
+                  tp1: displayTpLevels[selectedTpIndex] ?? displayTp1,
+                  tp2: displayTpLevels[3] ?? displayTp2,
+                  tp_levels: displayTpLevels,
+                  entry_zones: displayEntryZones,
                 })
               }
               className={`w-full py-2 text-white text-xs font-bold rounded-lg shadow-lg transition flex items-center justify-center gap-1.5 ${
@@ -275,7 +402,7 @@ export default function LiveSignalNotificationPanel({
               }`}
             >
               <Play className="w-3.5 h-3.5 fill-white" />
-              <span>Auto-Fill Paper Order ({latestNotif.timeframe})</span>
+              <span>Auto-Fill Paper Order ({latestNotif.timeframe}) — TP{selectedTpIndex + 1}</span>
             </button>
           )}
         </div>

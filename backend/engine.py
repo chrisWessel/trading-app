@@ -95,6 +95,22 @@ def get_asset_base_config(symbol: str) -> Tuple[float, int]:
     else:
         return 100.00, 2
 
+def get_pip_size(symbol: str) -> float:
+    """Returns the pip size for a given symbol (used for TP spacing)."""
+    clean = clean_symbol_string(symbol)
+    if "XAU" in clean or "GOLD" in clean or "PAXG" in clean:
+        return 0.10   # Gold: 1 pip = $0.10
+    elif "JPY" in clean:
+        return 0.01   # JPY pairs: 1 pip = 0.01
+    elif any(x in clean for x in ["BTC"]):
+        return 1.0    # Bitcoin: 1 pip = $1
+    elif any(x in clean for x in ["ETH", "SOL"]):
+        return 0.10   # Mid-cap crypto
+    elif is_forex_symbol(symbol):
+        return 0.0001  # Standard forex: 4-decimal pairs
+    else:
+        return 0.01   # Default fallback
+
 def fetch_real_ohlcv_from_market(symbol: str, timeframe: str = "1m", limit: int = 100) -> Optional[pd.DataFrame]:
     clean = clean_symbol_string(symbol)
     ticker = map_symbol_to_yahoo_ticker(symbol)
@@ -426,14 +442,19 @@ def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m") ->
     _, precision = get_asset_base_config(symbol)
     entry_price = latest_price
 
-    # Calculate 14-period Average True Range (ATR) for exact timeframe volatility
-    high_low = df['high'] - df['low']
-    high_close = (df['high'] - df['close'].shift(1)).abs()
-    low_close = (df['low'] - df['close'].shift(1)).abs()
-    tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
-    atr = tr.rolling(window=14, min_periods=3).mean().iloc[-1]
-    if pd.isna(atr) or atr <= 0:
-        atr = latest_price * 0.003
+    # ── STABLE ATR: computed from HISTORIC bars only (exclude the live-ticking last candle)
+    # This prevents SL/TP from jittering on every 3-second poll as the live close changes.
+    historic_df = df.iloc[:-1] if len(df) > 2 else df
+    high_low_h = historic_df['high'] - historic_df['low']
+    high_close_h = (historic_df['high'] - historic_df['close'].shift(1)).abs()
+    low_close_h = (historic_df['low'] - historic_df['close'].shift(1)).abs()
+    tr_h = pd.concat([high_low_h, high_close_h, low_close_h], axis=1).max(axis=1)
+    atr_raw = tr_h.rolling(window=14, min_periods=3).mean().iloc[-1]
+    if pd.isna(atr_raw) or atr_raw <= 0:
+        atr_raw = latest_price * 0.003
+
+    # Round ATR to precision+1 so it is stable across polls (no micro-float drift)
+    atr = round(float(atr_raw), precision + 1)
 
     # Dynamic Timeframe Multipliers (Targeting 80%+ Institutional Win-Rate)
     tf_sl_multipliers = {
@@ -451,20 +472,60 @@ def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m") ->
     sl_mult = tf_sl_multipliers.get(timeframe, 2.0)
     risk_amount = round(max(atr * sl_mult, latest_price * 0.0005), precision)
 
+    # ── 5 ENTRY ZONES: bracket prices around the signal entry (zone 3 = exact entry)
+    # Spread = ATR * 0.25 per step so the zones are meaningful but tight.
+    zone_step = round(atr * 0.25, precision)
     if signal_type == "BUY/LONG":
+        # For buys: zones go from slightly below to at/above entry (scale-in levels)
+        entry_zones = [
+            round(entry_price - zone_step * 2, precision),  # Zone 1 (deepest pullback)
+            round(entry_price - zone_step,      precision),  # Zone 2
+            round(entry_price,                  precision),  # Zone 3 (current price)
+            round(entry_price + zone_step,      precision),  # Zone 4
+            round(entry_price + zone_step * 2,  precision),  # Zone 5 (breakout entry)
+        ]
         stop_loss = round(entry_price - risk_amount, precision)
-        tp1 = round(entry_price + (risk_amount * 1.5), precision)
-        tp2 = round(entry_price + (risk_amount * 3.0), precision)
+    elif signal_type == "SELL/SHORT":
+        # For sells: zones go from at/below entry to slightly above (scale-in levels)
+        entry_zones = [
+            round(entry_price + zone_step * 2,  precision),  # Zone 1 (highest rejection)
+            round(entry_price + zone_step,      precision),  # Zone 2
+            round(entry_price,                  precision),  # Zone 3 (current price)
+            round(entry_price - zone_step,      precision),  # Zone 4
+            round(entry_price - zone_step * 2,  precision),  # Zone 5 (breakdown entry)
+        ]
+        stop_loss = round(entry_price + risk_amount, precision)
+    else:
+        entry_zones = [
+            round(entry_price - zone_step * 2, precision),
+            round(entry_price - zone_step,      precision),
+            round(entry_price,                  precision),
+            round(entry_price + zone_step,      precision),
+            round(entry_price + zone_step * 2,  precision),
+        ]
+        stop_loss = round(entry_price - risk_amount, precision)
+
+    # ── 7 TP LEVELS: spread exactly 30 pips apart from first TP target
+    pip = get_pip_size(symbol)
+    pip_30 = pip * 30  # 30-pip spacing between each TP level
+
+    if signal_type == "BUY/LONG":
+        tp_base = round(entry_price + risk_amount * 1.5, precision)  # TP1 anchor
+        tp_levels = [round(tp_base + pip_30 * i, precision) for i in range(7)]
+        tp1 = tp_levels[0]
+        tp2 = tp_levels[3]  # TP4 as extended runner
         rationale = f"[{timeframe.upper()}] [{trend}] Bullish Demand (ATR ${atr:.{precision}f}). Risk SL: ${risk_amount:.{precision}f}, OBI {obi_score:+.2f}."
     elif signal_type == "SELL/SHORT":
-        stop_loss = round(entry_price + risk_amount, precision)
-        tp1 = round(entry_price - (risk_amount * 1.5), precision)
-        tp2 = round(entry_price - (risk_amount * 3.0), precision)
+        tp_base = round(entry_price - risk_amount * 1.5, precision)  # TP1 anchor
+        tp_levels = [round(tp_base - pip_30 * i, precision) for i in range(7)]
+        tp1 = tp_levels[0]
+        tp2 = tp_levels[3]  # TP4 as extended runner
         rationale = f"[{timeframe.upper()}] [{trend}] Bearish Rejection / Downtrend (ATR ${atr:.{precision}f}). Risk SL: ${risk_amount:.{precision}f}, OBI {obi_score:+.2f}."
     else:
-        stop_loss = round(entry_price - risk_amount, precision)
-        tp1 = round(entry_price + (risk_amount * 1.5), precision)
-        tp2 = round(entry_price + (risk_amount * 3.0), precision)
+        tp_base = round(entry_price + risk_amount * 1.5, precision)
+        tp_levels = [round(tp_base + pip_30 * i, precision) for i in range(7)]
+        tp1 = tp_levels[0]
+        tp2 = tp_levels[3]
         rationale = f"[{timeframe.upper()}] [{trend}] Neutral Market - Monitoring Setup."
 
     return {
@@ -490,9 +551,11 @@ def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m") ->
         "signal_type": signal_type,
         "trade_params": {
             "entry": entry_price,
+            "entry_zones": entry_zones,
             "stop_loss": stop_loss,
             "tp1": tp1,
             "tp2": tp2,
+            "tp_levels": tp_levels,
             "rationale": rationale
         }
     }

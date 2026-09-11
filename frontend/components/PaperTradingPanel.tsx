@@ -11,6 +11,8 @@ export interface ExternalTradeParams {
   stop_loss: number;
   tp1: number;
   tp2: number;
+  tp_levels?: number[];
+  entry_zones?: number[];
 }
 
 interface PaperTradingPanelProps {
@@ -68,6 +70,17 @@ export default function PaperTradingPanel({
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
 
+  // Entry zone & TP level selection (from signal auto-fill)
+  const [entryZones, setEntryZones] = useState<number[]>([]);
+  const [selectedZoneIndex, setSelectedZoneIndex] = useState<number>(2); // Zone 3 = signal price
+  const [tpLevels, setTpLevels] = useState<number[]>([]);
+  const [selectedTpLevelIndex, setSelectedTpLevelIndex] = useState<number>(0); // TP1 default
+
+  // Stored pip offsets from the signal (so we can recalculate absolute SL/TP when entry changes)
+  const [signalSlOffset, setSignalSlOffset] = useState<number>(0);
+  const [signalTpOffsets, setSignalTpOffsets] = useState<number[]>([]);
+  const [signalDirection, setSignalDirection] = useState<'BUY/LONG' | 'SELL/SHORT'>('BUY/LONG');
+
   const isHighValueAsset = currentPrice > 10.0;
   const precision = isHighValueAsset ? 2 : 4;
 
@@ -107,6 +120,11 @@ export default function PaperTradingPanel({
     }
 
     setEntryPrice(newEntry);
+    // Clear signal zones on manual fix
+    setEntryZones([]);
+    setTpLevels([]);
+    setSignalSlOffset(0);
+    setSignalTpOffsets([]);
 
     if (dir === 'BUY/LONG') {
       setStopLoss(Number((newEntry - offsets.slOffset).toFixed(precision)));
@@ -119,26 +137,114 @@ export default function PaperTradingPanel({
     }
   };
 
+  /**
+   * Recalculate absolute SL and TP levels from a given entry price using stored pip offsets.
+   * For Market Execution: entry = currentPrice (live market price).
+   * For Pending Orders: entry = chosen zone or signal entry.
+   */
+  const recalcFromEntry = (
+    entry: number,
+    dir: 'BUY/LONG' | 'SELL/SHORT',
+    slOff: number,
+    tpOffs: number[],
+    prec: number
+  ) => {
+    const isBuy = dir === 'BUY/LONG';
+    const newSL = isBuy
+      ? Number((entry - slOff).toFixed(prec))
+      : Number((entry + slOff).toFixed(prec));
+    setStopLoss(newSL);
+
+    if (tpOffs.length > 0) {
+      const recalcedTps = tpOffs.map(off =>
+        isBuy ? Number((entry + off).toFixed(prec)) : Number((entry - off).toFixed(prec))
+      );
+      setTpLevels(recalcedTps);
+      setTp1(recalcedTps[0]);
+      setTp2(recalcedTps[Math.min(3, recalcedTps.length - 1)]); // TP4 or last
+    }
+  };
+
+
   // Sync with external signal parameters when user clicks "Auto-Fill Paper Order"
   useEffect(() => {
-    if (externalParams) {
-      const type = externalParams.signal_type.includes('BUY') ? 'BUY/LONG' : 'SELL/SHORT';
-      setSignalType(type);
-      setEntryPrice(externalParams.entry);
-      setStopLoss(externalParams.stop_loss);
-      setTp1(externalParams.tp1);
-      setTp2(externalParams.tp2);
-      setStatusMessage(`✅ Synchronized trade parameters with live signal (${type} at $${externalParams.entry.toFixed(precision)})`);
-      setTimeout(() => setStatusMessage(null), 3000);
-    }
+    if (!externalParams) return;
+
+    const type = externalParams.signal_type.includes('BUY') ? 'BUY/LONG' : 'SELL/SHORT';
+    setSignalType(type);
+    setSignalDirection(type);
+
+    const signalEntry = externalParams.entry;
+    const isBuy = type === 'BUY/LONG';
+
+    // Compute pip offsets from the SIGNAL entry (absolute distances)
+    const slOff = Math.abs(externalParams.stop_loss - signalEntry);
+    const rawTps: number[] = externalParams.tp_levels ?? [];
+    const tpOffs = rawTps.length > 0
+      ? rawTps.map(tp => Math.abs(tp - signalEntry))
+      : [
+          Math.abs(externalParams.tp1 - signalEntry),
+          Math.abs(externalParams.tp2 - signalEntry),
+        ];
+
+    setSignalSlOffset(slOff);
+    setSignalTpOffsets(tpOffs);
+
+    // Entry zones from signal (useful for pending orders)
+    const zones = externalParams.entry_zones ?? [];
+    setEntryZones(zones);
+    setSelectedZoneIndex(2); // Zone 3 = signal price default
+    setSelectedTpLevelIndex(0);
+
+    // ── KEY FIX: For Market Execution, ALWAYS use currentPrice as entry.
+    // For pending orders, use the signal entry / zone.
+    const useEntry = orderType === 'Market Execution'
+      ? (currentPrice > 0 ? currentPrice : signalEntry)
+      : (zones.length > 0 ? zones[2] : signalEntry);
+
+    setEntryPrice(useEntry);
+
+    // Recalculate absolute SL and all TP levels from the ACTUAL entry used
+    recalcFromEntry(useEntry, type, slOff, tpOffs, precision);
+
+    setStatusMessage(
+      `✅ Auto-filled from signal (${type}). Entry: $${useEntry.toFixed(precision)} | SL: ` +
+      `$${(isBuy ? useEntry - slOff : useEntry + slOff).toFixed(precision)}`
+    );
+    setTimeout(() => setStatusMessage(null), 4000);
   }, [externalParams]);
+
+  // When order type changes TO Market Execution and we have signal offsets → recalculate from currentPrice
+  useEffect(() => {
+    if (signalSlOffset > 0 && orderType === 'Market Execution' && currentPrice > 0) {
+      const newEntry = currentPrice;
+      setEntryPrice(newEntry);
+      recalcFromEntry(newEntry, signalDirection, signalSlOffset, signalTpOffsets, precision);
+    }
+  }, [orderType]);
+
+  // For Market Execution: keep entry pinned to current live price
+  // (runs whenever currentPrice updates — gentle, only when a signal is active)
+  useEffect(() => {
+    if (
+      orderType === 'Market Execution' &&
+      signalSlOffset > 0 &&
+      currentPrice > 0 &&
+      !activePosition
+    ) {
+      const newEntry = currentPrice;
+      setEntryPrice(newEntry);
+      recalcFromEntry(newEntry, signalDirection, signalSlOffset, signalTpOffsets, precision);
+    }
+  }, [currentPrice]);
 
   // Initial setup for default entry price, stop loss, and target prices if empty
   useEffect(() => {
     if (!externalParams && currentPrice && currentPrice > 0 && (entryPrice === 0 || stopLoss === 0)) {
       autoFixParameters(orderType, signalType);
     }
-  }, [currentPrice, symbol]);
+  }, [symbol]);
+
 
   const getMetaTraderValidationError = (): string | null => {
     if (!entryPrice || isNaN(entryPrice) || entryPrice <= 0) {
@@ -470,20 +576,66 @@ export default function PaperTradingPanel({
             </button>
           </div>
 
-          {/* Entry Price & Volume (Lot Size) Input */}
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <div className="flex items-center justify-between mb-1">
-                <label className="text-slate-400 text-[11px]">ENTRY PRICE ($)</label>
-                <button
-                  type="button"
-                  onClick={handleUseCurrentPrice}
-                  className="text-[10px] text-blue-400 hover:underline flex items-center gap-0.5"
-                >
-                  <RefreshCw className="w-2.5 h-2.5" />
-                  <span>Sync Price</span>
-                </button>
+          {/* Entry Price — Zone Selector (5 levels) or manual */}
+          <div>
+            <div className="flex items-center justify-between mb-1">
+              <label className="text-slate-400 text-[11px] font-bold">ENTRY PRICE ($)</label>
+              <button
+                type="button"
+                onClick={handleUseCurrentPrice}
+                className="text-[10px] text-blue-400 hover:underline flex items-center gap-0.5"
+              >
+                <RefreshCw className="w-2.5 h-2.5" />
+                <span>Sync Price</span>
+              </button>
+            </div>
+
+            {/* Market Execution: live price is always the entry */}
+            {orderType === 'Market Execution' ? (
+              <div className="bg-slate-950 border border-emerald-900/60 rounded-lg px-3 py-2 flex items-center justify-between">
+                <div>
+                  <div className="text-[9px] text-emerald-400 font-bold mb-0.5">LIVE MARKET PRICE (Market Execution)</div>
+                  <span className="text-white font-bold font-mono text-sm">${entryPrice.toFixed(precision)}</span>
+                </div>
+                <span className="text-[9px] text-slate-400 bg-slate-900 border border-slate-700 rounded px-1.5 py-0.5">Auto-synced</span>
               </div>
+            ) : entryZones.length > 0 ? (
+              /* Zone Selector: 5 bracketed entry prices — for PENDING ORDERS only */
+              <div className="space-y-1">
+                <div className="text-[9px] text-amber-400 mb-1">📌 Select entry zone for pending order:</div>
+                <div className="grid grid-cols-5 gap-1">
+                  {entryZones.map((z, i) => (
+                    <button
+                      key={i}
+                      type="button"
+                      onClick={() => {
+                        setSelectedZoneIndex(i);
+                        setEntryPrice(z);
+                        // Recalculate SL and TP from the selected zone price
+                        if (signalSlOffset > 0) {
+                          recalcFromEntry(z, signalDirection, signalSlOffset, signalTpOffsets, precision);
+                        }
+                      }}
+                      className={`text-center rounded px-1 py-1.5 border text-[9px] font-bold transition ${
+                        selectedZoneIndex === i
+                          ? 'bg-blue-600 border-blue-400 text-white shadow-md shadow-blue-950'
+                          : 'bg-slate-950 border-slate-700 text-slate-300 hover:border-blue-600 hover:text-blue-300'
+                      }`}
+                      title={`Zone ${i + 1}${i === 2 ? ' (Signal Price)' : ''}`}
+                    >
+                      <div className="text-[8px] opacity-70">Z{i + 1}{i === 2 ? '★' : ''}</div>
+                      ${z.toFixed(precision)}
+                    </button>
+                  ))}
+                </div>
+                <div className="flex items-center gap-1 bg-slate-950 border border-slate-800 rounded px-2 py-1">
+                  <span className="text-slate-400 text-[10px]">Selected Entry:</span>
+                  <span className="text-white font-bold text-[11px] font-mono">${entryPrice.toFixed(precision)}</span>
+                </div>
+              </div>
+              </div>
+            ) : (
+              /* Fallback: manual entry input */
               <input
                 type="number"
                 step="any"
@@ -491,61 +643,112 @@ export default function PaperTradingPanel({
                 onChange={(e) => setEntryPrice(parseFloat(e.target.value) || 0)}
                 className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-white font-bold focus:outline-none focus:border-blue-500"
               />
-            </div>
+            )}
+          </div>
 
-            <div>
-              <div className="flex items-center justify-between mb-1">
-                <label className="text-slate-400 text-[11px]">VOLUME (LOTS)</label>
-                <span className="text-[10px] text-emerald-400 font-bold">
-                  Margin ≈ ${estimatedMarginUsd.toFixed(2)}
-                </span>
-              </div>
-              <input
-                type="number"
-                step="0.01"
-                min="0.01"
-                max="100"
-                value={lotsInput}
-                onChange={(e) => setLotsInput(parseFloat(e.target.value) || 0.01)}
-                className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-amber-300 font-bold focus:outline-none focus:border-amber-500"
-              />
+          {/* Volume (Lot Size) Input */}
+          <div>
+            <div className="flex items-center justify-between mb-1">
+              <label className="text-slate-400 text-[11px] font-bold">VOLUME (LOTS)</label>
+              <span className="text-[10px] text-emerald-400 font-bold">
+                Margin ≈ ${estimatedMarginUsd.toFixed(2)}
+              </span>
+            </div>
+            <input
+              type="number"
+              step="0.01"
+              min="0.01"
+              max="100"
+              value={lotsInput}
+              onChange={(e) => setLotsInput(parseFloat(e.target.value) || 0.01)}
+              className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-amber-300 font-bold focus:outline-none focus:border-amber-500 text-xs"
+            />
+          </div>
+
+          {/* Stop Loss — read-only display (frozen from signal) */}
+          <div>
+            <label className="text-slate-400 text-[10px] block mb-1 font-bold">STOP LOSS (FIXED — from signal)</label>
+            <div className="w-full bg-slate-950 border border-rose-900 rounded-lg px-3 py-2 text-rose-400 font-bold text-xs flex items-center justify-between">
+              <span>${stopLoss.toFixed(precision)}</span>
+              <button
+                type="button"
+                onClick={() => {
+                  const offsets = getAssetOffsets(symbol, entryPrice);
+                  if (signalType === 'BUY/LONG') setStopLoss(Number((entryPrice - offsets.slOffset).toFixed(precision)));
+                  else setStopLoss(Number((entryPrice + offsets.slOffset).toFixed(precision)));
+                }}
+                className="text-[10px] text-slate-400 hover:text-rose-300 border border-slate-700 rounded px-1.5 py-0.5 transition"
+              >
+                Auto
+              </button>
             </div>
           </div>
 
-          {/* Stop Loss, TP1, and TP2 Grid */}
-          <div className="grid grid-cols-3 gap-2">
-            <div>
-              <label className="text-slate-400 text-[10px] block mb-1">STOP LOSS ($)</label>
-              <input
-                type="number"
-                step="any"
-                value={stopLoss}
-                onChange={(e) => setStopLoss(parseFloat(e.target.value) || 0)}
-                className="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-rose-400 font-bold focus:outline-none focus:border-rose-500 text-xs"
-              />
-            </div>
-
-            <div>
-              <label className="text-slate-400 text-[10px] block mb-1">TP 1 (CONSERVATIVE)</label>
-              <input
-                type="number"
-                step="any"
-                value={tp1}
-                onChange={(e) => setTp1(parseFloat(e.target.value) || 0)}
-                className="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-emerald-400 font-bold focus:outline-none focus:border-emerald-500 text-xs"
-              />
-            </div>
-
-            <div>
-              <label className="text-slate-400 text-[10px] block mb-1">TP 2 (EXTENDED)</label>
-              <input
-                type="number"
-                step="any"
-                value={tp2}
-                onChange={(e) => setTp2(parseFloat(e.target.value) || 0)}
-                className="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-blue-400 font-bold focus:outline-none focus:border-blue-500 text-xs"
-              />
-            </div>
+          {/* TP Level Selector — 7 levels as chips */}
+          <div>
+            <label className="text-slate-400 text-[10px] block mb-1 font-bold">TAKE PROFIT LEVEL</label>
+            {tpLevels.length > 0 ? (
+              <div className="space-y-1.5">
+                <div className="grid grid-cols-4 gap-1">
+                  {tpLevels.map((tp, i) => {
+                    const chipColors = [
+                      'border-emerald-700 text-emerald-300', 'border-teal-700 text-teal-300',
+                      'border-cyan-700 text-cyan-300', 'border-sky-700 text-sky-300',
+                      'border-blue-700 text-blue-300', 'border-indigo-700 text-indigo-300',
+                      'border-violet-700 text-violet-300',
+                    ];
+                    return (
+                      <button
+                        key={i}
+                        type="button"
+                        onClick={() => {
+                          setSelectedTpLevelIndex(i);
+                          setTp1(tp);
+                        }}
+                        className={`text-center rounded px-1 py-1.5 border text-[9px] font-bold transition ${
+                          selectedTpLevelIndex === i
+                            ? chipColors[i] + ' bg-slate-800 ring-1 ring-white/20 shadow-md'
+                            : chipColors[i] + ' bg-slate-950/60 opacity-60 hover:opacity-100'
+                        }`}
+                      >
+                        <div className="text-[8px] opacity-60">TP{i + 1}</div>
+                        ${tp.toFixed(precision)}
+                      </button>
+                    );
+                  })}
+                </div>
+                <div className="bg-slate-950 border border-slate-800 rounded px-2 py-1 text-[10px] flex justify-between">
+                  <span className="text-slate-400">Selected TP:</span>
+                  <span className="text-emerald-300 font-bold font-mono">
+                    TP{selectedTpLevelIndex + 1} — ${tpLevels[selectedTpLevelIndex]?.toFixed(precision)}
+                  </span>
+                </div>
+              </div>
+            ) : (
+              /* Fallback: manual TP inputs if no tp_levels from signal */
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="text-slate-400 text-[10px] block mb-1">TP 1 (CONSERVATIVE)</label>
+                  <input
+                    type="number"
+                    step="any"
+                    value={tp1}
+                    onChange={(e) => setTp1(parseFloat(e.target.value) || 0)}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-emerald-400 font-bold focus:outline-none focus:border-emerald-500 text-xs"
+                  />
+                </div>
+                <div>
+                  <label className="text-slate-400 text-[10px] block mb-1">TP 2 (EXTENDED)</label>
+                  <input
+                    type="number"
+                    step="any"
+                    value={tp2}
+                    onChange={(e) => setTp2(parseFloat(e.target.value) || 0)}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-blue-400 font-bold focus:outline-none focus:border-blue-500 text-xs"
+                  />
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Validation Error Banner & Auto-Fix Button */}
