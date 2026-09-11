@@ -6,6 +6,7 @@ import { Clock, Zap } from 'lucide-react';
 interface TradingViewDirectChartProps {
   symbol: string;
   timeframe: string;
+  currentPrice?: number;
   onTimeframeChange?: (tf: string) => void;
 }
 
@@ -17,14 +18,13 @@ declare global {
 
 const QUICK_TIMEFRAMES = ['1s', '1m', '5m', '15m', '30m', '1h', '4h', '1d'];
 
-export default function TradingViewDirectChart({ symbol, timeframe, onTimeframeChange }: TradingViewDirectChartProps) {
+export default function TradingViewDirectChart({ symbol, timeframe, currentPrice, onTimeframeChange }: TradingViewDirectChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const widgetIdRef = useRef<string>(`tv_widget_${Math.floor(Math.random() * 1000000)}`);
 
   const getTradingViewSymbol = (sym: string): string => {
     const s = sym.toUpperCase().replace(" ", "").replace("/", "").replace("_", "");
-    if (s.includes("XAU") || s.includes("GOLD")) return "OANDA:XAUUSD";
-    if (s.includes("PAXG")) return "BINANCE:PAXGUSDT";
+    if (s.includes("XAU") || s.includes("GOLD") || s.includes("PAXG")) return "BINANCE:PAXGUSDT";
     if (s.includes("EURUSD")) return "OANDA:EURUSD";
     if (s.includes("GBPUSD")) return "OANDA:GBPUSD";
     if (s.includes("USDJPY")) return "OANDA:USDJPY";
@@ -98,15 +98,24 @@ export default function TradingViewDirectChart({ symbol, timeframe, onTimeframeC
     }
   }, [symbol, timeframe, tvSymbol]);
 
+  const isHighValue = (currentPrice || 0) > 10.0;
+  const precision = isHighValue ? 2 : 4;
+
   return (
     <div className="w-full bg-slate-900 border border-slate-800 rounded-xl p-3 shadow-2xl space-y-3 font-mono">
-      {/* Header Bar with Timeframe Switcher */}
+      {/* Header Bar with Timeframe Switcher & Live Sync Badge */}
       <div className="flex flex-wrap items-center justify-between gap-3 pb-2 border-b border-slate-800">
         <div className="flex items-center gap-2">
           <div className="flex items-center gap-2 bg-blue-950/60 text-blue-400 border border-blue-800/50 px-2.5 py-1 rounded-lg text-xs font-bold">
             <Zap className="w-3.5 h-3.5 text-blue-400 animate-pulse" />
             <span>TradingView Direct Feed: {symbol}</span>
           </div>
+          {currentPrice && currentPrice > 0 ? (
+            <span className="text-xs bg-emerald-950 text-emerald-400 border border-emerald-800 px-2 py-0.5 rounded font-mono font-bold flex items-center gap-1">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+              SPOT LIVE: ${currentPrice.toFixed(precision)}
+            </span>
+          ) : null}
           <span className="text-[11px] text-slate-400 font-bold uppercase bg-slate-950 px-2 py-1 rounded border border-slate-800">
             INTERVAL: <strong className="text-blue-400">{timeframe.toUpperCase()}</strong>
           </span>

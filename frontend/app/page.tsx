@@ -295,6 +295,7 @@ export default function DashboardPage() {
                 <TradingViewDirectChart
                   symbol={symbol}
                   timeframe={timeframe}
+                  currentPrice={currentPrice}
                   onTimeframeChange={(tf) => setTimeframe(tf)}
                 />
               ) : (
