@@ -113,31 +113,31 @@ export default function LiveSignalNotificationPanel({
         const isSell = a.signal_type === 'SELL/SHORT';
         const notifType: 'BUY_NOW' | 'SELL_NOW' | 'MONITORING' = isBuy ? 'BUY_NOW' : isSell ? 'SELL_NOW' : 'MONITORING';
 
-        // ── FREEZE SL/TP/ENTRY: lock parameters when a new direction fires.
-        // Only reset frozen params when signal direction changes.
+        // ── LIVE VALUES: backend computes everything from the current live price each poll.
+        // Always update zones, SL, and TPs so they stay accurate with the market.
+        // Only reset the TP chip selection when the signal DIRECTION changes.
         const incoming_zones: number[] = a.trade_params.entry_zones || [];
         const incoming_tp_levels: number[] = a.trade_params.tp_levels || [];
 
         const prevFrozen = frozenRef.current;
-        if (
-          !prevFrozen ||
-          prevFrozen.signal_type !== a.signal_type
-        ) {
-          // New direction (or first signal): lock new params
-          const newFrozen: FrozenParams = {
-            signal_type: a.signal_type,
-            entry: a.trade_params.entry,
-            entry_zones: incoming_zones,
-            stop_loss: a.trade_params.stop_loss,
-            tp1: a.trade_params.tp1,
-            tp2: a.trade_params.tp2,
-            tp_levels: incoming_tp_levels,
-          };
-          frozenRef.current = newFrozen;
-          setFrozenParams(newFrozen);
-          setSelectedTpIndex(0); // reset TP selection on direction change
+        const directionChanged = !prevFrozen || prevFrozen.signal_type !== a.signal_type;
+
+        const latestParams: FrozenParams = {
+          signal_type: a.signal_type,
+          entry: a.trade_params.entry,
+          entry_zones: incoming_zones,
+          stop_loss: a.trade_params.stop_loss,
+          tp1: a.trade_params.tp1,
+          tp2: a.trade_params.tp2,
+          tp_levels: incoming_tp_levels,
+        };
+        frozenRef.current = latestParams;
+        setFrozenParams(latestParams);
+
+        if (directionChanged) {
+          setSelectedTpIndex(0); // reset chip selection only on direction flip
         }
-        // If same direction: do NOT update frozen params — they stay constant.
+
 
         let notifTitle = '';
         let notifMsg = '';
