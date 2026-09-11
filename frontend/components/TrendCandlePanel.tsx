@@ -289,16 +289,20 @@ export default function TrendCandlePanel({ symbol, timeframe }: Props) {
           <div className="grid grid-cols-2 gap-2 text-[10px]">
             <div className="bg-slate-950 border border-slate-800 rounded-lg p-2.5 space-y-1">
               <div className="text-slate-500 font-bold uppercase tracking-wider">SMA Cross</div>
-              <div className={`font-bold ${trend.sma20_vs_sma50 === 'BULL' ? 'text-emerald-400' : 'text-rose-400'}`}>
-                SMA20 {trend.sma20_vs_sma50 === 'BULL' ? '>' : '<'} SMA50
+              <div className={`font-bold ${
+                trend.sma20_vs_sma50 === 'BULL' ? 'text-emerald-400' : 'text-rose-400'
+              }`}>
+                SMA20 {trend.sma20_vs_sma50 === 'BULL' ? 'ABOVE' : 'BELOW'} SMA50
               </div>
               <div className="text-slate-500 font-mono">{trend.sma20.toFixed(2)} / {trend.sma50.toFixed(2)}</div>
             </div>
 
             <div className="bg-slate-950 border border-slate-800 rounded-lg p-2.5 space-y-1">
               <div className="text-slate-500 font-bold uppercase tracking-wider">Price vs SMA20</div>
-              <div className={`font-bold ${trend.price_vs_sma20 === 'ABOVE' ? 'text-emerald-400' : 'text-rose-400'}`}>
-                {trend.price_vs_sma20} SMA20
+              <div className={`font-bold ${
+                trend.price_vs_sma20 === 'ABOVE' ? 'text-emerald-400' : 'text-rose-400'
+              }`}>
+                Price {trend.price_vs_sma20} SMA20
               </div>
               <div className="text-slate-500 font-mono">@ {trend.sma20.toFixed(2)}</div>
             </div>
@@ -309,8 +313,9 @@ export default function TrendCandlePanel({ symbol, timeframe }: Props) {
                 trend.ema_stack === 'ALIGNED_BULL' ? 'text-emerald-400' :
                 trend.ema_stack === 'ALIGNED_BEAR' ? 'text-rose-400' : 'text-amber-400'
               }`}>
-                {trend.ema_stack === 'ALIGNED_BULL' ? '✅ BULL STACK' :
-                 trend.ema_stack === 'ALIGNED_BEAR' ? '🔴 BEAR STACK' : '⚠️ MIXED'}
+                {trend.ema_stack === 'ALIGNED_BULL' ? '✅ BULL STACK — 8 over 21 over 50' :
+                 trend.ema_stack === 'ALIGNED_BEAR' ? '🔴 BEAR STACK — 8 under 21 under 50' :
+                 '⚠️ MIXED — EMAs not aligned'}
               </div>
               <div className="text-slate-500 font-mono">{trend.ema8.toFixed(2)} / {trend.ema21.toFixed(2)}</div>
             </div>

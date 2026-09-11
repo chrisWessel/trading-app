@@ -263,10 +263,14 @@ export default function LiveSignalNotificationPanel({
               <Target className="w-3.5 h-3.5" />
               <span>Take Profit Level Strategy:</span>
             </div>
-            <div><strong className="text-emerald-400 font-mono">TP1–TP2 (Conservative):</strong> Lock in profits fast, close 50–75% of position here and move SL to entry.</div>
-            <div><strong className="text-sky-400 font-mono">TP3–TP5 (Standard):</strong> Strong momentum targets with 1:3–1:5 Risk-Reward.</div>
-            <div><strong className="text-violet-400 font-mono">TP6–TP7 (Runner):</strong> Extended trend — let 15–25% ride with a trailing stop. 1:6+ R:R.</div>
-            <div className="text-slate-400 pt-1 border-t border-slate-800">Each TP level is <span className="text-amber-300 font-bold">30 pips</span> apart. Entry zones are bracket scale-in levels around the signal price.</div>
+            <div><strong className="text-emerald-400 font-mono">TP1–TP2 (Conservative):</strong> Lock in profits fast — close 50–75% of position here, move SL to entry (breakeven).</div>
+            <div><strong className="text-sky-400 font-mono">TP3–TP5 (Standard):</strong> Strong momentum targets with 1:3–1:5 Risk-Reward ratio.</div>
+            <div><strong className="text-violet-400 font-mono">TP6–TP7 (Runner):</strong> Extended trend targets — let 15–25% ride with a trailing stop. 1:6 plus R:R.</div>
+            <div className="text-slate-400 pt-1 border-t border-slate-800">
+              Each TP level is <span className="text-amber-300 font-bold">30 pips</span> further from entry.
+              For <span className="text-rose-400 font-bold">SELL</span>: TPs go <strong>below</strong> entry price.
+              For <span className="text-emerald-400 font-bold">BUY</span>: TPs go <strong>above</strong> entry price.
+            </div>
           </div>
         )}
       </div>
@@ -318,22 +322,27 @@ export default function LiveSignalNotificationPanel({
               <span className="text-rose-300 font-bold font-mono">${displaySL.toFixed(precision)}</span>
             </div>
 
-            {/* Entry Zone Range — 5 levels */}
+            {/* Entry Zone Range — 5 levels, Z1 = current market price */}
             <div className="bg-slate-950/80 px-2 py-1.5 rounded border border-blue-950 space-y-1">
-              <span className="text-blue-400 font-bold block">ENTRY ZONE (5 LEVELS):</span>
+              <div className="flex items-center justify-between">
+                <span className="text-blue-400 font-bold">ENTRY ZONE (5 LEVELS):</span>
+                <span className="text-[9px] text-slate-500 font-mono">
+                  {latestNotif.type === 'SELL_NOW' ? 'Z1=now, Z2-5 higher↑' : 'Z1=now, Z2-5 lower↓'}
+                </span>
+              </div>
               <div className="grid grid-cols-5 gap-1">
                 {displayEntryZones.length > 0
                   ? displayEntryZones.map((z, i) => (
                       <div
                         key={i}
                         className={`text-center rounded px-1 py-0.5 border text-[9px] font-bold ${
-                          i === 2
-                            ? 'bg-blue-700 border-blue-500 text-white'  // Zone 3 = current price
+                          i === 0
+                            ? 'bg-blue-700 border-blue-500 text-white'  // Z1 = current market price
                             : 'bg-slate-900 border-slate-700 text-slate-300'
                         }`}
-                        title={`Zone ${i + 1}${i === 2 ? ' (Signal Price)' : ''}`}
+                        title={i === 0 ? 'Z1 = Current Market Price (immediate entry)' : `Zone ${i + 1}`}
                       >
-                        <div className="text-slate-400 text-[8px]">Z{i + 1}</div>
+                        <div className="text-slate-400 text-[8px]">{i === 0 ? 'NOW' : `Z${i + 1}`}</div>
                         ${z.toFixed(precision)}
                       </div>
                     ))

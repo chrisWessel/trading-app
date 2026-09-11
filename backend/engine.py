@@ -403,41 +403,32 @@ def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m") ->
     cond_bullish_obi = (obi_score >= 0.02)
     cond_bearish_obi = (obi_score <= -0.02)
 
+    # ── STRICT TREND-DIRECTION SIGNAL FILTER ─────────────────────────────────
+    # Rule: "The trend is your friend."
+    #   DOWNTREND → only SELL/SHORT signals are allowed.
+    #   UPTREND   → only BUY/LONG  signals are allowed.
+    #   RANGEBOUND → use OBI/support-resistance but still require confirmation.
+    # This prevents the system from fighting the market direction.
+
     if trend == "DOWNTREND":
-        # In a DOWNTREND: Strict filter against counter-trend BUY/LONG signals!
-        if cond_support_zone and cond_bullish_obi and vol_ratio >= 1.5 and obi_score >= 0.20:
-            signal_type = "BUY/LONG"
-        elif cond_resistance_zone or cond_bearish_obi or obi_score < 0.0 or price_position_pct >= 35.0:
-            signal_type = "SELL/SHORT"
-        else:
-            signal_type = "SELL/SHORT"
+        # Market is falling — only allow SELL. Never issue a BUY against a downtrend.
+        signal_type = "SELL/SHORT"
 
     elif trend == "UPTREND":
-        # In an UPTREND: Prefer BUY/LONG on pullbacks or breakout momentum
-        if cond_resistance_zone and cond_bearish_obi and vol_ratio >= 1.5 and obi_score <= -0.20:
-            signal_type = "SELL/SHORT"
-        elif cond_support_zone or cond_bullish_obi or obi_score > 0.0 or price_position_pct <= 65.0:
-            signal_type = "BUY/LONG"
-        else:
-            signal_type = "BUY/LONG"
+        # Market is rising — only allow BUY. Never issue a SELL against an uptrend.
+        signal_type = "BUY/LONG"
 
-    else:  # RANGEBOUND
+    else:  # RANGEBOUND — use OBI and support/resistance for direction
         if cond_support_zone and cond_bullish_obi:
             signal_type = "BUY/LONG"
         elif cond_resistance_zone and cond_bearish_obi:
             signal_type = "SELL/SHORT"
-        elif vol_ratio >= 1.3 and obi_score > 0.10:
+        elif obi_score >= 0.05:
             signal_type = "BUY/LONG"
-        elif vol_ratio >= 1.3 and obi_score < -0.10:
+        elif obi_score <= -0.05:
             signal_type = "SELL/SHORT"
-        elif obi_score > 0.05:
-            signal_type = "BUY/LONG"
-        elif obi_score < -0.05:
-            signal_type = "SELL/SHORT"
-        elif price_position_pct <= 45.0:
-            signal_type = "BUY/LONG" if obi_score >= -0.01 else "SELL/SHORT"
         else:
-            signal_type = "SELL/SHORT"
+            signal_type = "NEUTRAL"  # Genuine indecision — do not trade
 
     _, precision = get_asset_base_config(symbol)
     entry_price = latest_price
@@ -538,6 +529,48 @@ def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m") ->
         tp2 = tp_levels[3]
         rationale = f"[{timeframe.upper()}] [{trend}] Neutral Market - Monitoring Setup."
 
+    # ── HARD TP / SL DIRECTION CLAMP ─────────────────────────────────────────
+    # Absolute guarantee: no matter what was computed above, these rules MUST hold.
+    #   SELL/SHORT: Stop Loss MUST be ABOVE entry.  All TPs MUST be BELOW entry.
+    #   BUY/LONG:  Stop Loss MUST be BELOW entry.  All TPs MUST be ABOVE entry.
+    # If a value is on the wrong side we correct it using the pip/risk distance.
+    min_buffer = pip * 10  # at least 10 pips clearance from entry
+
+    if signal_type == "SELL/SHORT":
+        # SL must be strictly above entry
+        if stop_loss <= entry_price:
+            stop_loss = round(entry_price + risk_amount, precision)
+        # Every TP must be strictly below entry
+        corrected_tps = []
+        for i, tp in enumerate(tp_levels):
+            if tp >= entry_price:
+                tp = round(entry_price - risk_amount - pip_30 * i, precision)
+            corrected_tps.append(tp)
+        tp_levels = corrected_tps
+        tp1 = tp_levels[0]
+        tp2 = tp_levels[min(3, len(tp_levels) - 1)]
+        # Zones for SELL: Z1 = current price, Z2-5 go UP (better short prices)
+        for i, z in enumerate(entry_zones):
+            if i > 0 and z <= entry_price:
+                entry_zones[i] = round(entry_price + zone_step * i, precision)
+
+    elif signal_type == "BUY/LONG":
+        # SL must be strictly below entry
+        if stop_loss >= entry_price:
+            stop_loss = round(entry_price - risk_amount, precision)
+        # Every TP must be strictly above entry
+        corrected_tps = []
+        for i, tp in enumerate(tp_levels):
+            if tp <= entry_price:
+                tp = round(entry_price + risk_amount + pip_30 * i, precision)
+            corrected_tps.append(tp)
+        tp_levels = corrected_tps
+        tp1 = tp_levels[0]
+        tp2 = tp_levels[min(3, len(tp_levels) - 1)]
+        # Zones for BUY: Z1 = current price, Z2-5 go DOWN (better buy prices)
+        for i, z in enumerate(entry_zones):
+            if i > 0 and z >= entry_price:
+                entry_zones[i] = round(entry_price - zone_step * i, precision)
 
     return {
         "symbol": symbol,
