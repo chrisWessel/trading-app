@@ -51,11 +51,10 @@ export default function DashboardPage() {
   const [showPositionGuide, setShowPositionGuide] = useState<boolean>(false);
   const [externalTradeParams, setExternalTradeParams] = useState<any>(null);
 
-  // ── LIVE PRICE POLLER: always keep currentPrice in sync with backend ──────
-  // This runs regardless of which chart is active (TradingView or CustomEngine).
-  // Polls every 3 seconds — same cadence as signal checks.
+  // ── LIVE PRICE POLLER: keep currentPrice in sync with backend or public spot feed ──────
   useEffect(() => {
     const fetchLivePrice = async () => {
+      // 1. Try primary backend API first
       try {
         const res = await fetch(
           `${API_BASE_URL}/api/candles?symbol=${encodeURIComponent(symbol)}&timeframe=${encodeURIComponent(timeframe)}&limit=2`
@@ -64,14 +63,36 @@ export default function DashboardPage() {
           const data = await res.json();
           if (data.latest_price && data.latest_price > 0) {
             setCurrentPrice(data.latest_price);
+            return;
           }
         }
       } catch (_) {
-        // keep previous price on error
+        // Backend offline / mixed content block on standalone Vercel deploy
       }
+
+      // 2. Public Spot Feed Fallback (Binance API for Gold Spot & Crypto)
+      try {
+        const symUpper = symbol.toUpperCase().replace('/', '').replace('_', '');
+        let binanceSym = 'PAXGUSDT';
+        if (symUpper.includes('BTC')) binanceSym = 'BTCUSDT';
+        else if (symUpper.includes('ETH')) binanceSym = 'ETHUSDT';
+        else if (symUpper.includes('SOL')) binanceSym = 'SOLUSDT';
+        else if (symUpper.includes('XAU') || symUpper.includes('GOLD')) binanceSym = 'PAXGUSDT';
+
+        const bRes = await fetch(`https://api.binance.com/api/v3/klines?symbol=${binanceSym}&interval=1m&limit=1`);
+        if (bRes.ok) {
+          const bData = await bRes.json();
+          if (Array.isArray(bData) && bData.length > 0) {
+            const lastClose = parseFloat(bData[0][4]);
+            if (lastClose > 0) {
+              setCurrentPrice(lastClose);
+            }
+          }
+        }
+      } catch (_) {}
     };
 
-    fetchLivePrice(); // immediate first fetch
+    fetchLivePrice();
     priceIntervalRef.current = setInterval(fetchLivePrice, 3000);
     return () => {
       if (priceIntervalRef.current) clearInterval(priceIntervalRef.current);
