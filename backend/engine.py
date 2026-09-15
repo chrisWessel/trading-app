@@ -38,7 +38,9 @@ def is_forex_symbol(symbol: str) -> bool:
 
 def map_symbol_to_yahoo_ticker(symbol: str) -> str:
     clean = clean_symbol_string(symbol)
-    if "XAU" in clean or "GOLD" in clean or "PAXG" in clean:
+    if "XAU" in clean or "GOLD" in clean:
+        return "XAUUSD=X"
+    if "PAXG" in clean:
         return "PAXG-USD"
     elif "EURUSD" in clean:
         return "EURUSD=X"
@@ -114,8 +116,8 @@ def fetch_real_ohlcv_from_market(symbol: str, timeframe: str = "1m", limit: int 
     
     # ── PRIMARY SPOT FEED: Binance for Gold Spot (PAXGUSDT) & Crypto ──────
     binance_symbol_map = {
-        'XAUUSD': 'PAXGUSDT', 'GOLD': 'PAXGUSDT', 'XAU': 'PAXGUSDT', 'PAXGUSDT': 'PAXGUSDT',
-        'BTCUSD': 'BTCUSDT', 'BTCUSDT': 'BTCUSDT',
+        'PAXGUSDT': 'PAXGUSDT',
+        'BTCUSDT': 'BTCUSDT', 'BTC': 'BTCUSDT',
         'ETHUSD': 'ETHUSDT', 'ETHUSDT': 'ETHUSDT',
         'SOLUSD': 'SOLUSDT', 'SOLUSDT': 'SOLUSDT'
     }
@@ -385,6 +387,37 @@ def fetch_orderbook(symbol: str = "EUR/USD", depth: int = 20) -> Dict[str, Any]:
     ORDERBOOK_CACHE[cache_key] = (now, res)
     return res.copy()
 
+def calculate_supply_demand_zones(df: pd.DataFrame, precision: int = 2) -> Dict[str, Any]:
+    if len(df) < 15:
+        return {"supply": [], "demand": []}
+    
+    # Use recent subset for zones
+    recent_df = df.tail(100).copy()
+    
+    # Supply Zones (Resistance areas - local maxima)
+    recent_df['max'] = recent_df['high'].rolling(7, center=True).max()
+    supply_peaks = recent_df[recent_df['high'] == recent_df['max']]
+    
+    supply_zones = []
+    for _, row in supply_peaks.tail(3).iterrows():
+        top = float(row['high'])
+        bottom = float(max(row['open'], row['close']))
+        if top > bottom:
+            supply_zones.append({"top": round(top, precision), "bottom": round(bottom, precision)})
+            
+    # Demand Zones (Support areas - local minima)
+    recent_df['min'] = recent_df['low'].rolling(7, center=True).min()
+    demand_troughs = recent_df[recent_df['low'] == recent_df['min']]
+    
+    demand_zones = []
+    for _, row in demand_troughs.tail(3).iterrows():
+        bottom = float(row['low'])
+        top = float(min(row['open'], row['close']))
+        if top > bottom:
+            demand_zones.append({"top": round(top, precision), "bottom": round(bottom, precision)})
+            
+    return {"supply": supply_zones[::-1], "demand": demand_zones[::-1]}
+
 def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m") -> Dict[str, Any]:
     """
     Institutional Multi-Timeframe Signal Recommendation Engine.
@@ -471,6 +504,8 @@ def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m") ->
 
     _, precision = get_asset_base_config(symbol)
     entry_price = latest_price
+    
+    sd_zones = calculate_supply_demand_zones(df, precision)
 
     # ── STABLE ATR: computed from HISTORIC bars only (exclude the live-ticking last candle)
     # This prevents SL/TP from jittering on every 3-second poll as the live close changes.
@@ -500,8 +535,12 @@ def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m") ->
         '1M': 8.0
     }
     sl_mult = tf_sl_multipliers.get(timeframe, 2.0)
-    # Clamp: never let SL get further than 2.5x ATR from current price
-    risk_amount = round(min(max(atr * sl_mult, latest_price * 0.0003), atr * 2.5), precision)
+    
+    pip = get_pip_size(symbol)
+    pip_30 = pip * 30  # 30-pip spacing per TP level
+    
+    # Clamp: never let SL get further than 2.5x ATR from current price, and enforce at least 30 pips distance
+    risk_amount = round(max(min(max(atr * sl_mult, latest_price * 0.0003), atr * 2.5), pip_30), precision)
 
     # ── 5 ENTRY ZONES: Zone 1 = current market price (immediate entry).
     # Remaining zones spread outward as better-priced scale-in levels.
@@ -542,8 +581,6 @@ def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m") ->
     # ── 7 TP LEVELS spread 30 pips apart, anchored to current price.
     # SELL: ALL TPs are BELOW current price (going further down = more profit).
     # BUY:  ALL TPs are ABOVE current price (going further up = more profit).
-    pip = get_pip_size(symbol)
-    pip_30 = pip * 30  # 30-pip spacing per TP level
 
     if signal_type == "BUY/LONG":
         # TP1 starts 1x risk ABOVE current price, each step adds 30 more pips up
@@ -633,14 +670,15 @@ def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m") ->
         "signal_triggered": signal_type != "NEUTRAL",
         "signal_type": signal_type,
         "trade_params": {
-            "entry": entry_price,
+            "entry": entry_zones[0],
             "entry_zones": entry_zones,
             "stop_loss": stop_loss,
             "tp1": tp1,
             "tp2": tp2,
             "tp_levels": tp_levels,
             "rationale": rationale
-        }
+        },
+        "sd_zones": sd_zones
     }
 
 

@@ -24,7 +24,8 @@ export default function TradingViewDirectChart({ symbol, timeframe, currentPrice
 
   const getTradingViewSymbol = (sym: string): string => {
     const s = sym.toUpperCase().replace(" ", "").replace("/", "").replace("_", "");
-    if (s.includes("XAU") || s.includes("GOLD") || s.includes("PAXG")) return "BINANCE:PAXGUSDT";
+    if (s.includes("XAU") || s.includes("GOLD")) return "OANDA:XAUUSD";
+    if (s.includes("PAXG")) return "BINANCE:PAXGUSDT";
     if (s.includes("EURUSD")) return "OANDA:EURUSD";
     if (s.includes("GBPUSD")) return "OANDA:GBPUSD";
     if (s.includes("USDJPY")) return "OANDA:USDJPY";

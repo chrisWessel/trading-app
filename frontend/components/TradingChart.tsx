@@ -88,6 +88,7 @@ export default function TradingChart({
 
   const [signalType, setSignalType] = useState<string>('BUY/LONG');
   const [tradeParams, setTradeParams] = useState<any>(null);
+  const [sdZones, setSdZones] = useState<any>(null);
 
   const isHighValueAsset = latestPrice > 10.0;
   const precision = isHighValueAsset ? 2 : 4;
@@ -110,7 +111,7 @@ export default function TradingChart({
     }
   };
 
-  const drawTechnicalPriceLines = (supp: number, resis: number, price: number, sigType?: string, tp?: any) => {
+  const drawTechnicalPriceLines = (supp: number, resis: number, price: number, sigType?: string, tp?: any, zones?: any) => {
     if (!candlestickSeriesRef.current) return;
     clearPriceLines();
 
@@ -170,6 +171,52 @@ export default function TradingChart({
       });
 
       priceLinesRef.current = [resLine, suppLine, entryLine, slLine, tpLine];
+
+      // 📦 Supply & Demand Zones
+      if (zones?.supply) {
+        zones.supply.forEach((zone: any) => {
+          const l1 = candlestickSeriesRef.current!.createPriceLine({
+            price: zone.top,
+            color: 'rgba(239, 68, 68, 0.4)',
+            lineWidth: 2,
+            lineStyle: LineStyle.Solid,
+            axisLabelVisible: false,
+            title: 'Supply Zone',
+          });
+          const l2 = candlestickSeriesRef.current!.createPriceLine({
+            price: zone.bottom,
+            color: 'rgba(239, 68, 68, 0.4)',
+            lineWidth: 2,
+            lineStyle: LineStyle.Solid,
+            axisLabelVisible: false,
+            title: '',
+          });
+          priceLinesRef.current.push(l1, l2);
+        });
+      }
+
+      if (zones?.demand) {
+        zones.demand.forEach((zone: any) => {
+          const l1 = candlestickSeriesRef.current!.createPriceLine({
+            price: zone.top,
+            color: 'rgba(59, 130, 246, 0.4)',
+            lineWidth: 2,
+            lineStyle: LineStyle.Solid,
+            axisLabelVisible: false,
+            title: 'Demand Zone',
+          });
+          const l2 = candlestickSeriesRef.current!.createPriceLine({
+            price: zone.bottom,
+            color: 'rgba(59, 130, 246, 0.4)',
+            lineWidth: 2,
+            lineStyle: LineStyle.Solid,
+            axisLabelVisible: false,
+            title: '',
+          });
+          priceLinesRef.current.push(l1, l2);
+        });
+      }
+
     } catch (e) {
       console.error('Failed to draw price lines:', e);
     }
@@ -196,9 +243,9 @@ export default function TradingChart({
         });
       }
 
-      // Check active signal parameters to draw trend-aware price lines
       let fetchedSigType = 'BUY/LONG';
       let fetchedParams = null;
+      let fetchedZones = null;
       try {
         const sigRes = await fetch(`${API_BASE_URL}/api/signals/check`, {
           method: 'POST',
@@ -210,8 +257,10 @@ export default function TradingChart({
           if (sigData.analysis) {
             fetchedSigType = sigData.analysis.signal_type;
             fetchedParams = sigData.analysis.trade_params;
+            fetchedZones = sigData.analysis.sd_zones;
             setSignalType(sigData.analysis.signal_type);
             setTradeParams(sigData.analysis.trade_params);
+            setSdZones(sigData.analysis.sd_zones);
           }
         }
       } catch (e) {
@@ -247,7 +296,7 @@ export default function TradingChart({
           volumeSeriesRef.current.setData(volumeData as any);
         }
 
-        drawTechnicalPriceLines(data.support, data.resistance, data.latest_price, fetchedSigType, fetchedParams);
+        drawTechnicalPriceLines(data.support, data.resistance, data.latest_price, fetchedSigType, fetchedParams, fetchedZones);
         chartRef.current?.timeScale().fitContent();
       }
     } catch (err: any) {
