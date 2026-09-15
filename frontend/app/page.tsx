@@ -30,7 +30,6 @@ const PRESET_ASSETS: AssetOption[] = [
   { symbol: 'USD/CAD', label: 'USD / CAD', category: 'Forex' },
   // Gold & Commodities
   { symbol: 'XAU/USD', label: 'XAU / USD (Gold)', category: 'Gold' },
-  { symbol: 'PAXG/USDT', label: 'PAXG / USDT (Gold Token)', category: 'Gold' },
   // Crypto
   { symbol: 'REXT/USDT', label: 'REXT / USDT', category: 'Crypto' },
   { symbol: 'REXT/USD', label: 'REXT / USD', category: 'Crypto' },

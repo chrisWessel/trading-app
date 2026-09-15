@@ -113,7 +113,7 @@ export default function SignalsStream({ symbol, timeframe, onPriceUpdate }: Sign
               if (onPriceUpdate) onPriceUpdate(livePrice);
               const isGold = symbol.toUpperCase().includes('XAU') || symbol.toUpperCase().includes('GOLD');
               const prec = isGold || livePrice > 10 ? 2 : 4;
-              const atr = isGold ? 4.5 : livePrice * 0.003;
+              const atr = livePrice * 0.003;
 
               // Default SELL/SHORT signal for Gold Spot
               const isBuy = false;

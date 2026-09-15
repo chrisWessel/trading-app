@@ -38,9 +38,7 @@ def is_forex_symbol(symbol: str) -> bool:
 
 def map_symbol_to_yahoo_ticker(symbol: str) -> str:
     clean = clean_symbol_string(symbol)
-    if "XAU" in clean or "GOLD" in clean:
-        return "GC=F"
-    elif "PAXG" in clean:
+    if "XAU" in clean or "GOLD" in clean or "PAXG" in clean:
         return "PAXG-USD"
     elif "EURUSD" in clean:
         return "EURUSD=X"
@@ -258,10 +256,7 @@ def generate_live_ticking_ohlcv(symbol: str = "EUR/USD", timeframe: str = "1m", 
     }
     scale = tf_vol_scale.get(timeframe, 1.0)
 
-    if "XAU" in clean or "GOLD" in clean:
-        base_volatility = 0.0012
-        base_vol = 400
-    elif is_forex_symbol(symbol):
+    if is_forex_symbol(symbol):
         base_volatility = 0.0005
         base_vol = 500000
     else:
@@ -362,10 +357,7 @@ def fetch_orderbook(symbol: str = "EUR/USD", depth: int = 20) -> Dict[str, Any]:
     _, precision = get_asset_base_config(symbol)
     mid_price = get_synchronized_live_price(symbol)
     
-    if "XAU" in clean or "GOLD" in clean:
-        step_pct = 0.0002
-        vol_scale = 100
-    elif is_forex_symbol(symbol):
+    if is_forex_symbol(symbol):
         step_pct = 0.0001
         vol_scale = 100000
     else:
