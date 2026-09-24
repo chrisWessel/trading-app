@@ -380,9 +380,9 @@ export default function DashboardPage() {
                 </button>
               </div>
 
-              {/* Side-by-Side Grid: Paper Trading Panel (7 cols) + Order Book & OBI Gauge (5 cols) */}
-              <div className="grid grid-cols-1 xl:grid-cols-12 gap-6 items-start">
-                <div className="xl:col-span-7">
+              {/* Side-by-Side Grid: Paper Trading Panel (7 cols) + Order Book & OBI Gauge (5 cols) — Equal height alignment */}
+              <div className="grid grid-cols-1 xl:grid-cols-12 gap-6 items-stretch">
+                <div className="xl:col-span-7 h-full">
                   <PaperTradingPanel
                     symbol={symbol}
                     currentPrice={currentPrice}
@@ -390,7 +390,7 @@ export default function DashboardPage() {
                     externalParams={externalTradeParams}
                   />
                 </div>
-                <div className="xl:col-span-5">
+                <div className="xl:col-span-5 h-full">
                   <OrderBookOBIGauge symbol={symbol} />
                 </div>
               </div>

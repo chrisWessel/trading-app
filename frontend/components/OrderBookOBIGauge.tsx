@@ -92,7 +92,7 @@ export default function OrderBookOBIGauge({ symbol }: OrderBookOBIGaugeProps) {
             <span>QTY</span>
           </div>
           <div className="space-y-1">
-            {orderbook?.bids?.slice(0, 10).map(([price, vol], idx) => (
+            {orderbook?.bids?.slice(0, 15).map(([price, vol], idx) => (
               <div key={idx} className="flex justify-between text-[11px] hover:bg-emerald-950/30 px-1 py-0.5 rounded transition">
                 <span className="text-emerald-400 font-bold">${price.toFixed(precision)}</span>
                 <span className="text-slate-300">{vol.toLocaleString()}</span>
@@ -108,7 +108,7 @@ export default function OrderBookOBIGauge({ symbol }: OrderBookOBIGaugeProps) {
             <span>QTY</span>
           </div>
           <div className="space-y-1">
-            {orderbook?.asks?.slice(0, 10).map(([price, vol], idx) => (
+            {orderbook?.asks?.slice(0, 15).map(([price, vol], idx) => (
               <div key={idx} className="flex justify-between text-[11px] hover:bg-rose-950/30 px-1 py-0.5 rounded transition">
                 <span className="text-rose-400 font-bold">${price.toFixed(precision)}</span>
                 <span className="text-slate-300">{vol.toLocaleString()}</span>
