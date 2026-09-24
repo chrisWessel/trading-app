@@ -263,6 +263,15 @@ export default function MarketNewsSection({ symbol }: MarketNewsSectionProps) {
             {activeRec.directive}
           </p>
 
+          {/* Trader Freedom & Active Signals Notice */}
+          <div className="mt-2.5 pt-2.5 border-t border-white/10 flex items-start gap-2.5 text-xs text-amber-200 bg-amber-950/40 p-3 rounded-lg border border-amber-800/60 font-sans">
+            <Zap className="w-4 h-4 text-amber-400 flex-shrink-0 mt-0.5" />
+            <div>
+              <span className="font-bold text-amber-300">TRADER DISCRETION & LIVE SIGNALS NOTICE:</span>{' '}
+              Despite any recommended news hold, technical trading signals (BUY / SELL) and execution controls remain <strong>100% active</strong> on your dashboard. You may still execute trades at your own discretion if technical indicators align.
+            </div>
+          </div>
+
           {/* Quick Metrics Bar */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-2 border-t border-slate-800/80 font-mono text-xs">
             <div className="bg-slate-900/90 p-2 rounded-lg border border-slate-800 flex items-center justify-between">

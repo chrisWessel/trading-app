@@ -390,6 +390,17 @@ export default function LiveSignalNotificationPanel({
             </div>
           </div>
 
+          {/* Trader Discretion Notice Box */}
+          <div className="bg-slate-950/90 border border-amber-800/60 p-2.5 rounded-lg text-[10px] space-y-1 text-slate-300 font-sans">
+            <div className="flex items-center gap-1.5 text-amber-400 font-bold font-mono">
+              <Zap className="w-3.5 h-3.5" />
+              <span>TRADER DISCRETION ENABLED</span>
+            </div>
+            <p className="text-[10px] text-slate-300 leading-snug">
+              Signals remain <strong>100% live & active</strong>. Despite any news hold recommendations, you can execute trades at any time at your discretion.
+            </p>
+          </div>
+
           {/* Quick Auto-Fill Execution Button — always shown for BUY/SELL signals */}
           {onExecuteTradeParams && latestNotif.type !== 'MONITORING' && (
             <button
