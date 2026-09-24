@@ -117,7 +117,6 @@ def fetch_real_ohlcv_from_market(symbol: str, timeframe: str = "1m", limit: int 
     # ── PRIMARY SPOT FEED: Binance for Gold Spot (PAXGUSDT) & Crypto ──────
     binance_symbol_map = {
         'PAXGUSDT': 'PAXGUSDT',
-        'XAUUSD': 'PAXGUSDT',
         'BTCUSDT': 'BTCUSDT', 'BTC': 'BTCUSDT',
         'ETHUSD': 'ETHUSDT', 'ETHUSDT': 'ETHUSDT',
         'SOLUSD': 'SOLUSDT', 'SOLUSDT': 'SOLUSDT'
@@ -159,6 +158,44 @@ def fetch_real_ohlcv_from_market(symbol: str, timeframe: str = "1m", limit: int 
                     return df
         except Exception as e:
             print(f"Binance spot fetch notice for {symbol}: {e}")
+
+    # ── PRIMARY SPOT FEED FOR GOLD: Kraken (PAXGUSD) ──────
+    if clean == 'XAUUSD' or clean == 'GOLD' or clean == 'PAXGUSD':
+        k_tf_map = {
+            '1m': 1, '2m': 1, '3m': 1, '5m': 5, '15m': 15, '30m': 30, '45m': 30,
+            '1h': 60, '2h': 60, '4h': 240, '1d': 1440, '1w': 10080
+        }
+        k_tf = k_tf_map.get(timeframe, 1)
+        try:
+            k_url = f"https://api.kraken.com/0/public/OHLC?pair=PAXGUSD&interval={k_tf}"
+            r = requests.get(k_url, timeout=3.0)
+            if r.status_code == 200:
+                data = r.json()
+                if not data.get('error') and data.get('result'):
+                    # Kraken result keys: ['PAXGUSD', 'last']
+                    pair_key = list(data['result'].keys())[0]
+                    klines = data['result'][pair_key]
+                    if isinstance(klines, list) and len(klines) > 0:
+                        records = []
+                        for k in klines[-limit:]:
+                            records.append({
+                                'timestamp': int(k[0]) * 1000,
+                                'open': float(k[1]),
+                                'high': float(k[2]),
+                                'low': float(k[3]),
+                                'close': float(k[4]),
+                                'volume': float(k[6])
+                            })
+                        df = pd.DataFrame(records)
+                        _, precision = get_asset_base_config(symbol)
+                        for col in ['open', 'high', 'low', 'close']:
+                            df[col] = df[col].round(precision)
+                        
+                        latest_p = float(df['close'].iloc[-1])
+                        UNIVERSAL_PRICE_HUB[clean] = latest_p
+                        return df
+        except Exception as e:
+            print(f"Kraken spot fetch notice for {symbol}: {e}")
 
     # ── SECONDARY FEED: Yahoo Finance (for Forex / Fallback) ──────
     ticker = map_symbol_to_yahoo_ticker(symbol)

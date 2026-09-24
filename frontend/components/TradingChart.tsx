@@ -21,6 +21,7 @@ interface TradingChartProps {
   onLatestDataUpdate?: (data: { price: number; support: number; resistance: number }) => void;
 }
 
+const HARARE_TZ_OFFSET_SEC = 2 * 3600; // Africa/Harare (CAT / UTC+2)
 
 const QUICK_TIMEFRAMES = ['1s', '1m', '5m', '15m', '1h', '4h', '1d'];
 
@@ -273,9 +274,10 @@ export default function TradingChart({
         const seenTimes = new Set();
         for (const c of sortedCandles) {
           const rawSec = c.time > 20000000000 ? Math.floor(c.time / 1000) : c.time;
-          if (!seenTimes.has(rawSec)) {
-            seenTimes.add(rawSec);
-            uniqueCandles.push({ ...c, time: rawSec });
+          const harareSec = rawSec + HARARE_TZ_OFFSET_SEC;
+          if (!seenTimes.has(harareSec)) {
+            seenTimes.add(harareSec);
+            uniqueCandles.push({ ...c, time: harareSec });
           }
         }
 
@@ -404,8 +406,9 @@ export default function TradingChart({
               }
 
               const rawSec = data.time > 20000000000 ? Math.floor(data.time / 1000) : data.time;
+              const harareSec = rawSec + HARARE_TZ_OFFSET_SEC;
 
-              const validTime = Math.max(rawSec, lastBarTimeRef.current);
+              const validTime = Math.max(harareSec, lastBarTimeRef.current);
               lastBarTimeRef.current = validTime;
 
               if (candlestickSeriesRef.current) {
