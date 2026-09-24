@@ -122,7 +122,7 @@ export default function PositionSizingGuide({
   onClose,
   isModal = false
 }: PositionSizingGuideProps) {
-  const [activeTab, setActiveTab] = useState<'calculator' | 'guide' | 'assistant' | 'cheatsheet' | 'depositMatrix' | 'mtOrderTypes'>('calculator');
+  const [activeTab, setActiveTab] = useState<'calculator' | 'guide' | 'assistant' | 'cheatsheet' | 'depositMatrix' | 'mtOrderTypes' | 'tfSpacing'>('tfSpacing');
   
   // Calculator States
   const [balance, setBalance] = useState<number>(5000);
@@ -223,6 +223,18 @@ export default function PositionSizingGuide({
         </button>
 
         <button
+          onClick={() => setActiveTab('tfSpacing')}
+          className={`flex items-center gap-2 px-3.5 py-2.5 rounded-t-lg font-semibold transition border-b-2 ${
+            activeTab === 'tfSpacing'
+              ? 'bg-slate-900 text-purple-400 border-purple-500 shadow-sm'
+              : 'text-slate-400 hover:text-slate-200 border-transparent hover:bg-slate-850'
+          }`}
+        >
+          <TrendingUp className="w-4 h-4 text-purple-400" />
+          <span>2. Timeframe TP & SL Spacing Table</span>
+        </button>
+
+        <button
           onClick={() => setActiveTab('depositMatrix')}
           className={`flex items-center gap-2 px-3.5 py-2.5 rounded-t-lg font-semibold transition border-b-2 ${
             activeTab === 'depositMatrix'
@@ -231,7 +243,7 @@ export default function PositionSizingGuide({
           }`}
         >
           <DollarSign className="w-4 h-4 text-emerald-400" />
-          <span>2. Deposit Tier Lot Matrix</span>
+          <span>3. Deposit Tier Lot Matrix</span>
         </button>
 
         <button
@@ -243,7 +255,7 @@ export default function PositionSizingGuide({
           }`}
         >
           <Sliders className="w-4 h-4" />
-          <span>3. Live Lot & Margin Calculator</span>
+          <span>4. Live Lot & Margin Calculator</span>
         </button>
 
         <button
@@ -255,7 +267,7 @@ export default function PositionSizingGuide({
           }`}
         >
           <BookOpen className="w-4 h-4" />
-          <span>4. Lots vs. Volume vs. USD</span>
+          <span>5. Lots vs. Volume vs. USD</span>
         </button>
 
         <button
@@ -267,7 +279,7 @@ export default function PositionSizingGuide({
           }`}
         >
           <Sparkles className="w-4 h-4 text-amber-400" />
-          <span>5. PU Prime Assistant</span>
+          <span>6. PU Prime Assistant</span>
         </button>
 
         <button
@@ -279,12 +291,141 @@ export default function PositionSizingGuide({
           }`}
         >
           <Layers className="w-4 h-4" />
-          <span>6. Asset Specs</span>
+          <span>7. Asset Specs</span>
         </button>
       </div>
 
       {/* Independently Scrollable Tab Body */}
       <div className="p-4 sm:p-6 space-y-6 flex-1 overflow-y-auto">
+        {/* TAB: TIMEFRAME TP & SL SPACING TABLE */}
+        {activeTab === 'tfSpacing' && (
+          <div className="space-y-6">
+            <div className="bg-slate-950 border border-slate-800 p-5 rounded-xl border-l-4 border-l-purple-500">
+              <div className="flex flex-wrap items-center justify-between gap-4">
+                <div>
+                  <h3 className="text-base font-bold text-white flex items-center gap-2">
+                    <TrendingUp className="w-5 h-5 text-purple-400" />
+                    <span>Timeframe-Scaled TP Spacing & Min SL Distance Matrix</span>
+                  </h3>
+                  <p className="text-xs text-slate-400 mt-1">
+                    Take-Profit levels (TP1–TP7) and Stop-Loss boundaries scale dynamically according to chart timeframe. Higher timeframes require wider spacing for market volatility.
+                  </p>
+                </div>
+                <span className="bg-purple-950 text-purple-300 border border-purple-800 text-[10px] font-mono px-3 py-1 rounded-full font-bold">
+                  8 TIMEFRAME TIERS
+                </span>
+              </div>
+            </div>
+
+            {/* Timeframe TP & SL Table */}
+            <div className="bg-slate-950 border border-slate-800 rounded-xl overflow-hidden shadow-xl">
+              <div className="bg-slate-900 p-4 border-b border-slate-800 flex flex-wrap items-center justify-between gap-4">
+                <div className="flex items-center gap-2 text-xs font-bold text-white">
+                  <Layers className="w-4 h-4 text-purple-400" />
+                  <span>Gold (XAU/USD) & Forex Timeframe Target Matrix</span>
+                </div>
+                <span className="text-[11px] text-slate-400 font-mono">Gold Pip Size = $0.10 • Forex Pip Size = 0.0001</span>
+              </div>
+
+              <div className="p-4 overflow-x-auto">
+                <table className="w-full text-xs text-left text-slate-300 font-mono">
+                  <thead className="bg-slate-900 text-slate-400 border-b border-slate-800">
+                    <tr>
+                      <th className="p-3">Timeframe</th>
+                      <th className="p-3">Trading Style</th>
+                      <th className="p-3">Pip Count</th>
+                      <th className="p-3 text-amber-400 font-bold">Gold TP Spacing ($)</th>
+                      <th className="p-3 text-rose-400 font-bold">Gold Min SL ($)</th>
+                      <th className="p-3 text-emerald-400 font-bold">7-TP Max Span ($)</th>
+                      <th className="p-3 text-blue-400 font-bold">Forex Pip Spacing</th>
+                      <th className="p-3">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-850">
+                    {[
+                      { tf: '1m', style: 'Ultra Scalp', pips: 30, goldTp: '$3.00', goldSl: '$3.00', goldSpan: '$21.00', forexPips: '30 pips (0.0030)' },
+                      { tf: '5m', style: 'Fast Scalp', pips: 50, goldTp: '$5.00', goldSl: '$5.00', goldSpan: '$35.00', forexPips: '50 pips (0.0050)' },
+                      { tf: '15m', style: 'Intraday', pips: 80, goldTp: '$8.00', goldSl: '$8.00', goldSpan: '$56.00', forexPips: '80 pips (0.0080)' },
+                      { tf: '30m', style: 'Intraday / Scalp', pips: 100, goldTp: '$10.00', goldSl: '$10.00', goldSpan: '$70.00', forexPips: '100 pips (0.0100)' },
+                      { tf: '1h', style: 'Day Trade', pips: 150, goldTp: '$15.00', goldSl: '$15.00', goldSpan: '$105.00', forexPips: '150 pips (0.0150)' },
+                      { tf: '4h', style: 'Swing Trade', pips: 300, goldTp: '$30.00', goldSl: '$30.00', goldSpan: '$210.00', forexPips: '300 pips (0.0300)' },
+                      { tf: '1d', style: 'Major Swing', pips: 500, goldTp: '$50.00', goldSl: '$50.00', goldSpan: '$350.00', forexPips: '500 pips (0.0500)' },
+                      { tf: '1w', style: 'Position Trade', pips: 800, goldTp: '$80.00', goldSl: '$80.00', goldSpan: '$560.00', forexPips: '800 pips (0.0800)' },
+                    ].map((row) => (
+                      <tr key={row.tf} className="hover:bg-slate-900/60 transition">
+                        <td className="p-3 font-bold text-white font-sans flex items-center gap-2">
+                          <span className="bg-purple-950 text-purple-300 border border-purple-800 text-[10px] px-2 py-0.5 rounded font-mono font-bold">
+                            {row.tf}
+                          </span>
+                        </td>
+                        <td className="p-3 text-slate-300 font-sans">{row.style}</td>
+                        <td className="p-3 text-slate-400">{row.pips} pips</td>
+                        <td className="p-3 text-amber-300 font-extrabold bg-amber-950/20 rounded">
+                          {row.goldTp} <span className="text-[10px] text-amber-500 font-normal">/ level</span>
+                        </td>
+                        <td className="p-3 text-rose-300 font-bold bg-rose-950/20 rounded">
+                          {row.goldSl} <span className="text-[10px] text-rose-500 font-normal">min</span>
+                        </td>
+                        <td className="p-3 text-emerald-400 font-bold">
+                          {row.goldSpan}
+                        </td>
+                        <td className="p-3 text-blue-400">
+                          {row.forexPips}
+                        </td>
+                        <td className="p-3">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setStopLossPips(row.pips);
+                              setActiveTab('calculator');
+                            }}
+                            className="bg-purple-600/30 hover:bg-purple-600 text-purple-300 hover:text-white px-2.5 py-1 rounded text-[11px] font-sans font-semibold transition border border-purple-500/40"
+                          >
+                            Load in Sizer →
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {/* Explanatory Cards */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-5 font-sans">
+              <div className="bg-slate-950 border border-slate-800 p-4 rounded-xl space-y-2">
+                <div className="text-amber-400 font-bold text-xs flex items-center gap-1.5 font-mono">
+                  <Sparkles className="w-4 h-4" />
+                  <span>7-Tier Take Profit Levels</span>
+                </div>
+                <p className="text-xs text-slate-300 leading-relaxed">
+                  Every signal places 7 target levels (TP1 to TP7). The distance between each TP is exactly equal to the timeframe spacing shown above (e.g., $5.00 on 5m, $15.00 on 1h).
+                </p>
+              </div>
+
+              <div className="bg-slate-950 border border-slate-800 p-4 rounded-xl space-y-2">
+                <div className="text-rose-400 font-bold text-xs flex items-center gap-1.5 font-mono">
+                  <Info className="w-4 h-4" />
+                  <span>ATR & Min SL Protection</span>
+                </div>
+                <p className="text-xs text-slate-300 leading-relaxed">
+                  Stop-Loss is calculated using Average True Range (ATR). If market volatility drops, the system guarantees a minimum SL floor based on timeframe (e.g. min $5.00 on 5m) up to 3.5× ATR max.
+                </p>
+              </div>
+
+              <div className="bg-slate-950 border border-slate-800 p-4 rounded-xl space-y-2">
+                <div className="text-emerald-400 font-bold text-xs flex items-center gap-1.5 font-mono">
+                  <Zap className="w-4 h-4" />
+                  <span>Exact Time of Execution</span>
+                </div>
+                <p className="text-xs text-slate-300 leading-relaxed">
+                  Signals are executed based on the exact moment you click (Sell Now / Buy Now). Risk and lot sizes adjust to match the active timeframe's price action.
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* TAB 0: METATRADER ORDER TYPES GUIDE */}
         {activeTab === 'mtOrderTypes' && (
           <div className="space-y-6">
