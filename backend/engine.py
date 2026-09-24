@@ -69,7 +69,7 @@ def map_symbol_to_yahoo_ticker(symbol: str) -> str:
 def get_asset_base_config(symbol: str) -> Tuple[float, int]:
     clean = clean_symbol_string(symbol)
     if "XAU" in clean or "GOLD" in clean or "PAXG" in clean:
-        return 4440.00, 2
+        return 2400.00, 2
     elif "JPY" in clean:
         return 152.50, 2
     elif "EUR" in clean:
@@ -117,6 +117,7 @@ def fetch_real_ohlcv_from_market(symbol: str, timeframe: str = "1m", limit: int 
     # ── PRIMARY SPOT FEED: Binance for Gold Spot (PAXGUSDT) & Crypto ──────
     binance_symbol_map = {
         'PAXGUSDT': 'PAXGUSDT',
+        'XAUUSD': 'PAXGUSDT',
         'BTCUSDT': 'BTCUSDT', 'BTC': 'BTCUSDT',
         'ETHUSD': 'ETHUSDT', 'ETHUSDT': 'ETHUSDT',
         'SOLUSD': 'SOLUSDT', 'SOLUSDT': 'SOLUSDT'
