@@ -84,6 +84,17 @@ export default function PaperTradingPanel({
   const isHighValueAsset = currentPrice > 10.0;
   const precision = isHighValueAsset ? 2 : 4;
 
+  // Contract size: Gold = 100 oz/lot, Forex = 100,000 units/lot, Crypto = varies
+  const getContractSize = (sym: string): number => {
+    const s = sym.toUpperCase();
+    if (s.includes('XAU') || s.includes('GOLD')) return 100;       // 1 lot = 100 troy ounces
+    if (s.includes('BTC')) return 1;                                // 1 lot = 1 BTC
+    if (s.includes('ETH')) return 1;                                // 1 lot = 1 ETH
+    if (s.includes('SOL')) return 1;                                // 1 lot = 1 SOL
+    if (s.includes('REXT')) return 1;                               // 1 lot = 1 unit
+    return 100000;                                                  // Forex: 1 lot = 100,000 base units
+  };
+
   const getAssetOffsets = (sym: string, price: number) => {
     const isGold = sym.toUpperCase().includes('XAU') || sym.toUpperCase().includes('GOLD');
     const isCrypto = sym.toUpperCase().includes('BTC') || sym.toUpperCase().includes('ETH') || sym.toUpperCase().includes('SOL');
@@ -349,10 +360,15 @@ export default function PaperTradingPanel({
           : activePosition.stop_loss);
 
     const isBuy = activePosition.signal_type.includes('BUY') || activePosition.signal_type.includes('LONG');
-    const pnlPct = isBuy 
-      ? ((exitPrice - activePosition.entry_price) / activePosition.entry_price) * 100
-      : ((activePosition.entry_price - exitPrice) / activePosition.entry_price) * 100;
-    const pnlUsd = activePosition.position_size_usd * (pnlPct / 100);
+    // Lots-based PnL: lots × contract_size × price_difference (standard MT4/MT5 formula)
+    const contractSize = getContractSize(activePosition.symbol);
+    const priceDiff = isBuy
+      ? (exitPrice - activePosition.entry_price)
+      : (activePosition.entry_price - exitPrice);
+    const pnlUsd = activePosition.lots * contractSize * priceDiff;
+    const pnlPct = activePosition.entry_price > 0
+      ? (priceDiff / activePosition.entry_price) * 100
+      : 0;
 
     const harareTimeStr = new Date().toLocaleTimeString('en-US', { timeZone: 'Africa/Harare' });
 
@@ -418,16 +434,19 @@ export default function PaperTradingPanel({
     }
   };
 
-  // Calculate live unrealized PnL based on current ticking price
+  // Calculate live unrealized PnL based on current ticking price (lots-based)
   let unrealizedPnlPct = 0;
   let unrealizedPnlUsd = 0;
   if (activePosition && currentPrice > 0) {
-    if (activePosition.signal_type.includes('BUY') || activePosition.signal_type.includes('LONG')) {
-      unrealizedPnlPct = ((currentPrice - activePosition.entry_price) / activePosition.entry_price) * 100;
-    } else {
-      unrealizedPnlPct = ((activePosition.entry_price - currentPrice) / activePosition.entry_price) * 100;
-    }
-    unrealizedPnlUsd = activePosition.position_size_usd * (unrealizedPnlPct / 100);
+    const contractSize = getContractSize(activePosition.symbol);
+    const isBuy = activePosition.signal_type.includes('BUY') || activePosition.signal_type.includes('LONG');
+    const priceDiff = isBuy
+      ? (currentPrice - activePosition.entry_price)
+      : (activePosition.entry_price - currentPrice);
+    unrealizedPnlUsd = activePosition.lots * contractSize * priceDiff;
+    unrealizedPnlPct = activePosition.entry_price > 0
+      ? (priceDiff / activePosition.entry_price) * 100
+      : 0;
   }
 
   return (

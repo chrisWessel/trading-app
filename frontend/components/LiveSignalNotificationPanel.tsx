@@ -353,7 +353,7 @@ export default function LiveSignalNotificationPanel({
 
             {/* 7 TP Levels — selectable chips */}
             <div className="bg-slate-950/80 px-2 py-1.5 rounded border border-emerald-950 space-y-1">
-              <span className="text-emerald-400 font-bold block">TAKE PROFIT LEVELS (7 × 30 pips):</span>
+              <span className="text-emerald-400 font-bold block">TAKE PROFIT LEVELS (7 levels — timeframe-scaled):</span>
               <div className="grid grid-cols-4 gap-1">
                 {displayTpLevels.length > 0
                   ? displayTpLevels.map((tp, i) => (

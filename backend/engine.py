@@ -575,10 +575,32 @@ def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m") ->
     sl_mult = tf_sl_multipliers.get(timeframe, 2.0)
     
     pip = get_pip_size(symbol)
-    pip_30 = pip * 30  # 30-pip spacing per TP level
-    
-    # Clamp: never let SL get further than 2.5x ATR from current price, and enforce at least 30 pips distance
-    risk_amount = round(max(min(max(atr * sl_mult, latest_price * 0.0003), atr * 2.5), pip_30), precision)
+
+    # ── TIMEFRAME-SCALED TP SPACING ──────────────────────────────────────
+    # Higher timeframes need wider TP levels because price moves further.
+    # Gold 5m = $5/level, 1h = $15/level, 4h = $30/level etc.
+    tf_tp_pip_counts = {
+        '1s': 15, '5s': 15, '15s': 20, '30s': 20,
+        '1m': 30, '2m': 30, '3m': 30, '5m': 50, '15m': 80,
+        '30m': 100, '45m': 120,
+        '1h': 150, '2h': 200, '4h': 300,
+        '1d': 500, '1w': 800, '1M': 1200
+    }
+    tp_pip_count = tf_tp_pip_counts.get(timeframe, 30)
+    pip_step = pip * tp_pip_count  # $ distance between each TP level
+
+    # Minimum SL floor also scales with timeframe
+    tf_min_sl_pips = {
+        '1s': 15, '5s': 15, '15s': 20, '30s': 25,
+        '1m': 30, '2m': 30, '3m': 30, '5m': 50, '15m': 80,
+        '30m': 100, '45m': 120,
+        '1h': 150, '2h': 200, '4h': 300,
+        '1d': 500, '1w': 800, '1M': 1200
+    }
+    min_sl_distance = pip * tf_min_sl_pips.get(timeframe, 30)
+
+    # Clamp: SL must be between min_sl_distance and 3.5x ATR from entry
+    risk_amount = round(max(min(max(atr * sl_mult, latest_price * 0.0003), atr * 3.5), min_sl_distance), precision)
 
     # ── 5 ENTRY ZONES: Zone 1 = current market price (immediate entry).
     # Remaining zones spread outward as better-priced scale-in levels.
@@ -616,29 +638,29 @@ def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m") ->
         ]
         stop_loss = round(entry_price - risk_amount, precision)
 
-    # ── 7 TP LEVELS spread 30 pips apart, anchored to current price.
+    # ── 7 TP LEVELS spread by timeframe-scaled pip_step, anchored to current price.
     # SELL: ALL TPs are BELOW current price (going further down = more profit).
     # BUY:  ALL TPs are ABOVE current price (going further up = more profit).
 
     if signal_type == "BUY/LONG":
-        # TP1 starts 1x risk ABOVE current price, each step adds 30 more pips up
+        # TP1 starts 1x risk ABOVE current price, each step adds pip_step more pips up
         tp_base = round(entry_price + risk_amount, precision)
-        tp_levels = [round(tp_base + pip_30 * i, precision) for i in range(7)]
+        tp_levels = [round(tp_base + pip_step * i, precision) for i in range(7)]
         tp1 = tp_levels[0]
         tp2 = tp_levels[3]
         rationale = f"[{timeframe.upper()}] [{trend}] Bullish Demand (ATR ${atr:.{precision}f}). SL: ${stop_loss:.{precision}f}, Risk: ${risk_amount:.{precision}f}, OBI {obi_score:+.2f}."
 
     elif signal_type == "SELL/SHORT":
-        # TP1 starts 1x risk BELOW current price, each step goes 30 more pips DOWN
+        # TP1 starts 1x risk BELOW current price, each step goes pip_step more pips DOWN
         tp_base = round(entry_price - risk_amount, precision)
-        tp_levels = [round(tp_base - pip_30 * i, precision) for i in range(7)]
+        tp_levels = [round(tp_base - pip_step * i, precision) for i in range(7)]
         tp1 = tp_levels[0]
         tp2 = tp_levels[3]
         rationale = f"[{timeframe.upper()}] [{trend}] Bearish Rejection / Downtrend (ATR ${atr:.{precision}f}). SL: ${stop_loss:.{precision}f}, Risk: ${risk_amount:.{precision}f}, OBI {obi_score:+.2f}."
 
     else:
         tp_base = round(entry_price + risk_amount, precision)
-        tp_levels = [round(tp_base + pip_30 * i, precision) for i in range(7)]
+        tp_levels = [round(tp_base + pip_step * i, precision) for i in range(7)]
         tp1 = tp_levels[0]
         tp2 = tp_levels[3]
         rationale = f"[{timeframe.upper()}] [{trend}] Neutral Market - Monitoring Setup."
@@ -658,7 +680,7 @@ def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m") ->
         corrected_tps = []
         for i, tp in enumerate(tp_levels):
             if tp >= entry_price:
-                tp = round(entry_price - risk_amount - pip_30 * i, precision)
+                tp = round(entry_price - risk_amount - pip_step * i, precision)
             corrected_tps.append(tp)
         tp_levels = corrected_tps
         tp1 = tp_levels[0]
@@ -676,7 +698,7 @@ def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m") ->
         corrected_tps = []
         for i, tp in enumerate(tp_levels):
             if tp <= entry_price:
-                tp = round(entry_price + risk_amount + pip_30 * i, precision)
+                tp = round(entry_price + risk_amount + pip_step * i, precision)
             corrected_tps.append(tp)
         tp_levels = corrected_tps
         tp1 = tp_levels[0]
