@@ -316,43 +316,36 @@ export default function DashboardPage() {
         {/* RIGHT CONTENT COLUMN: Charts, Signals, Trading Panel & Orderbook (9 cols) */}
         <div className="lg:col-span-9 space-y-6">
           {workspaceTab === 'terminal' ? (
-            /* TAB 1: MAIN TERMINAL VIEW (Wide Chart, Order Book, Signals, News & Audit) */
+            /* TAB 1: MAIN TERMINAL VIEW (Full-Width Ultra Chart & Live Market Feed) */
             <>
-              <div className="grid grid-cols-1 xl:grid-cols-12 gap-6 items-start">
-                {/* Chart Area (8 cols) — Wide Clear View */}
-                <div className="xl:col-span-8 flex flex-col gap-6 justify-between">
-                  {chartMode === 'TradingViewDirect' && !isRextAsset ? (
-                    <TradingViewDirectChart
-                      symbol={symbol}
-                      timeframe={timeframe}
-                      currentPrice={currentPrice}
-                      onTimeframeChange={(tf) => setTimeframe(tf)}
-                    />
-                  ) : (
-                    <TradingChart
-                      key={`tc_${symbol}_${timeframe}`}
-                      symbol={symbol}
-                      timeframe={timeframe}
-                      onTimeframeChange={(tf) => setTimeframe(tf)}
-                      onLatestDataUpdate={handleDataUpdate}
-                    />
-                  )}
+              {/* Full-Width Chart & Signals Stream Area — Expands to full right edge */}
+              <div className="w-full flex flex-col gap-6">
+                {chartMode === 'TradingViewDirect' && !isRextAsset ? (
+                  <TradingViewDirectChart
+                    symbol={symbol}
+                    timeframe={timeframe}
+                    currentPrice={currentPrice}
+                    onTimeframeChange={(tf) => setTimeframe(tf)}
+                  />
+                ) : (
+                  <TradingChart
+                    key={`tc_${symbol}_${timeframe}`}
+                    symbol={symbol}
+                    timeframe={timeframe}
+                    onTimeframeChange={(tf) => setTimeframe(tf)}
+                    onLatestDataUpdate={handleDataUpdate}
+                  />
+                )}
 
-                  {/* Signals Stream & Telegram Broadcaster Component */}
-                  <div className="flex-1 flex flex-col">
-                    <SignalsStream
-                      symbol={symbol}
-                      timeframe={timeframe}
-                      onPriceUpdate={(p) => {
-                        if (p > 0) setCurrentPrice(p);
-                      }}
-                    />
-                  </div>
-                </div>
-
-                {/* Order Book Depth & OBI Gauge (4 cols) — Top-aligned flush with chart */}
-                <div className="xl:col-span-4">
-                  <OrderBookOBIGauge symbol={symbol} />
+                {/* Signals Stream & Telegram Broadcaster Component */}
+                <div className="w-full">
+                  <SignalsStream
+                    symbol={symbol}
+                    timeframe={timeframe}
+                    onPriceUpdate={(p) => {
+                      if (p > 0) setCurrentPrice(p);
+                    }}
+                  />
                 </div>
               </div>
 
@@ -372,27 +365,35 @@ export default function DashboardPage() {
               </div>
             </>
           ) : (
-            /* TAB 2: SEPARATE DEDICATED PAPER SIMULATION DESK */
+            /* TAB 2: SEPARATE DEDICATED PAPER SIMULATION & ORDERBOOK DESK */
             <div className="space-y-6">
-              <div className="bg-slate-900 border border-slate-800 p-4 rounded-xl flex items-center justify-between font-mono text-xs">
+              <div className="bg-slate-900 border border-slate-800 p-4 rounded-xl flex items-center justify-between font-mono text-xs shadow-xl">
                 <div className="flex items-center gap-2 text-white font-bold">
                   <Sparkles className="w-4 h-4 text-emerald-400" />
-                  <span>Paper Trading Simulation Execution Desk</span>
+                  <span>Paper Trading Simulation Execution Desk & Order Book Depth</span>
                 </div>
                 <button
                   onClick={() => setWorkspaceTab('terminal')}
-                  className="bg-blue-600/30 hover:bg-blue-600 text-blue-300 hover:text-white px-3 py-1.5 rounded-lg transition border border-blue-500/40"
+                  className="bg-blue-600/30 hover:bg-blue-600 text-blue-300 hover:text-white px-3 py-1.5 rounded-lg transition border border-blue-500/40 font-sans"
                 >
-                  ← Back to Chart & Terminal
+                  ← Back to Full-Width Chart & Terminal
                 </button>
               </div>
 
-              <PaperTradingPanel
-                symbol={symbol}
-                currentPrice={currentPrice}
-                onTradeClosed={handleTradeClosed}
-                externalParams={externalTradeParams}
-              />
+              {/* Side-by-Side Grid: Paper Trading Panel (7 cols) + Order Book & OBI Gauge (5 cols) */}
+              <div className="grid grid-cols-1 xl:grid-cols-12 gap-6 items-start">
+                <div className="xl:col-span-7">
+                  <PaperTradingPanel
+                    symbol={symbol}
+                    currentPrice={currentPrice}
+                    onTradeClosed={handleTradeClosed}
+                    externalParams={externalTradeParams}
+                  />
+                </div>
+                <div className="xl:col-span-5">
+                  <OrderBookOBIGauge symbol={symbol} />
+                </div>
+              </div>
 
               <div className="w-full">
                 <AuditReportSection refreshTrigger={refreshAuditCount} />
