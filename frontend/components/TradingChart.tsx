@@ -1,18 +1,8 @@
 'use client';
 
-import React, { useEffect, useRef, useState } from 'react';
-import { createChart, IChartApi, ISeriesApi, ColorType, LineStyle, IPriceLine } from 'lightweight-charts';
-import { RefreshCw, Zap, ShieldAlert, ChevronDown, Clock, Radio, ArrowUpRight, ArrowDownRight, Shield, Target, AlertOctagon } from 'lucide-react';
-import { API_BASE_URL, getWsUrl } from '@/lib/apiConfig';
-
-interface CandleData {
-  time: number;
-  open: number;
-  high: number;
-  low: number;
-  close: number;
-  volume: number;
-}
+import React, { useEffect, useRef, useState, useCallback } from 'react';
+import { RefreshCw, Zap, ChevronDown, Clock, Radio, ArrowUpRight, ArrowDownRight, Shield, Target, AlertOctagon } from 'lucide-react';
+import { API_BASE_URL } from '@/lib/apiConfig';
 
 interface TradingChartProps {
   symbol: string;
@@ -21,7 +11,11 @@ interface TradingChartProps {
   onLatestDataUpdate?: (data: { price: number; support: number; resistance: number }) => void;
 }
 
-const HARARE_TZ_OFFSET_SEC = 2 * 3600; // Africa/Harare (CAT / UTC+2)
+declare global {
+  interface Window {
+    TradingView: any;
+  }
+}
 
 const QUICK_TIMEFRAMES = ['1s', '1m', '5m', '15m', '1h', '4h', '1d'];
 
@@ -65,6 +59,99 @@ const INTERVAL_CATEGORIES = [
   },
 ];
 
+// ── Map symbols to TradingView ticker format (identical to TradingViewDirectChart) ──
+const getTradingViewSymbol = (sym: string): string => {
+  const s = sym.toUpperCase().replace(' ', '').replace('/', '').replace('_', '');
+  if (s.includes('XAU') || s.includes('GOLD')) return 'OANDA:XAUUSD';
+  if (s.includes('PAXG')) return 'BINANCE:PAXGUSDT';
+  if (s.includes('EURUSD')) return 'OANDA:EURUSD';
+  if (s.includes('GBPUSD')) return 'OANDA:GBPUSD';
+  if (s.includes('USDJPY')) return 'OANDA:USDJPY';
+  if (s.includes('AUDUSD')) return 'OANDA:AUDUSD';
+  if (s.includes('USDCAD')) return 'OANDA:USDCAD';
+  if (s.includes('USDCHF')) return 'OANDA:USDCHF';
+  if (s.includes('NZDUSD')) return 'OANDA:NZDUSD';
+  if (s.includes('BTC')) return 'BINANCE:BTCUSDT';
+  if (s.includes('ETH')) return 'BINANCE:ETHUSDT';
+  if (s.includes('SOL')) return 'BINANCE:SOLUSDT';
+  if (s.includes('REXT')) return 'GATEIO:REXTUSDT';
+  return `OANDA:${s}`;
+};
+
+const getTradingViewInterval = (tf: string): string => {
+  if (tf === '1s') return '1';
+  if (tf === '1m') return '1';
+  if (tf === '2m') return '3';
+  if (tf === '3m') return '3';
+  if (tf === '5m') return '5';
+  if (tf === '15m') return '15';
+  if (tf === '30m') return '30';
+  if (tf === '45m') return '30';
+  if (tf === '1h') return '60';
+  if (tf === '2h') return '120';
+  if (tf === '4h') return '240';
+  if (tf === '1d') return 'D';
+  if (tf === '1w') return 'W';
+  if (tf === '1M') return 'M';
+  return '5';
+};
+
+// ── Signal Price Line Overlay (absolute-positioned labels over the chart) ──
+interface SignalLine {
+  label: string;
+  price: number;
+  color: string;
+  borderColor: string;
+  icon: string;
+  dashed?: boolean;
+}
+
+function SignalOverlay({ lines, chartHeight }: { lines: SignalLine[]; chartHeight: number }) {
+  if (!lines.length) return null;
+
+  // Calculate price range from the lines to position them proportionally
+  const prices = lines.map((l) => l.price);
+  const minPrice = Math.min(...prices);
+  const maxPrice = Math.max(...prices);
+  const range = maxPrice - minPrice || 1;
+  const padding = range * 0.15; // 15% padding top/bottom
+
+  return (
+    <div className="absolute inset-0 pointer-events-none z-10 overflow-hidden">
+      {lines.map((line, i) => {
+        // Map price to Y position (inverted: high price = top)
+        const pct = 1 - (line.price - (minPrice - padding)) / (range + 2 * padding);
+        const top = Math.max(4, Math.min(chartHeight - 24, pct * chartHeight));
+
+        return (
+          <div key={i} className="absolute left-0 right-0" style={{ top: `${top}px` }}>
+            {/* Horizontal line */}
+            <div
+              className="absolute left-0 right-16 h-px"
+              style={{
+                backgroundColor: line.color,
+                opacity: 0.7,
+                borderTop: line.dashed ? `1px dashed ${line.color}` : undefined,
+              }}
+            />
+            {/* Price label */}
+            <div
+              className="absolute right-0 px-2 py-0.5 text-[10px] font-mono font-bold rounded-l-md whitespace-nowrap"
+              style={{
+                backgroundColor: line.color,
+                color: '#fff',
+                transform: 'translateY(-50%)',
+              }}
+            >
+              {line.icon} {line.label}: ${line.price.toFixed(2)}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 export default function TradingChart({
   symbol,
   timeframe,
@@ -72,377 +159,176 @@ export default function TradingChart({
   onLatestDataUpdate,
 }: TradingChartProps) {
   const chartContainerRef = useRef<HTMLDivElement>(null);
-  const chartRef = useRef<IChartApi | null>(null);
-  const candlestickSeriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
-  const volumeSeriesRef = useRef<ISeriesApi<'Histogram'> | null>(null);
-  const priceLinesRef = useRef<IPriceLine[]>([]);
-  const lastBarTimeRef = useRef<number>(0);
+  const widgetIdRef = useRef<string>(`tv_signal_widget_${Math.floor(Math.random() * 1000000)}`);
 
-  const [initialLoading, setInitialLoading] = useState<boolean>(false); // 0ms Instant Flash Load
-  const [error, setError] = useState<string | null>(null);
-  const [latestPrice, setLatestPrice] = useState<number>(4310.37);
-  const [supportLevel, setSupportLevel] = useState<number>(4280.0);
-  const [resistanceLevel, setResistanceLevel] = useState<number>(4330.0);
+  const [latestPrice, setLatestPrice] = useState<number>(0);
+  const [supportLevel, setSupportLevel] = useState<number>(0);
+  const [resistanceLevel, setResistanceLevel] = useState<number>(0);
   const [wsConnected, setWsConnected] = useState<boolean>(false);
   const [showDropdown, setShowDropdown] = useState<boolean>(false);
 
   const [signalType, setSignalType] = useState<string>('BUY/LONG');
   const [tradeParams, setTradeParams] = useState<any>(null);
-  const [sdZones, setSdZones] = useState<any>(null);
 
   const isHighValueAsset = latestPrice > 10.0;
   const precision = isHighValueAsset ? 2 : 4;
 
   const buyEntryPrice = latestPrice;
-  const stopLossPrice = Number((supportLevel * 0.985).toFixed(precision));
-  const riskAmount = Math.max(0.0001, buyEntryPrice - stopLossPrice);
-  const takeProfitPrice = Number((buyEntryPrice + (riskAmount * 1.5)).toFixed(precision));
+  const stopLossPrice = tradeParams?.stop_loss ?? Number((supportLevel * 0.985).toFixed(precision));
+  const riskAmount = Math.max(0.0001, Math.abs(buyEntryPrice - stopLossPrice));
+  const takeProfitPrice = tradeParams?.tp1 ?? Number((buyEntryPrice + riskAmount * 1.5).toFixed(precision));
 
-  const clearPriceLines = () => {
-    if (candlestickSeriesRef.current && priceLinesRef.current.length > 0) {
-      for (const line of priceLinesRef.current) {
-        try {
-          candlestickSeriesRef.current.removePriceLine(line);
-        } catch (e) {
-          // Ignore
+  // ── Fetch signal data from backend (for overlay lines, NOT for chart candles) ──
+  const fetchSignalData = useCallback(async () => {
+    try {
+      const sigRes = await fetch(`${API_BASE_URL}/api/signals/check`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ symbol, timeframe }),
+      });
+      if (sigRes.ok) {
+        const sigData = await sigRes.json();
+        if (sigData.analysis) {
+          setSignalType(sigData.analysis.signal_type);
+          setTradeParams(sigData.analysis.trade_params);
+          setLatestPrice(sigData.analysis.latest_price);
+          setSupportLevel(sigData.analysis.support);
+          setResistanceLevel(sigData.analysis.resistance);
+
+          if (onLatestDataUpdate) {
+            onLatestDataUpdate({
+              price: sigData.analysis.latest_price,
+              support: sigData.analysis.support,
+              resistance: sigData.analysis.resistance,
+            });
+          }
         }
       }
-      priceLinesRef.current = [];
-    }
-  };
-
-  const drawTechnicalPriceLines = (supp: number, resis: number, price: number, sigType?: string, tp?: any, zones?: any) => {
-    if (!candlestickSeriesRef.current) return;
-    clearPriceLines();
-
-    const isSell = sigType === 'SELL/SHORT';
-    const sl = tp?.stop_loss ?? (isSell ? Number((resis * 1.015).toFixed(precision)) : Number((supp * 0.985).toFixed(precision)));
-    const takeProfit = tp?.tp1 ?? (isSell ? Number((price - Math.abs(price - sl) * 1.5).toFixed(precision)) : Number((price + Math.abs(price - sl) * 1.5).toFixed(precision)));
-
-    try {
-      // 🔴 Resistance Line
-      const resLine = candlestickSeriesRef.current.createPriceLine({
-        price: resis,
-        color: '#EF4444',
-        lineWidth: 2,
-        lineStyle: LineStyle.Dashed,
-        axisLabelVisible: true,
-        title: `🔴 RESISTANCE: $${resis.toFixed(precision)}`,
-      });
-
-      // 🟢 Support Line
-      const suppLine = candlestickSeriesRef.current.createPriceLine({
-        price: supp,
-        color: '#10B981',
-        lineWidth: 2,
-        lineStyle: LineStyle.Dashed,
-        axisLabelVisible: true,
-        title: `🟢 SUPPORT: $${supp.toFixed(precision)}`,
-      });
-
-      // Entry Line
-      const entryLine = candlestickSeriesRef.current.createPriceLine({
-        price: price,
-        color: isSell ? '#EF4444' : '#3B82F6',
-        lineWidth: 2,
-        lineStyle: LineStyle.Solid,
-        axisLabelVisible: true,
-        title: isSell ? `🔴 SELL ENTRY: $${price.toFixed(precision)}` : `🔵 BUY ENTRY: $${price.toFixed(precision)}`,
-      });
-
-      // 🛑 Stop Loss Line
-      const slLine = candlestickSeriesRef.current.createPriceLine({
-        price: sl,
-        color: '#F43F5E',
-        lineWidth: 2,
-        lineStyle: LineStyle.Solid,
-        axisLabelVisible: true,
-        title: `🛑 STOP LOSS: $${sl.toFixed(precision)}`,
-      });
-
-      // 🎯 Take Profit Line
-      const tpLine = candlestickSeriesRef.current.createPriceLine({
-        price: takeProfit,
-        color: '#10B981',
-        lineWidth: 2,
-        lineStyle: LineStyle.Solid,
-        axisLabelVisible: true,
-        title: `🎯 TAKE PROFIT: $${takeProfit.toFixed(precision)}`,
-      });
-
-      priceLinesRef.current = [resLine, suppLine, entryLine, slLine, tpLine];
-
-      // 📦 Supply & Demand Zones
-      if (zones?.supply) {
-        zones.supply.forEach((zone: any) => {
-          const l1 = candlestickSeriesRef.current!.createPriceLine({
-            price: zone.top,
-            color: 'rgba(239, 68, 68, 0.4)',
-            lineWidth: 2,
-            lineStyle: LineStyle.Solid,
-            axisLabelVisible: false,
-            title: 'Supply Zone',
-          });
-          const l2 = candlestickSeriesRef.current!.createPriceLine({
-            price: zone.bottom,
-            color: 'rgba(239, 68, 68, 0.4)',
-            lineWidth: 2,
-            lineStyle: LineStyle.Solid,
-            axisLabelVisible: false,
-            title: '',
-          });
-          priceLinesRef.current.push(l1, l2);
-        });
-      }
-
-      if (zones?.demand) {
-        zones.demand.forEach((zone: any) => {
-          const l1 = candlestickSeriesRef.current!.createPriceLine({
-            price: zone.top,
-            color: 'rgba(59, 130, 246, 0.4)',
-            lineWidth: 2,
-            lineStyle: LineStyle.Solid,
-            axisLabelVisible: false,
-            title: 'Demand Zone',
-          });
-          const l2 = candlestickSeriesRef.current!.createPriceLine({
-            price: zone.bottom,
-            color: 'rgba(59, 130, 246, 0.4)',
-            lineWidth: 2,
-            lineStyle: LineStyle.Solid,
-            axisLabelVisible: false,
-            title: '',
-          });
-          priceLinesRef.current.push(l1, l2);
-        });
-      }
-
     } catch (e) {
-      console.error('Failed to draw price lines:', e);
+      // Backend offline — signal overlays won't show but chart still works from TradingView
     }
-  };
+  }, [symbol, timeframe, onLatestDataUpdate]);
 
-  const fetchInitialHistory = async () => {
-    setError(null);
+  // ── Also try a simple candle fetch for price if signals endpoint fails ──
+  const fetchPriceData = useCallback(async () => {
     try {
-      const res = await fetch(`${API_BASE_URL}/api/candles?symbol=${encodeURIComponent(symbol)}&timeframe=${timeframe}&limit=100`);
-      if (!res.ok) {
-        throw new Error(`API error: ${res.statusText}`);
-      }
-      const data = await res.json();
+      const res = await fetch(
+        `${API_BASE_URL}/api/candles?symbol=${encodeURIComponent(symbol)}&timeframe=${timeframe}&limit=2`
+      );
+      if (res.ok) {
+        const data = await res.json();
+        if (data.latest_price && data.latest_price > 0) {
+          setLatestPrice(data.latest_price);
+          setSupportLevel(data.support);
+          setResistanceLevel(data.resistance);
 
-      setLatestPrice(data.latest_price);
-      setSupportLevel(data.support);
-      setResistanceLevel(data.resistance);
-
-      if (onLatestDataUpdate) {
-        onLatestDataUpdate({
-          price: data.latest_price,
-          support: data.support,
-          resistance: data.resistance,
-        });
-      }
-
-      let fetchedSigType = 'BUY/LONG';
-      let fetchedParams = null;
-      let fetchedZones = null;
-      try {
-        const sigRes = await fetch(`${API_BASE_URL}/api/signals/check`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ symbol, timeframe }),
-        });
-        if (sigRes.ok) {
-          const sigData = await sigRes.json();
-          if (sigData.analysis) {
-            fetchedSigType = sigData.analysis.signal_type;
-            fetchedParams = sigData.analysis.trade_params;
-            fetchedZones = sigData.analysis.sd_zones;
-            setSignalType(sigData.analysis.signal_type);
-            setTradeParams(sigData.analysis.trade_params);
-            setSdZones(sigData.analysis.sd_zones);
+          if (onLatestDataUpdate) {
+            onLatestDataUpdate({
+              price: data.latest_price,
+              support: data.support,
+              resistance: data.resistance,
+            });
           }
         }
-      } catch (e) {
-        // Quiet fail
       }
+    } catch (_) {}
+  }, [symbol, timeframe, onLatestDataUpdate]);
 
-      if (candlestickSeriesRef.current && data.candles && data.candles.length > 0) {
-        const sortedCandles = [...data.candles].sort((a: any, b: any) => a.time - b.time);
-        
-        const uniqueCandles: CandleData[] = [];
-        const seenTimes = new Set();
-        for (const c of sortedCandles) {
-          const rawSec = c.time > 20000000000 ? Math.floor(c.time / 1000) : c.time;
-          const harareSec = rawSec + HARARE_TZ_OFFSET_SEC;
-          if (!seenTimes.has(harareSec)) {
-            seenTimes.add(harareSec);
-            uniqueCandles.push({ ...c, time: harareSec });
-          }
-        }
+  // ── Initialize TradingView widget (IDENTICAL to TradingViewDirectChart) ──
+  useEffect(() => {
+    const scriptId = 'tradingview-widget-script';
+    let script = document.getElementById(scriptId) as HTMLScriptElement;
 
-        if (uniqueCandles.length > 0) {
-          lastBarTimeRef.current = uniqueCandles[uniqueCandles.length - 1].time;
-        }
+    const tvSymbol = getTradingViewSymbol(symbol);
 
-        candlestickSeriesRef.current.setData(uniqueCandles as any);
-
-        if (volumeSeriesRef.current) {
-          const volumeData = uniqueCandles.map((c) => ({
-            time: c.time as any,
-            value: c.volume,
-            color: c.close >= c.open ? 'rgba(16, 185, 129, 0.4)' : 'rgba(239, 68, 68, 0.4)',
-          }));
-          volumeSeriesRef.current.setData(volumeData as any);
-        }
-
-        drawTechnicalPriceLines(data.support, data.resistance, data.latest_price, fetchedSigType, fetchedParams, fetchedZones);
-        chartRef.current?.timeScale().fitContent();
+    const initWidget = () => {
+      const container = chartContainerRef.current;
+      if (window.TradingView && container) {
+        container.innerHTML = `<div id="${widgetIdRef.current}" style="width:100%;height:100%;"></div>`;
+        new window.TradingView.widget({
+          autosize: true,
+          symbol: tvSymbol,
+          interval: getTradingViewInterval(timeframe),
+          timezone: 'Africa/Johannesburg',
+          theme: 'dark',
+          style: '1',
+          locale: 'en',
+          toolbar_bg: '#0F172A',
+          enable_publishing: false,
+          allow_symbol_change: false,
+          hide_side_toolbar: true,
+          hide_top_toolbar: true,
+          details: false,
+          hotlist: false,
+          calendar: false,
+          container_id: widgetIdRef.current,
+        });
       }
-    } catch (err: any) {
-      console.error('Failed to fetch candles:', err);
-      setError('Backend connection error. Make sure FastAPI server is running on port 8000.');
+    };
+
+    if (!script) {
+      script = document.createElement('script');
+      script.id = scriptId;
+      script.src = 'https://s3.tradingview.com/tv.js';
+      script.async = true;
+      script.onload = initWidget;
+      document.head.appendChild(script);
+    } else {
+      const timer = setTimeout(initWidget, 50);
+      return () => clearTimeout(timer);
     }
-  };
+  }, [symbol, timeframe]);
 
+  // ── Fetch signals on mount and on interval ──
   useEffect(() => {
-    if (!chartContainerRef.current) return;
+    fetchSignalData();
+    fetchPriceData();
 
-    const chart = createChart(chartContainerRef.current, {
-      layout: {
-        background: { type: ColorType.Solid, color: '#0F172A' },
-        textColor: '#94A3B8',
-      },
-      grid: {
-        vertLines: { color: 'rgba(51, 65, 85, 0.4)' },
-        horzLines: { color: 'rgba(51, 65, 85, 0.4)' },
-      },
-      width: chartContainerRef.current.clientWidth,
-      height: 420,
-      rightPriceScale: {
-        borderColor: '#334155',
-        scaleMargins: { top: 0.1, bottom: 0.25 },
-      },
-      timeScale: {
-        borderColor: '#334155',
-        timeVisible: true,
-        secondsVisible: true,
-        shiftVisibleRangeOnNewBar: true,
-        rightOffset: 3,
-      },
-      crosshair: {
-        vertLine: { color: '#64748B', style: 1 },
-        horzLine: { color: '#64748B', style: 1 },
-      },
-    });
+    const interval = setInterval(() => {
+      fetchSignalData();
+    }, 5000);
 
-    const candlestickSeries = chart.addCandlestickSeries({
-      upColor: '#10B981',
-      downColor: '#EF4444',
-      borderVisible: false,
-      wickUpColor: '#10B981',
-      wickDownColor: '#EF4444',
-    });
+    return () => clearInterval(interval);
+  }, [fetchSignalData, fetchPriceData]);
 
-    const volumeSeries = chart.addHistogramSeries({
-      color: '#3B82F6',
-      priceFormat: { type: 'volume' },
-      priceScaleId: '',
-    } as any);
-
-    volumeSeries.priceScale().applyOptions({
-      scaleMargins: { top: 0.8, bottom: 0 },
-    });
-
-    chartRef.current = chart;
-    candlestickSeriesRef.current = candlestickSeries;
-    volumeSeriesRef.current = volumeSeries;
-
-    const handleResize = () => {
-      if (chartContainerRef.current && chartRef.current) {
-        chartRef.current.applyOptions({
-          width: chartContainerRef.current.clientWidth,
-        });
-      }
-    };
-
-    window.addEventListener('resize', handleResize);
-
-    return () => {
-      window.removeEventListener('resize', handleResize);
-      chart.remove();
-    };
-  }, []);
-
+  // ── WebSocket for live price updates ──
   useEffect(() => {
-    fetchInitialHistory();
-
     let ws: WebSocket | null = null;
     let reconnectTimer: NodeJS.Timeout | null = null;
 
     const connectWebSocket = () => {
       try {
+        const { getWsUrl } = require('@/lib/apiConfig');
         const wsUrl = getWsUrl(`/ws/candles/${encodeURIComponent(symbol)}`);
         ws = new WebSocket(wsUrl);
 
-        ws.onopen = () => {
-          setWsConnected(true);
-        };
+        ws.onopen = () => setWsConnected(true);
 
         ws.onmessage = (event) => {
           try {
             const data = JSON.parse(event.data);
-            if (data.price) {
+            if (data.price && data.price > 0) {
               setLatestPrice(data.price);
-              setSupportLevel(data.support);
-              setResistanceLevel(data.resistance);
+              if (data.support) setSupportLevel(data.support);
+              if (data.resistance) setResistanceLevel(data.resistance);
 
               if (onLatestDataUpdate) {
                 onLatestDataUpdate({
                   price: data.price,
-                  support: data.support,
-                  resistance: data.resistance,
-                });
-              }
-
-              const rawSec = data.time > 20000000000 ? Math.floor(data.time / 1000) : data.time;
-              const harareSec = rawSec + HARARE_TZ_OFFSET_SEC;
-
-              const validTime = Math.max(harareSec, lastBarTimeRef.current);
-              lastBarTimeRef.current = validTime;
-
-              if (candlestickSeriesRef.current) {
-                candlestickSeriesRef.current.update({
-                  time: validTime as any,
-                  open: data.open,
-                  high: data.high,
-                  low: data.low,
-                  close: data.price,
-                });
-              }
-
-              if (volumeSeriesRef.current && data.volume) {
-                volumeSeriesRef.current.update({
-                  time: validTime as any,
-                  value: data.volume,
-                  color: data.price >= data.open ? 'rgba(16, 185, 129, 0.4)' : 'rgba(239, 68, 68, 0.4)',
+                  support: data.support || supportLevel,
+                  resistance: data.resistance || resistanceLevel,
                 });
               }
             }
-          } catch (err) {
-            // Quiet fail
-          }
+          } catch (_) {}
         };
 
-        ws.onerror = () => {
-          setWsConnected(false);
-        };
-
+        ws.onerror = () => setWsConnected(false);
         ws.onclose = () => {
           setWsConnected(false);
-          reconnectTimer = setTimeout(() => connectWebSocket(), 2000);
+          reconnectTimer = setTimeout(connectWebSocket, 3000);
         };
-      } catch (e) {
+      } catch (_) {
         setWsConnected(false);
       }
     };
@@ -453,7 +339,30 @@ export default function TradingChart({
       if (reconnectTimer) clearTimeout(reconnectTimer);
       if (ws) ws.close();
     };
-  }, [timeframe, symbol]);
+  }, [symbol]);
+
+  // ── Build signal overlay lines ──
+  const isSell = signalType === 'SELL/SHORT';
+  const sl = tradeParams?.stop_loss ?? stopLossPrice;
+  const tp = tradeParams?.tp1 ?? takeProfitPrice;
+
+  const signalLines: SignalLine[] = [];
+
+  if (latestPrice > 0 && supportLevel > 0 && resistanceLevel > 0) {
+    signalLines.push(
+      { label: 'RESISTANCE', price: resistanceLevel, color: '#EF4444', borderColor: '#EF4444', icon: '🔴', dashed: true },
+      { label: 'SUPPORT', price: supportLevel, color: '#10B981', borderColor: '#10B981', icon: '🟢', dashed: true },
+      {
+        label: isSell ? 'SELL ENTRY' : 'BUY ENTRY',
+        price: latestPrice,
+        color: isSell ? '#EF4444' : '#3B82F6',
+        borderColor: isSell ? '#EF4444' : '#3B82F6',
+        icon: isSell ? '🔴' : '🔵',
+      },
+      { label: 'STOP LOSS', price: sl, color: '#F43F5E', borderColor: '#F43F5E', icon: '🛑' },
+      { label: 'TAKE PROFIT', price: tp, color: '#10B981', borderColor: '#10B981', icon: '🎯' },
+    );
+  }
 
   return (
     <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 shadow-xl space-y-3">
@@ -466,7 +375,7 @@ export default function TradingChart({
           </div>
           <div className="flex items-center gap-2">
             <span className="text-2xl font-bold font-mono text-white">
-              ${latestPrice.toFixed(precision)}
+              ${latestPrice > 0 ? latestPrice.toFixed(precision) : '---'}
             </span>
             <span className={`flex items-center gap-1.5 text-xs border px-2.5 py-0.5 rounded-full font-mono font-bold transition ${
               wsConnected
@@ -474,7 +383,7 @@ export default function TradingChart({
                 : 'bg-amber-950 text-amber-400 border-amber-800/80'
             }`}>
               <Radio className={`w-3.5 h-3.5 ${wsConnected ? 'animate-pulse text-emerald-400' : 'text-amber-400'}`} />
-              <span>{wsConnected ? 'Flash WebSocket Stream' : 'Connecting...'}</span>
+              <span>{wsConnected ? 'Connected' : 'Connecting...'}</span>
             </span>
           </div>
         </div>
@@ -540,8 +449,8 @@ export default function TradingChart({
           </div>
 
           <button
-            onClick={fetchInitialHistory}
-            title="Refresh chart data"
+            onClick={() => { fetchSignalData(); fetchPriceData(); }}
+            title="Refresh signal data"
             className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded-md transition border-l border-slate-800 pl-1"
           >
             <RefreshCw className="w-3.5 h-3.5 text-blue-400" />
@@ -555,7 +464,7 @@ export default function TradingChart({
           <div className="bg-slate-950 p-2 rounded-lg border border-rose-800/60 flex items-center justify-between">
             <div>
               <span className="text-rose-400 block text-[10px] font-bold">🔴 WHEN TO SELL / SHORT (ENTRY)</span>
-              <span className="text-white font-bold">${latestPrice.toFixed(precision)}</span>
+              <span className="text-white font-bold">${latestPrice > 0 ? latestPrice.toFixed(precision) : '---'}</span>
             </div>
             <ArrowDownRight className="w-4 h-4 text-rose-400" />
           </div>
@@ -563,7 +472,7 @@ export default function TradingChart({
           <div className="bg-slate-950 p-2 rounded-lg border border-rose-800/60 flex items-center justify-between">
             <div>
               <span className="text-rose-400 block text-[10px] font-bold">🛑 STOP LOSS LINE</span>
-              <span className="text-rose-300 font-bold">${(tradeParams?.stop_loss ?? stopLossPrice).toFixed(precision)}</span>
+              <span className="text-rose-300 font-bold">${sl > 0 ? sl.toFixed(precision) : '---'}</span>
             </div>
             <Shield className="w-4 h-4 text-rose-400" />
           </div>
@@ -571,7 +480,7 @@ export default function TradingChart({
           <div className="bg-slate-950 p-2 rounded-lg border border-emerald-800/60 flex items-center justify-between">
             <div>
               <span className="text-emerald-400 block text-[10px] font-bold">🎯 TAKE PROFIT (BUY BACK)</span>
-              <span className="text-emerald-300 font-bold">${(tradeParams?.tp1 ?? takeProfitPrice).toFixed(precision)}</span>
+              <span className="text-emerald-300 font-bold">${tp > 0 ? tp.toFixed(precision) : '---'}</span>
             </div>
             <Target className="w-4 h-4 text-emerald-400" />
           </div>
@@ -589,7 +498,7 @@ export default function TradingChart({
           <div className="bg-slate-950 p-2 rounded-lg border border-blue-800/60 flex items-center justify-between">
             <div>
               <span className="text-blue-400 block text-[10px] font-bold">🔵 WHEN TO BUY (ENTRY)</span>
-              <span className="text-white font-bold">${buyEntryPrice.toFixed(precision)}</span>
+              <span className="text-white font-bold">${latestPrice > 0 ? latestPrice.toFixed(precision) : '---'}</span>
             </div>
             <ArrowUpRight className="w-4 h-4 text-blue-400" />
           </div>
@@ -597,7 +506,7 @@ export default function TradingChart({
           <div className="bg-slate-950 p-2 rounded-lg border border-rose-800/60 flex items-center justify-between">
             <div>
               <span className="text-rose-400 block text-[10px] font-bold">🛑 STOP LOSS LINE</span>
-              <span className="text-rose-300 font-bold">${(tradeParams?.stop_loss ?? stopLossPrice).toFixed(precision)}</span>
+              <span className="text-rose-300 font-bold">${sl > 0 ? sl.toFixed(precision) : '---'}</span>
             </div>
             <Shield className="w-4 h-4 text-rose-400" />
           </div>
@@ -605,7 +514,7 @@ export default function TradingChart({
           <div className="bg-slate-950 p-2 rounded-lg border border-emerald-800/60 flex items-center justify-between">
             <div>
               <span className="text-emerald-400 block text-[10px] font-bold">🎯 TAKE PROFIT (SELL)</span>
-              <span className="text-emerald-300 font-bold">${(tradeParams?.tp1 ?? takeProfitPrice).toFixed(precision)}</span>
+              <span className="text-emerald-300 font-bold">${tp > 0 ? tp.toFixed(precision) : '---'}</span>
             </div>
             <Target className="w-4 h-4 text-emerald-400" />
           </div>
@@ -620,21 +529,10 @@ export default function TradingChart({
         </div>
       )}
 
-      {/* Chart Canvas (Flash 0ms Load) */}
+      {/* Chart Canvas — TradingView widget (same OANDA feed as Live Chart) with signal overlay */}
       <div className="relative w-full h-[420px] rounded-lg overflow-hidden border border-slate-950">
-        {error && (
-          <div className="absolute inset-0 bg-slate-900/90 z-10 flex flex-col items-center justify-center p-4 text-center">
-            <ShieldAlert className="w-8 h-8 text-rose-500 mb-2" />
-            <p className="text-rose-400 font-semibold text-sm">{error}</p>
-            <button
-              onClick={fetchInitialHistory}
-              className="mt-3 px-4 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold rounded-lg"
-            >
-              Retry Connection
-            </button>
-          </div>
-        )}
         <div ref={chartContainerRef} className="w-full h-full" />
+        <SignalOverlay lines={signalLines} chartHeight={420} />
       </div>
     </div>
   );
