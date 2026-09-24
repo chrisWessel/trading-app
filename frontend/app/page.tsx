@@ -98,6 +98,8 @@ export default function DashboardPage() {
     };
   }, [symbol, timeframe]);
 
+  const [workspaceTab, setWorkspaceTab] = useState<'terminal' | 'paperDesk'>('terminal');
+
   const filteredAssets = activeCategory === 'All'
     ? PRESET_ASSETS
     : PRESET_ASSETS.filter((a) => a.category === activeCategory);
@@ -135,6 +137,7 @@ export default function DashboardPage() {
 
   const handleAutoFillTrade = (params: any) => {
     setExternalTradeParams(params);
+    setWorkspaceTab('paperDesk');
   };
 
   return (
@@ -158,8 +161,34 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        {/* System Status Badges & Sizing Guide Launcher */}
+        {/* System Status Badges, Workspace Switcher & Sizing Guide Launcher */}
         <div className="flex flex-wrap items-center gap-3 text-xs font-mono">
+          {/* Workspace View Mode Tab Switcher */}
+          <div className="flex items-center gap-1 bg-slate-950 p-1 rounded-lg border border-slate-800">
+            <button
+              onClick={() => setWorkspaceTab('terminal')}
+              className={`px-3 py-1.5 rounded-md font-bold transition flex items-center gap-1.5 ${
+                workspaceTab === 'terminal'
+                  ? 'bg-blue-600 text-white shadow-md shadow-blue-900/50'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              <Monitor className="w-3.5 h-3.5" />
+              <span>📊 Main Terminal View</span>
+            </button>
+            <button
+              onClick={() => setWorkspaceTab('paperDesk')}
+              className={`px-3 py-1.5 rounded-md font-bold transition flex items-center gap-1.5 ${
+                workspaceTab === 'paperDesk'
+                  ? 'bg-emerald-600 text-white shadow-md shadow-emerald-900/50'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              <Sparkles className="w-3.5 h-3.5 text-amber-300" />
+              <span>📝 Paper Simulation Desk</span>
+            </button>
+          </div>
+
           <button
             onClick={() => setShowPositionGuide(true)}
             className="flex items-center gap-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-bold px-3.5 py-1.5 rounded-lg shadow-lg shadow-blue-900/50 transition border border-blue-400"
@@ -286,42 +315,78 @@ export default function DashboardPage() {
 
         {/* RIGHT CONTENT COLUMN: Charts, Signals, Trading Panel & Orderbook (9 cols) */}
         <div className="lg:col-span-9 space-y-6">
-          {/* Main Chart & Signals Grid */}
-          <div className="grid grid-cols-1 xl:grid-cols-12 gap-6 items-stretch">
-            {/* Chart Area (8 cols) */}
-            <div className="xl:col-span-8 flex flex-col gap-6 justify-between">
-              {chartMode === 'TradingViewDirect' && !isRextAsset ? (
-                <TradingViewDirectChart
-                  symbol={symbol}
-                  timeframe={timeframe}
-                  currentPrice={currentPrice}
-                  onTimeframeChange={(tf) => setTimeframe(tf)}
-                />
-              ) : (
-                <TradingChart
-                  key={`tc_${symbol}_${timeframe}`}
-                  symbol={symbol}
-                  timeframe={timeframe}
-                  onTimeframeChange={(tf) => setTimeframe(tf)}
-                  onLatestDataUpdate={handleDataUpdate}
-                />
-              )}
+          {workspaceTab === 'terminal' ? (
+            /* TAB 1: MAIN TERMINAL VIEW (Wide Chart, Order Book, Signals, News & Audit) */
+            <>
+              <div className="grid grid-cols-1 xl:grid-cols-12 gap-6 items-start">
+                {/* Chart Area (8 cols) — Wide Clear View */}
+                <div className="xl:col-span-8 flex flex-col gap-6 justify-between">
+                  {chartMode === 'TradingViewDirect' && !isRextAsset ? (
+                    <TradingViewDirectChart
+                      symbol={symbol}
+                      timeframe={timeframe}
+                      currentPrice={currentPrice}
+                      onTimeframeChange={(tf) => setTimeframe(tf)}
+                    />
+                  ) : (
+                    <TradingChart
+                      key={`tc_${symbol}_${timeframe}`}
+                      symbol={symbol}
+                      timeframe={timeframe}
+                      onTimeframeChange={(tf) => setTimeframe(tf)}
+                      onLatestDataUpdate={handleDataUpdate}
+                    />
+                  )}
 
-              {/* Signals Stream & Telegram Broadcaster Component */}
-              <div className="flex-1 flex flex-col">
-                <SignalsStream
-                  symbol={symbol}
-                  timeframe={timeframe}
-                  onPriceUpdate={(p) => {
-                    if (p > 0) setCurrentPrice(p);
-                  }}
-                />
+                  {/* Signals Stream & Telegram Broadcaster Component */}
+                  <div className="flex-1 flex flex-col">
+                    <SignalsStream
+                      symbol={symbol}
+                      timeframe={timeframe}
+                      onPriceUpdate={(p) => {
+                        if (p > 0) setCurrentPrice(p);
+                      }}
+                    />
+                  </div>
+                </div>
+
+                {/* Order Book Depth & OBI Gauge (4 cols) — Top-aligned flush with chart */}
+                <div className="xl:col-span-4">
+                  <OrderBookOBIGauge symbol={symbol} />
+                </div>
               </div>
-            </div>
 
-            {/* Trading & Order Book Column (4 cols) */}
-            <div className="xl:col-span-4 flex flex-col gap-6 justify-between">
-              {/* Paper Trading Execution Panel */}
+              {/* Trend & Candle Pattern Panel */}
+              <div className="w-full">
+                <TrendCandlePanel symbol={symbol} timeframe={timeframe} />
+              </div>
+
+              {/* Real-Time Financial & Crypto Market News Section */}
+              <div className="w-full">
+                <MarketNewsSection symbol={symbol} />
+              </div>
+
+              {/* Bottom Full-Width Section: SQLite Audit Log & PDF Generator */}
+              <div className="w-full">
+                <AuditReportSection refreshTrigger={refreshAuditCount} />
+              </div>
+            </>
+          ) : (
+            /* TAB 2: SEPARATE DEDICATED PAPER SIMULATION DESK */
+            <div className="space-y-6">
+              <div className="bg-slate-900 border border-slate-800 p-4 rounded-xl flex items-center justify-between font-mono text-xs">
+                <div className="flex items-center gap-2 text-white font-bold">
+                  <Sparkles className="w-4 h-4 text-emerald-400" />
+                  <span>Paper Trading Simulation Execution Desk</span>
+                </div>
+                <button
+                  onClick={() => setWorkspaceTab('terminal')}
+                  className="bg-blue-600/30 hover:bg-blue-600 text-blue-300 hover:text-white px-3 py-1.5 rounded-lg transition border border-blue-500/40"
+                >
+                  ← Back to Chart & Terminal
+                </button>
+              </div>
+
               <PaperTradingPanel
                 symbol={symbol}
                 currentPrice={currentPrice}
@@ -329,27 +394,11 @@ export default function DashboardPage() {
                 externalParams={externalTradeParams}
               />
 
-              {/* Order Book Depth & OBI Gauge */}
-              <div className="flex-1 flex flex-col">
-                <OrderBookOBIGauge symbol={symbol} />
+              <div className="w-full">
+                <AuditReportSection refreshTrigger={refreshAuditCount} />
               </div>
             </div>
-          </div>
-
-          {/* Real-Time Financial & Crypto Market News Section */}
-          <div className="w-full">
-            <TrendCandlePanel symbol={symbol} timeframe={timeframe} />
-          </div>
-
-          {/* Real-Time Financial & Crypto Market News Section */}
-          <div className="w-full">
-            <MarketNewsSection symbol={symbol} />
-          </div>
-
-          {/* Bottom Full-Width Section: SQLite Audit Log & PDF Generator */}
-          <div className="w-full">
-            <AuditReportSection refreshTrigger={refreshAuditCount} />
-          </div>
+          )}
         </div>
       </div>
 
