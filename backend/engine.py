@@ -39,7 +39,7 @@ def is_forex_symbol(symbol: str) -> bool:
 def map_symbol_to_yahoo_ticker(symbol: str) -> str:
     clean = clean_symbol_string(symbol)
     if "XAU" in clean or "GOLD" in clean:
-        return "XAUUSD=X"
+        return "GC=F"
     if "PAXG" in clean:
         return "PAXG-USD"
     elif "EURUSD" in clean:
@@ -160,7 +160,7 @@ def fetch_real_ohlcv_from_market(symbol: str, timeframe: str = "1m", limit: int 
             print(f"Binance spot fetch notice for {symbol}: {e}")
 
     # ── PRIMARY SPOT FEED FOR GOLD: Kraken (PAXGUSD) ──────
-    if clean == 'XAUUSD' or clean == 'GOLD' or clean == 'PAXGUSD':
+    if clean == 'PAXGUSD':
         k_tf_map = {
             '1m': 1, '2m': 1, '3m': 1, '5m': 5, '15m': 15, '30m': 30, '45m': 30,
             '1h': 60, '2h': 60, '4h': 240, '1d': 1440, '1w': 10080
@@ -201,8 +201,8 @@ def fetch_real_ohlcv_from_market(symbol: str, timeframe: str = "1m", limit: int 
     ticker = map_symbol_to_yahoo_ticker(symbol)
     
     tf_map = {
-        '1s': ('1m', '1d'), '5s': ('1m', '1d'), '15s': ('1m', '1d'), '30s': ('1m', '1d'),
-        '1m': ('1m', '1d'), '2m': ('2m', '1d'), '3m': ('2m', '1d'), '5m': ('5m', '1d'),
+        '1s': ('1m', '5d'), '5s': ('1m', '5d'), '15s': ('1m', '5d'), '30s': ('1m', '5d'),
+        '1m': ('1m', '5d'), '2m': ('2m', '5d'), '3m': ('2m', '5d'), '5m': ('5m', '5d'),
         '15m': ('15m', '5d'), '30m': ('30m', '5d'), '45m': ('30m', '5d'),
         '1h': ('60m', '1mo'), '2h': ('60m', '1mo'), '4h': ('60m', '1mo'),
         '1d': ('1d', '3mo'), '1w': ('1wk', '1y'), '1M': ('1mo', '2y')
