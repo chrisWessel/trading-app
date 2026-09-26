@@ -149,6 +149,9 @@ function SignalOverlay({ lines, chartHeight }: { lines: SignalLine[]; chartHeigh
         );
       })}
     </div>
+  );
+}
+
 // ── TVWidgetTab Component for Tabs ──
 function TVWidgetTab({ symbol, timeframe, tabId, showSignalOverlay, signalLines, instructions, studies }: { symbol: string, timeframe: string, tabId: string, showSignalOverlay?: boolean, signalLines?: SignalLine[], instructions?: React.ReactNode, studies?: string[] }) {
   const containerRef = useRef<HTMLDivElement>(null);
