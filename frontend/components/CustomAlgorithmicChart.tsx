@@ -3,7 +3,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { createChart, ColorType, IChartApi, SeriesMarker, Time } from 'lightweight-charts';
 import { Loader2 } from 'lucide-react';
-import { getApiUrl } from '@/lib/apiConfig';
+import { API_BASE_URL } from '@/lib/apiConfig';
 
 interface CustomChartProps {
   symbol: string;
@@ -25,7 +25,7 @@ export default function CustomAlgorithmicChart({ symbol, timeframe, tabId }: Cus
         setLoading(true);
         setError(null);
         
-        const res = await fetch(`${getApiUrl()}/api/chart-data?symbol=${encodeURIComponent(symbol)}&timeframe=${encodeURIComponent(timeframe)}&limit=300`);
+        const res = await fetch(`${API_BASE_URL}/api/chart-data?symbol=${encodeURIComponent(symbol)}&timeframe=${encodeURIComponent(timeframe)}&limit=300`);
         if (!res.ok) throw new Error("Failed to fetch chart data");
         const data = await res.json();
         
