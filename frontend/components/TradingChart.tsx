@@ -3,6 +3,7 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { RefreshCw, Zap, ChevronDown, Clock, Radio, ArrowUpRight, ArrowDownRight, Shield, Target, AlertOctagon, Activity, ArrowRightLeft, TrendingUp } from 'lucide-react';
 import { API_BASE_URL } from '@/lib/apiConfig';
+import CustomAlgorithmicChart from './CustomAlgorithmicChart';
 
 interface TradingChartProps {
   symbol: string;
@@ -589,71 +590,45 @@ export default function TradingChart({
       )}
       
       {activeTab === 'market_structure' && (
-        <TVWidgetTab 
-          symbol={symbol} 
-          timeframe={timeframe} 
-          tabId="market_structure" 
-          studies={['PivotPointsHighLow@tv-basicstudies']}
-          instructions={
-            <div className="flex items-center gap-2">
-              <Shield className="w-4 h-4 text-blue-400 flex-shrink-0" />
-              <span><strong className="text-white">Market Structure:</strong> Identify Long Term, Intermediate, and Short Term Highs/Lows to map the overall trend. A trend remains intact until the previous structure is broken.</span>
-            </div>
-          }
-        />
+        <div className="space-y-2 mt-4">
+          <div className="flex items-center gap-2 mb-2 p-3 bg-slate-900 border border-slate-800 rounded-lg">
+            <Shield className="w-4 h-4 text-blue-400 flex-shrink-0" />
+            <span className="text-sm"><strong className="text-white">Market Structure (Python Engine):</strong> Live Pivot Points calculated by backend engine.</span>
+          </div>
+          <CustomAlgorithmicChart symbol={symbol} timeframe={timeframe} tabId="market_structure" />
+        </div>
       )}
 
       {activeTab === 'dow_theory' && (
-        <TVWidgetTab 
-          symbol={symbol} 
-          timeframe={timeframe} 
-          tabId="dow_theory" 
-          studies={['ZigZag@tv-basicstudies']}
-          instructions={
-            <div className="flex items-center gap-2">
-              <Activity className="w-4 h-4 text-emerald-400 flex-shrink-0" />
-              <span>
-                <strong className="text-white">The Dow Theory / Trend:</strong> 
-                <span className="text-emerald-400 font-bold ml-2">Uptrend:</span> Higher Highs (HH) & Higher Lows (HL).
-                <span className="text-rose-400 font-bold ml-2">Downtrend:</span> Lower Highs (LH) & Lower Lows (LL).
-              </span>
-            </div>
-          }
-        />
+        <div className="space-y-2 mt-4">
+          <div className="flex items-center gap-2 mb-2 p-3 bg-slate-900 border border-slate-800 rounded-lg">
+            <Activity className="w-4 h-4 text-emerald-400 flex-shrink-0" />
+            <span className="text-sm"><strong className="text-white">Dow Theory (Python Engine):</strong> Algorithmic Highs and Lows tracking the trend.</span>
+          </div>
+          <CustomAlgorithmicChart symbol={symbol} timeframe={timeframe} tabId="dow_theory" />
+        </div>
       )}
 
       {activeTab === 'sideways' && (
-        <TVWidgetTab 
-          symbol={symbol} 
-          timeframe={timeframe} 
-          tabId="sideways"
-          studies={['DonchianChannels@tv-basicstudies']}
-          instructions={
-            <div className="flex items-center gap-2">
-              <ArrowRightLeft className="w-4 h-4 text-amber-400 flex-shrink-0" />
-              <span><strong className="text-white">Sideways Trend:</strong> Price moves within a horizontal range between Support and Resistance. Strategy: Buy near support, sell near resistance until a breakout occurs.</span>
-            </div>
-          }
-        />
+        <div className="space-y-2 mt-4">
+          <div className="flex items-center gap-2 mb-2 p-3 bg-slate-900 border border-slate-800 rounded-lg">
+            <ArrowRightLeft className="w-4 h-4 text-amber-400 flex-shrink-0" />
+            <span className="text-sm"><strong className="text-white">Sideways Trend:</strong> Showing custom support and resistance mapping.</span>
+          </div>
+          <CustomAlgorithmicChart symbol={symbol} timeframe={timeframe} tabId="sideways" />
+        </div>
       )}
 
       {activeTab === 'swing_analysis' && (
-        <TVWidgetTab 
-          symbol={symbol} 
-          timeframe={timeframe} 
-          tabId="swing_analysis" 
-          studies={['ZigZag@tv-basicstudies']}
-          instructions={
-            <div className="flex items-center gap-2">
-              <TrendingUp className="w-4 h-4 text-purple-400 flex-shrink-0" />
-              <span>
-                <strong className="text-white">Swing Analysis (BOS/CHOCH):</strong> 
-                <strong className="ml-2">BOS (Break of Structure):</strong> Continuation of the current trend. 
-                <strong className="ml-2">CHOCH (Change of Character):</strong> Early sign of a trend reversal.
-              </span>
-            </div>
-          }
-        />
+        <div className="space-y-2 mt-4">
+          <div className="flex items-center gap-2 mb-2 p-3 bg-slate-900 border border-slate-800 rounded-lg">
+            <TrendingUp className="w-4 h-4 text-purple-400 flex-shrink-0" />
+            <span className="text-sm">
+              <strong className="text-white">Swing Analysis (BOS/CHOCH):</strong> Algorithmic zig-zag and markers.
+            </span>
+          </div>
+          <CustomAlgorithmicChart symbol={symbol} timeframe={timeframe} tabId="swing_analysis" />
+        </div>
       )}
     </div>
   );

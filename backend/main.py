@@ -393,3 +393,77 @@ def download_pdf_report():
         media_type="application/pdf",
         filename=os.path.basename(pdf_path)
     )
+
+@app.get("/api/chart-data")
+def get_chart_data(symbol: str = Query("XAU/USD"), timeframe: str = Query("1m"), limit: int = Query(300)):
+    # Fetch historical data
+    df = fetch_ohlcv(symbol, timeframe, limit=limit)
+    if df is None or df.empty:
+        raise HTTPException(status_code=404, detail="No historical data found.")
+        
+    # Prepare candles for lightweight-charts
+    # lightweight-charts expects time in seconds if it's a number
+    candles = []
+    for _, row in df.iterrows():
+        # Ensure timestamp is in seconds
+        ts = int(row['timestamp'])
+        if ts > 10000000000:
+            ts = ts // 1000
+            
+        candles.append({
+            'time': ts,
+            'open': float(row['open']),
+            'high': float(row['high']),
+            'low': float(row['low']),
+            'close': float(row['close']),
+        })
+        
+    # Calculate Pivot Points (Swing Highs and Lows)
+    window = 5
+    pivots = []
+    for i in range(window, len(df) - window):
+        is_high = all(df['high'].iloc[i] > df['high'].iloc[i-j] for j in range(1, window+1)) and \
+                  all(df['high'].iloc[i] > df['high'].iloc[i+j] for j in range(1, window+1))
+        is_low = all(df['low'].iloc[i] < df['low'].iloc[i-j] for j in range(1, window+1)) and \
+                 all(df['low'].iloc[i] < df['low'].iloc[i+j] for j in range(1, window+1))
+                 
+        ts = int(df['timestamp'].iloc[i])
+        if ts > 10000000000:
+            ts = ts // 1000
+            
+        if is_high:
+            pivots.append({'time': ts, 'price': float(df['high'].iloc[i]), 'type': 'HIGH'})
+        if is_low:
+            pivots.append({'time': ts, 'price': float(df['low'].iloc[i]), 'type': 'LOW'})
+            
+    # Label HH, HL, LH, LL
+    labeled_pivots = []
+    last_high = None
+    last_low = None
+    for p in pivots:
+        if p['type'] == 'HIGH':
+            if last_high is None or p['price'] > last_high:
+                p['label'] = 'HH'
+                p['color'] = '#22C55E' # Green for higher highs
+            else:
+                p['label'] = 'LH'
+                p['color'] = '#EF4444' # Red for lower highs
+            last_high = p['price']
+            labeled_pivots.append(p)
+        elif p['type'] == 'LOW':
+            if last_low is None or p['price'] > last_low:
+                p['label'] = 'HL'
+                p['color'] = '#22C55E'
+            else:
+                p['label'] = 'LL'
+                p['color'] = '#EF4444'
+            last_low = p['price']
+            labeled_pivots.append(p)
+            
+    return {
+        "status": "success",
+        "symbol": symbol,
+        "timeframe": timeframe,
+        "candles": candles,
+        "pivots": labeled_pivots
+    }
