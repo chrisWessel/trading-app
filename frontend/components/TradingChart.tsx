@@ -221,11 +221,12 @@ function TVWidgetTab({ symbol, timeframe, tabId, showSignalOverlay, signalLines,
 // ── SVG Zigzag Arrow Structure Visualization ──
 function StructureArrowChart({ pivots }: { pivots: any[] }) {
   const W = 900;
-  const H = 220;
-  const PAD_X = 40;
-  const PAD_Y = 30;
+  const H = 250;
+  const PAD_X = 48;
+  const PAD_Y = 28;
+  const PAD_BOTTOM = 24; // space for time labels
   const innerW = W - PAD_X * 2;
-  const innerH = H - PAD_Y * 2;
+  const innerH = H - PAD_Y - PAD_BOTTOM;
 
   if (!pivots || pivots.length < 2) {
     return (
@@ -235,52 +236,52 @@ function StructureArrowChart({ pivots }: { pivots: any[] }) {
     );
   }
 
-  // Only take the last 20 pivots for clarity
+  // Last 20 pivots
   const recent = pivots.slice(-20);
 
   const prices = recent.map((p: any) => p.price);
+  const times  = recent.map((p: any) => p.time as number); // unix seconds
   const minP = Math.min(...prices);
   const maxP = Math.max(...prices);
+  const minT = Math.min(...times);
+  const maxT = Math.max(...times);
   const priceRange = maxP - minP || 1;
+  const timeRange  = maxT - minT || 1;
 
-  // Map price → Y, index → X
-  const toX = (i: number) => PAD_X + (i / (recent.length - 1)) * innerW;
+  // Map: price → Y (inverted), time → X
+  const toX = (t: number) => PAD_X + ((t - minT) / timeRange) * innerW;
   const toY = (price: number) => PAD_Y + innerH - ((price - minP) / priceRange) * innerH;
 
-  const points = recent.map((p: any, i: number) => ({
-    x: toX(i), y: toY(p.price),
-    price: p.price, code: p.code, label: p.label, type: p.type,
+  // Format unix-seconds as HH:MM (local time)
+  const fmtTime = (t: number) => {
+    const d = new Date(t * 1000);
+    return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+  };
+
+  const points = recent.map((p: any) => ({
+    x: toX(p.time), y: toY(p.price),
+    price: p.price, code: p.code, label: p.label, type: p.type, time: p.time,
   }));
 
-  // Arrow marker helper
+  // Arrow helper
   const arrowHead = (x1: number, y1: number, x2: number, y2: number, color: string, id: string) => {
     const angle = Math.atan2(y2 - y1, x2 - x1);
-    const arrowLen = 12;
-    const spread = 0.4;
+    const arrowLen = 12; const spread = 0.4;
     const ax = x2 - arrowLen * Math.cos(angle - spread);
     const ay = y2 - arrowLen * Math.sin(angle - spread);
     const bx = x2 - arrowLen * Math.cos(angle + spread);
     const by = y2 - arrowLen * Math.sin(angle + spread);
-    return (
-      <polygon
-        key={`arrow-${id}`}
-        points={`${x2},${y2} ${ax},${ay} ${bx},${by}`}
-        fill={color}
-      />
-    );
+    return <polygon key={`arrow-${id}`} points={`${x2},${y2} ${ax},${ay} ${bx},${by}`} fill={color} />;
   };
 
   const segments: JSX.Element[] = [];
   for (let i = 0; i < points.length - 1; i++) {
-    const from = points[i];
-    const to = points[i + 1];
+    const from = points[i]; const to = points[i + 1];
     const goingUp = to.y < from.y;
     const color = goingUp ? '#22c55e' : '#ef4444';
-    // Midpoint for the line (end slightly before tip for clean arrowhead)
     const ratio = 0.85;
     const mx = from.x + (to.x - from.x) * ratio;
     const my = from.y + (to.y - from.y) * ratio;
-
     segments.push(
       <g key={`seg-${i}`}>
         <line x1={from.x} y1={from.y} x2={mx} y2={my} stroke={color} strokeWidth={2.5} />
@@ -291,30 +292,28 @@ function StructureArrowChart({ pivots }: { pivots: any[] }) {
 
   const labelEl = (p: { x: number; y: number; code: string; label: string; type: string }, i: number) => {
     const isHigh = p.type === 'HIGH';
-    const labelY = isHigh ? p.y - 22 : p.y + 30;
     const boxColor = (p.code === 'HH' || p.code === 'HL') ? '#16a34a' : '#dc2626';
     const textLen = p.code.length * 7 + 8;
-
     return (
       <g key={`lbl-${i}`}>
-        {/* Yellow circle pivot */}
         <circle cx={p.x} cy={p.y} r={6} fill="#eab308" stroke="#0f172a" strokeWidth={1.5} />
-        {/* Label box */}
-        <rect x={p.x - textLen / 2} y={isHigh ? p.y - 38 : p.y + 14} width={textLen} height={18}
-          rx={3} fill={boxColor} opacity={0.9} />
-        <text x={p.x} y={isHigh ? p.y - 25 : p.y + 26}
-          fill="white" fontSize={10} fontWeight="bold" textAnchor="middle" fontFamily="monospace">
+        <rect x={p.x - textLen / 2} y={isHigh ? p.y - 38 : p.y + 14} width={textLen} height={18} rx={3} fill={boxColor} opacity={0.9} />
+        <text x={p.x} y={isHigh ? p.y - 25 : p.y + 26} fill="white" fontSize={10} fontWeight="bold" textAnchor="middle" fontFamily="monospace">
           {p.code}
         </text>
       </g>
     );
   };
 
+  // Time axis: pick ~8 evenly spaced time labels from the pivot timestamps
+  const step = Math.max(1, Math.floor(recent.length / 8));
+  const timeTicks = recent.filter((_: any, i: number) => i % step === 0 || i === recent.length - 1);
+
   return (
     <div className="w-full bg-slate-950 rounded-lg border border-slate-800 overflow-hidden">
       <div className="px-3 py-1.5 border-b border-slate-800 flex items-center gap-2">
         <span className="text-xs text-slate-400 font-mono">▲ STRUCTURE ANALYSIS</span>
-        <span className="text-[10px] text-slate-600">— Python pivot engine (last {recent.length} swings)</span>
+        <span className="text-[10px] text-slate-600">— Python pivot engine · timestamps match chart above (last {recent.length} swings)</span>
       </div>
       <svg viewBox={`0 0 ${W} ${H}`} width="100%" preserveAspectRatio="xMidYMid meet" className="block">
         {/* Price grid lines */}
@@ -330,6 +329,31 @@ function StructureArrowChart({ pivots }: { pivots: any[] }) {
             </g>
           );
         })}
+
+        {/* Time axis baseline */}
+        <line x1={PAD_X} y1={PAD_Y + innerH} x2={W - PAD_X} y2={PAD_Y + innerH} stroke="#334155" strokeWidth={1} />
+
+        {/* Time tick marks + labels */}
+        {timeTicks.map((p: any, i: number) => {
+          const tx = toX(p.time);
+          return (
+            <g key={`tick-${i}`}>
+              <line x1={tx} y1={PAD_Y + innerH} x2={tx} y2={PAD_Y + innerH + 5} stroke="#475569" strokeWidth={1} />
+              <text x={tx} y={PAD_Y + innerH + 16} fill="#64748b" fontSize={9} textAnchor="middle" fontFamily="monospace">
+                {fmtTime(p.time)}
+              </text>
+            </g>
+          );
+        })}
+
+        {/* Vertical dashed lines at each time tick */}
+        {timeTicks.map((p: any, i: number) => {
+          const tx = toX(p.time);
+          return (
+            <line key={`vline-${i}`} x1={tx} y1={PAD_Y} x2={tx} y2={PAD_Y + innerH} stroke="#1e293b" strokeWidth={1} strokeDasharray="2,5" />
+          );
+        })}
+
         {/* Zigzag segments with arrows */}
         {segments}
         {/* Pivot labels on top */}
