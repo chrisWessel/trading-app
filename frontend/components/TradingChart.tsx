@@ -150,10 +150,131 @@ function SignalOverlay({ lines, chartHeight }: { lines: SignalLine[]; chartHeigh
       })}
     </div>
   );
-}
+// ── 4 New Technical Overlay SVGs ──
+const SidewaysOverlay = () => (
+  <div className="absolute inset-0 pointer-events-none flex items-center justify-center z-10">
+    <svg viewBox="0 0 800 400" className="w-full h-full drop-shadow-xl">
+      <line x1="100" y1="100" x2="700" y2="100" stroke="#00BCD4" strokeWidth="4" />
+      <line x1="100" y1="300" x2="700" y2="300" stroke="#00BCD4" strokeWidth="4" />
+      <g transform="translate(250, 320)">
+        <polygon points="0,15 200,15 200,0 250,25 200,50 200,35 0,35" fill="#8CB4FF" stroke="#3B82F6" strokeWidth="2" opacity="0.9" />
+        <text x="100" y="30" fill="#000000" fontSize="16" fontWeight="bold" textAnchor="middle">Sideways Trend</text>
+      </g>
+    </svg>
+  </div>
+);
+
+const SwingAnalysisOverlay = ({ isBuy }: { isBuy: boolean }) => (
+  <div className="absolute inset-0 pointer-events-none flex items-center justify-center z-10">
+    <svg viewBox="0 0 800 400" className="w-full h-full drop-shadow-2xl opacity-90">
+      {isBuy ? (
+        <g stroke="#22C55E" strokeWidth="6" fill="none" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M 150 350 L 300 150 L 400 250 L 550 50" />
+          <path d="M 200 350 L 400 150" stroke="#22C55E" strokeWidth="3" markerEnd="url(#arrowhead-green)" opacity="0.7"/>
+          <path d="M 350 350 L 550 150" stroke="#22C55E" strokeWidth="3" markerEnd="url(#arrowhead-green)" opacity="0.7"/>
+          <circle cx="300" cy="150" r="8" fill="#22C55E" />
+          <text x="300" y="130" fill="#22C55E" fontSize="16" fontWeight="bold" textAnchor="middle" stroke="none">HH1</text>
+          <circle cx="400" cy="250" r="8" fill="#22C55E" />
+          <text x="400" y="280" fill="#22C55E" fontSize="16" fontWeight="bold" textAnchor="middle" stroke="none">HL1</text>
+          <circle cx="550" cy="50" r="8" fill="#22C55E" />
+          <text x="550" y="30" fill="#22C55E" fontSize="16" fontWeight="bold" textAnchor="middle" stroke="none">HH2</text>
+        </g>
+      ) : (
+        <g stroke="#EF4444" strokeWidth="6" fill="none" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M 150 50 L 300 250 L 400 150 L 550 350" />
+          <path d="M 200 50 L 400 250" stroke="#EF4444" strokeWidth="3" markerEnd="url(#arrowhead-red)" opacity="0.7"/>
+          <path d="M 350 50 L 550 250" stroke="#EF4444" strokeWidth="3" markerEnd="url(#arrowhead-red)" opacity="0.7"/>
+          <circle cx="300" cy="250" r="8" fill="#EF4444" />
+          <text x="300" y="280" fill="#EF4444" fontSize="16" fontWeight="bold" textAnchor="middle" stroke="none">LL1</text>
+          <circle cx="400" cy="150" r="8" fill="#EF4444" />
+          <text x="400" y="130" fill="#EF4444" fontSize="16" fontWeight="bold" textAnchor="middle" stroke="none">LH1</text>
+          <circle cx="550" cy="350" r="8" fill="#EF4444" />
+          <text x="550" y="380" fill="#EF4444" fontSize="16" fontWeight="bold" textAnchor="middle" stroke="none">LL2</text>
+        </g>
+      )}
+      <defs>
+        <marker id="arrowhead-green" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+          <polygon points="0 0, 10 3.5, 0 7" fill="#22C55E" />
+        </marker>
+        <marker id="arrowhead-red" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+          <polygon points="0 0, 10 3.5, 0 7" fill="#EF4444" />
+        </marker>
+      </defs>
+    </svg>
+  </div>
+);
+
+const DowTheoryOverlay = () => (
+  <div className="absolute inset-0 pointer-events-none flex items-center justify-center z-10">
+    <svg viewBox="0 0 800 400" className="w-full h-full drop-shadow-2xl opacity-90">
+      {/* Uptrend */}
+      <path d="M 100 350 L 200 200 L 250 280 L 350 150" stroke="#00BCD4" strokeWidth="4" fill="none" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M 120 350 L 320 150" stroke="#00BCD4" strokeWidth="2" fill="none" markerEnd="url(#arrowhead-teal)" />
+      <text x="180" y="180" fill="#00BCD4" fontSize="14" fontWeight="bold" stroke="none">HH</text>
+      <text x="270" y="300" fill="#00BCD4" fontSize="14" fontWeight="bold" stroke="none">HL</text>
+
+      {/* Sideways */}
+      <path d="M 350 150 L 400 250 L 450 150 L 500 250 L 550 150" stroke="#F59E0B" strokeWidth="4" fill="none" strokeLinecap="round" strokeLinejoin="round" />
+      <line x1="330" y1="140" x2="570" y2="140" stroke="#F59E0B" strokeWidth="2" />
+      <line x1="330" y1="260" x2="570" y2="260" stroke="#F59E0B" strokeWidth="2" />
+      <text x="450" y="125" fill="#F59E0B" fontSize="14" fontWeight="bold" textAnchor="middle" stroke="none">SIDEWAYS</text>
+
+      {/* Downtrend */}
+      <path d="M 550 150 L 650 280 L 700 200 L 800 350" stroke="#EF4444" strokeWidth="4" fill="none" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M 570 180 L 770 330" stroke="#EF4444" strokeWidth="2" fill="none" markerEnd="url(#arrowhead-red)" />
+      <text x="630" y="300" fill="#EF4444" fontSize="14" fontWeight="bold" stroke="none">LL</text>
+      <text x="720" y="180" fill="#EF4444" fontSize="14" fontWeight="bold" stroke="none">LH</text>
+
+      <defs>
+        <marker id="arrowhead-teal" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+          <polygon points="0 0, 10 3.5, 0 7" fill="#00BCD4" />
+        </marker>
+        <marker id="arrowhead-red" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+          <polygon points="0 0, 10 3.5, 0 7" fill="#EF4444" />
+        </marker>
+      </defs>
+    </svg>
+  </div>
+);
+
+const MarketStructureOverlay = () => (
+  <div className="absolute inset-0 pointer-events-none flex items-center justify-center z-10">
+    <svg viewBox="0 0 800 400" className="w-full h-full drop-shadow-2xl opacity-90">
+      {/* Daily (Blue) */}
+      <path d="M 100 350 L 400 100 L 700 350" stroke="#3B82F6" strokeWidth="12" fill="none" strokeLinecap="round" strokeLinejoin="round" opacity="0.6" />
+      {/* 4 Hour (Green) */}
+      <path d="M 100 350 L 200 180 L 300 250 L 400 100 L 500 250 L 600 180 L 700 350" stroke="#22C55E" strokeWidth="6" fill="none" strokeLinecap="round" strokeLinejoin="round" opacity="0.8" />
+      {/* 1 Hour (White) */}
+      <path d="M 100 350 L 140 250 L 160 300 L 200 180 L 230 220 L 260 160 L 300 250 L 340 160 L 370 200 L 400 100 L 430 160 L 460 120 L 500 250 L 540 180 L 570 220 L 600 180 L 650 280 L 680 250 L 700 350" stroke="#FFFFFF" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round" />
+
+      {/* Nodes / Dots */}
+      <circle cx="400" cy="100" r="8" fill="#F59E0B" />
+      <text x="400" y="70" fill="#3B82F6" fontSize="16" fontWeight="bold" textAnchor="middle">LONG TERM HIGH</text>
+      
+      <circle cx="200" cy="180" r="6" fill="#F59E0B" />
+      <text x="200" y="160" fill="#22C55E" fontSize="12" fontWeight="bold" textAnchor="middle">INTERMEDIATE HIGH</text>
+
+      <circle cx="600" cy="180" r="6" fill="#F59E0B" />
+      <text x="600" y="160" fill="#22C55E" fontSize="12" fontWeight="bold" textAnchor="middle">INTERMEDIATE HIGH</text>
+
+      <circle cx="300" cy="250" r="6" fill="#F59E0B" />
+      <text x="300" y="275" fill="#22C55E" fontSize="12" fontWeight="bold" textAnchor="middle">INTERMEDIATE LOW</text>
+      
+      {/* Legend */}
+      <g transform="translate(620, 320)">
+        <line x1="0" y1="0" x2="30" y2="0" stroke="#3B82F6" strokeWidth="4" />
+        <text x="40" y="4" fill="#FFFFFF" fontSize="10">DAILY TIMEFRAME</text>
+        <line x1="0" y1="20" x2="30" y2="20" stroke="#22C55E" strokeWidth="4" />
+        <text x="40" y="24" fill="#FFFFFF" fontSize="10">4 HOUR TIMEFRAME</text>
+        <line x1="0" y1="40" x2="30" y2="40" stroke="#FFFFFF" strokeWidth="2" />
+        <text x="40" y="44" fill="#FFFFFF" fontSize="10">1 HOUR TIMEFRAME</text>
+      </g>
+    </svg>
+  </div>
+);
 
 // ── TVWidgetTab Component for Tabs ──
-function TVWidgetTab({ symbol, timeframe, tabId, showSignalOverlay, signalLines, instructions }: { symbol: string, timeframe: string, tabId: string, showSignalOverlay?: boolean, signalLines?: SignalLine[], instructions?: React.ReactNode }) {
+function TVWidgetTab({ symbol, timeframe, tabId, showSignalOverlay, signalLines, instructions, children }: { symbol: string, timeframe: string, tabId: string, showSignalOverlay?: boolean, signalLines?: SignalLine[], instructions?: React.ReactNode, children?: React.ReactNode }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const widgetIdRef = useRef<string>(`tv_signal_widget_${tabId}_${Math.floor(Math.random() * 1000000)}`);
 
@@ -211,6 +332,7 @@ function TVWidgetTab({ symbol, timeframe, tabId, showSignalOverlay, signalLines,
       <div className="relative w-full h-[420px] rounded-lg overflow-hidden border border-slate-950">
         <div ref={containerRef} className="w-full h-full" />
         {showSignalOverlay && signalLines && <SignalOverlay lines={signalLines} chartHeight={420} />}
+        {children}
       </div>
     </div>
   );
@@ -598,7 +720,9 @@ export default function TradingChart({
               <span><strong className="text-white">Market Structure:</strong> Identify Long Term, Intermediate, and Short Term Highs/Lows to map the overall trend. A trend remains intact until the previous structure is broken.</span>
             </div>
           }
-        />
+        >
+          <MarketStructureOverlay />
+        </TVWidgetTab>
       )}
 
       {activeTab === 'dow_theory' && (
@@ -616,7 +740,9 @@ export default function TradingChart({
               </span>
             </div>
           }
-        />
+        >
+          <DowTheoryOverlay />
+        </TVWidgetTab>
       )}
 
       {activeTab === 'sideways' && (
@@ -630,7 +756,9 @@ export default function TradingChart({
               <span><strong className="text-white">Sideways Trend:</strong> Price moves within a horizontal range between Support and Resistance. Strategy: Buy near support, sell near resistance until a breakout occurs.</span>
             </div>
           }
-        />
+        >
+          <SidewaysOverlay />
+        </TVWidgetTab>
       )}
 
       {activeTab === 'swing_analysis' && (
@@ -648,7 +776,9 @@ export default function TradingChart({
               </span>
             </div>
           }
-        />
+        >
+          <SwingAnalysisOverlay isBuy={signalType === 'BUY/LONG' || signalType === 'STANDBY'} />
+        </TVWidgetTab>
       )}
     </div>
   );

@@ -38,7 +38,7 @@ interface NotificationItem {
   id: string;
   time_harare: string;
   timeframe: string;
-  type: 'BUY_NOW' | 'SELL_NOW' | 'STOP_LOSS_ALERT' | 'MONITORING';
+  type: 'BUY_NOW' | 'SELL_NOW' | 'STOP_LOSS_ALERT' | 'MONITORING' | 'CLOSED';
   title: string;
   message: string;
   entry: number;
@@ -101,6 +101,7 @@ export default function LiveSignalNotificationPanel({
 
         // Format Harare Time
         const now = new Date();
+        const harareDateString = now.toLocaleString('en-US', { timeZone: 'Africa/Harare' });
         const harareTime = now.toLocaleTimeString('en-US', {
           timeZone: 'Africa/Harare',
           hour12: true,
@@ -108,10 +109,14 @@ export default function LiveSignalNotificationPanel({
           minute: '2-digit',
           second: '2-digit',
         });
+        
+        const harareDate = new Date(harareDateString);
+        const isCrypto = symbol.includes('BTC') || symbol.includes('ETH') || symbol.includes('SOL') || symbol.includes('REXT') || symbol.includes('USDT');
+        const isWeekend = (harareDate.getDay() === 0 || harareDate.getDay() === 6) && !isCrypto;
 
-        const isBuy = a.signal_type === 'BUY/LONG';
-        const isSell = a.signal_type === 'SELL/SHORT';
-        const notifType: 'BUY_NOW' | 'SELL_NOW' | 'MONITORING' = isBuy ? 'BUY_NOW' : isSell ? 'SELL_NOW' : 'MONITORING';
+        const isBuy = isWeekend ? false : a.signal_type === 'BUY/LONG';
+        const isSell = isWeekend ? false : a.signal_type === 'SELL/SHORT';
+        const notifType: 'BUY_NOW' | 'SELL_NOW' | 'MONITORING' | 'CLOSED' = isWeekend ? 'CLOSED' : isBuy ? 'BUY_NOW' : isSell ? 'SELL_NOW' : 'MONITORING';
 
         // ── LIVE VALUES: backend computes everything from the current live price each poll.
         // Always update zones, SL, and TPs so they stay accurate with the market.
@@ -142,7 +147,10 @@ export default function LiveSignalNotificationPanel({
         let notifTitle = '';
         let notifMsg = '';
 
-        if (isBuy) {
+        if (isWeekend) {
+          notifTitle = `🛑 MARKETS CLOSED ON WEEKENDS`;
+          notifMsg = `Trading resumes on Monday starting with the Asia market. Signal Navigator is disabled for non-crypto assets.`;
+        } else if (isBuy) {
           notifTitle = `🟢 BUY NOW! [${timeframe.toUpperCase()}] ENTRY FOR ${symbol}`;
           notifMsg = `Bullish Demand on ${timeframe} timeframe at $${a.latest_price.toFixed(precision)}. Stop Loss: $${a.trade_params.stop_loss.toFixed(precision)}`;
         } else if (isSell) {
@@ -279,7 +287,9 @@ export default function LiveSignalNotificationPanel({
       {latestNotif && (
         <div
           className={`p-3.5 rounded-xl border shadow-xl space-y-3 shrink-0 transition-all ${
-            latestNotif.type === 'BUY_NOW'
+            latestNotif.type === 'CLOSED'
+              ? 'bg-gradient-to-b from-slate-800 to-slate-950 border-slate-600'
+              : latestNotif.type === 'BUY_NOW'
               ? 'bg-gradient-to-b from-emerald-950/90 to-slate-950 border-emerald-600/80'
               : latestNotif.type === 'SELL_NOW'
               ? 'bg-gradient-to-b from-rose-950/90 to-slate-950 border-rose-600/80'
@@ -287,7 +297,11 @@ export default function LiveSignalNotificationPanel({
           }`}
         >
           <div className="flex items-center justify-between">
-            {latestNotif.type === 'BUY_NOW' ? (
+            {latestNotif.type === 'CLOSED' ? (
+              <span className="px-2.5 py-1 bg-slate-700 text-white font-extrabold text-xs rounded-lg flex items-center gap-1">
+                <Clock className="w-4 h-4" /> MARKETS CLOSED
+              </span>
+            ) : latestNotif.type === 'BUY_NOW' ? (
               <span className="px-2.5 py-1 bg-emerald-600 text-white font-extrabold text-xs rounded-lg animate-pulse flex items-center gap-1">
                 <ArrowUpRight className="w-4 h-4" /> BUY NOW [{latestNotif.timeframe.toUpperCase()}]
               </span>
@@ -312,7 +326,8 @@ export default function LiveSignalNotificationPanel({
           </div>
 
           {/* Trade Parameters — FROZEN (constant across polls) */}
-          <div className="space-y-2 pt-2 border-t border-slate-800 text-[11px]">
+          {latestNotif.type !== 'CLOSED' && (
+            <div className="space-y-2 pt-2 border-t border-slate-800 text-[11px]">
 
             {/* Stop Loss — single constant value */}
             <div className="flex justify-between bg-slate-950/80 px-2 py-1.5 rounded border border-rose-950">
@@ -425,6 +440,13 @@ export default function LiveSignalNotificationPanel({
               <span>Auto-Fill Paper Order ({latestNotif.timeframe}) — TP{selectedTpIndex + 1}</span>
             </button>
           )}
+          
+          {latestNotif.type === 'CLOSED' && (
+            <div className="bg-slate-950/90 border border-slate-700/60 p-2.5 rounded-lg text-[10px] space-y-1 text-slate-400 font-sans text-center">
+              Waiting for Asia market open on Monday.
+            </div>
+          )}
+          
         </div>
       )}
 
@@ -443,7 +465,9 @@ export default function LiveSignalNotificationPanel({
                 <span className="text-slate-500">{item.time_harare}</span>
                 <span
                   className={`px-1.5 py-0.5 rounded font-bold ${
-                    item.type === 'BUY_NOW'
+                    item.type === 'CLOSED'
+                      ? 'bg-slate-900 text-slate-400 border border-slate-700'
+                      : item.type === 'BUY_NOW'
                       ? 'bg-emerald-950 text-emerald-400 border border-emerald-800'
                       : item.type === 'SELL_NOW'
                       ? 'bg-rose-950 text-rose-400 border border-rose-800'
