@@ -218,6 +218,127 @@ function TVWidgetTab({ symbol, timeframe, tabId, showSignalOverlay, signalLines,
   );
 }
 
+// ── SVG Zigzag Arrow Structure Visualization ──
+function StructureArrowChart({ pivots }: { pivots: any[] }) {
+  const W = 900;
+  const H = 220;
+  const PAD_X = 40;
+  const PAD_Y = 30;
+  const innerW = W - PAD_X * 2;
+  const innerH = H - PAD_Y * 2;
+
+  if (!pivots || pivots.length < 2) {
+    return (
+      <div className="flex items-center justify-center h-32 text-slate-500 text-sm">
+        Calculating market structure...
+      </div>
+    );
+  }
+
+  // Only take the last 20 pivots for clarity
+  const recent = pivots.slice(-20);
+
+  const prices = recent.map((p: any) => p.price);
+  const minP = Math.min(...prices);
+  const maxP = Math.max(...prices);
+  const priceRange = maxP - minP || 1;
+
+  // Map price → Y, index → X
+  const toX = (i: number) => PAD_X + (i / (recent.length - 1)) * innerW;
+  const toY = (price: number) => PAD_Y + innerH - ((price - minP) / priceRange) * innerH;
+
+  const points = recent.map((p: any, i: number) => ({
+    x: toX(i), y: toY(p.price),
+    price: p.price, code: p.code, label: p.label, type: p.type,
+  }));
+
+  // Arrow marker helper
+  const arrowHead = (x1: number, y1: number, x2: number, y2: number, color: string, id: string) => {
+    const angle = Math.atan2(y2 - y1, x2 - x1);
+    const arrowLen = 12;
+    const spread = 0.4;
+    const ax = x2 - arrowLen * Math.cos(angle - spread);
+    const ay = y2 - arrowLen * Math.sin(angle - spread);
+    const bx = x2 - arrowLen * Math.cos(angle + spread);
+    const by = y2 - arrowLen * Math.sin(angle + spread);
+    return (
+      <polygon
+        key={`arrow-${id}`}
+        points={`${x2},${y2} ${ax},${ay} ${bx},${by}`}
+        fill={color}
+      />
+    );
+  };
+
+  const segments: JSX.Element[] = [];
+  for (let i = 0; i < points.length - 1; i++) {
+    const from = points[i];
+    const to = points[i + 1];
+    const goingUp = to.y < from.y;
+    const color = goingUp ? '#22c55e' : '#ef4444';
+    // Midpoint for the line (end slightly before tip for clean arrowhead)
+    const ratio = 0.85;
+    const mx = from.x + (to.x - from.x) * ratio;
+    const my = from.y + (to.y - from.y) * ratio;
+
+    segments.push(
+      <g key={`seg-${i}`}>
+        <line x1={from.x} y1={from.y} x2={mx} y2={my} stroke={color} strokeWidth={2.5} />
+        {arrowHead(from.x, from.y, to.x, to.y, color, `${i}`)}
+      </g>
+    );
+  }
+
+  const labelEl = (p: { x: number; y: number; code: string; label: string; type: string }, i: number) => {
+    const isHigh = p.type === 'HIGH';
+    const labelY = isHigh ? p.y - 22 : p.y + 30;
+    const boxColor = (p.code === 'HH' || p.code === 'HL') ? '#16a34a' : '#dc2626';
+    const textLen = p.code.length * 7 + 8;
+
+    return (
+      <g key={`lbl-${i}`}>
+        {/* Yellow circle pivot */}
+        <circle cx={p.x} cy={p.y} r={6} fill="#eab308" stroke="#0f172a" strokeWidth={1.5} />
+        {/* Label box */}
+        <rect x={p.x - textLen / 2} y={isHigh ? p.y - 38 : p.y + 14} width={textLen} height={18}
+          rx={3} fill={boxColor} opacity={0.9} />
+        <text x={p.x} y={isHigh ? p.y - 25 : p.y + 26}
+          fill="white" fontSize={10} fontWeight="bold" textAnchor="middle" fontFamily="monospace">
+          {p.code}
+        </text>
+      </g>
+    );
+  };
+
+  return (
+    <div className="w-full bg-slate-950 rounded-lg border border-slate-800 overflow-hidden">
+      <div className="px-3 py-1.5 border-b border-slate-800 flex items-center gap-2">
+        <span className="text-xs text-slate-400 font-mono">▲ STRUCTURE ANALYSIS</span>
+        <span className="text-[10px] text-slate-600">— Python pivot engine (last {recent.length} swings)</span>
+      </div>
+      <svg viewBox={`0 0 ${W} ${H}`} width="100%" preserveAspectRatio="xMidYMid meet" className="block">
+        {/* Price grid lines */}
+        {[0, 0.25, 0.5, 0.75, 1].map(t => {
+          const py = PAD_Y + innerH - t * innerH;
+          const price = minP + t * priceRange;
+          return (
+            <g key={`grid-${t}`}>
+              <line x1={PAD_X} y1={py} x2={W - PAD_X} y2={py} stroke="#1e293b" strokeWidth={1} strokeDasharray="3,4" />
+              <text x={PAD_X - 4} y={py + 4} fill="#475569" fontSize={9} textAnchor="end" fontFamily="monospace">
+                {price.toFixed(1)}
+              </text>
+            </g>
+          );
+        })}
+        {/* Zigzag segments with arrows */}
+        {segments}
+        {/* Pivot labels on top */}
+        {points.map((p, i) => labelEl(p, i))}
+      </svg>
+    </div>
+  );
+}
+
 // ── AlgoStructureTab: OANDA chart + algo analysis overlay ──
 function AlgoStructureTab({ symbol, timeframe, algoTrend, fetchAlgoAnalysis }: {
   symbol: string; timeframe: string;
@@ -277,6 +398,11 @@ function AlgoStructureTab({ symbol, timeframe, algoTrend, fetchAlgoAnalysis }: {
 
       {/* SAME TradingView OANDA chart as Live Signals */}
       <TVWidgetTab symbol={symbol} timeframe={timeframe} tabId="algo_market_structure_tv" />
+
+      {/* SVG Arrow Structure Visualization */}
+      {algoTrend && algoTrend.pivots.length > 1 && (
+        <StructureArrowChart pivots={algoTrend.pivots} />
+      )}
     </div>
   );
 }
