@@ -150,6 +150,7 @@ function SignalOverlay({ lines, chartHeight }: { lines: SignalLine[]; chartHeigh
       })}
     </div>
   );
+}
 // ── 4 New Technical Overlay SVGs ──
 const SidewaysOverlay = () => (
   <div className="absolute inset-0 pointer-events-none flex items-center justify-center z-10">

@@ -327,7 +327,8 @@ export default function LiveSignalNotificationPanel({
 
           {/* Trade Parameters — FROZEN (constant across polls) */}
           {latestNotif.type !== 'CLOSED' && (
-            <div className="space-y-2 pt-2 border-t border-slate-800 text-[11px]">
+            <>
+              <div className="space-y-2 pt-2 border-t border-slate-800 text-[11px]">
 
             {/* Stop Loss — single constant value */}
             <div className="flex justify-between bg-slate-950/80 px-2 py-1.5 rounded border border-rose-950">
@@ -439,6 +440,8 @@ export default function LiveSignalNotificationPanel({
               <Play className="w-3.5 h-3.5 fill-white" />
               <span>Auto-Fill Paper Order ({latestNotif.timeframe}) — TP{selectedTpIndex + 1}</span>
             </button>
+          )}
+          </>
           )}
           
           {latestNotif.type === 'CLOSED' && (
