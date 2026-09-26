@@ -443,27 +443,53 @@ def get_chart_data(symbol: str = Query("XAU/USD"), timeframe: str = Query("1m"),
     for p in pivots:
         if p['type'] == 'HIGH':
             if last_high is None or p['price'] > last_high:
-                p['label'] = 'HH'
-                p['color'] = '#22C55E' # Green for higher highs
+                p['label'] = 'Higher High' if last_high is not None else 'High'
+                p['code'] = 'HH'
             else:
-                p['label'] = 'LH'
-                p['color'] = '#EF4444' # Red for lower highs
+                p['label'] = 'Lower High'
+                p['code'] = 'LH'
+            p['color'] = '#eab308' # Yellow circles
             last_high = p['price']
             labeled_pivots.append(p)
         elif p['type'] == 'LOW':
             if last_low is None or p['price'] > last_low:
-                p['label'] = 'HL'
-                p['color'] = '#22C55E'
+                p['label'] = 'Higher Low'
+                p['code'] = 'HL'
             else:
-                p['label'] = 'LL'
-                p['color'] = '#EF4444'
+                p['label'] = 'Lower Low' if last_low is not None else 'Low'
+                p['code'] = 'LL'
+            p['color'] = '#eab308' # Yellow circles
             last_low = p['price']
             labeled_pivots.append(p)
+            
+    # Determine Trend
+    trend_status = "Sideways / Consolidating"
+    trend_color = "text-amber-400 border-amber-400"
+    if len(labeled_pivots) >= 2:
+        codes = [p['code'] for p in labeled_pivots[-4:]] # Look at last 4 pivots
+        if 'HH' in codes and 'HL' in codes and 'LL' not in codes[-2:] and 'LH' not in codes[-2:]:
+            trend_status = "Bullish Market Structure (Upward Trend)"
+            trend_color = "text-emerald-400 border-emerald-400"
+        elif 'LL' in codes and 'LH' in codes and 'HH' not in codes[-2:] and 'HL' not in codes[-2:]:
+            trend_status = "Bearish Market Structure (Downward Trend)"
+            trend_color = "text-rose-400 border-rose-400"
+        elif codes[-1] == 'HH' or codes[-1] == 'HL':
+             if len(codes) >= 2 and (codes[-2] == 'HH' or codes[-2] == 'HL'):
+                 trend_status = "Bullish Market Structure (Upward Trend)"
+                 trend_color = "text-emerald-400 border-emerald-400"
+        elif codes[-1] == 'LL' or codes[-1] == 'LH':
+             if len(codes) >= 2 and (codes[-2] == 'LL' or codes[-2] == 'LH'):
+                 trend_status = "Bearish Market Structure (Downward Trend)"
+                 trend_color = "text-rose-400 border-rose-400"
             
     return {
         "status": "success",
         "symbol": symbol,
         "timeframe": timeframe,
         "candles": candles,
-        "pivots": labeled_pivots
+        "pivots": labeled_pivots,
+        "trend": {
+            "status": trend_status,
+            "color": trend_color
+        }
     }
