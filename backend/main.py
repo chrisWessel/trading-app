@@ -395,7 +395,7 @@ def download_pdf_report():
     )
 
 @app.get("/api/chart-data")
-def get_chart_data(symbol: str = Query("XAU/USD"), timeframe: str = Query("1m"), limit: int = Query(300)):
+def get_chart_data(symbol: str = Query("XAU/USD"), timeframe: str = Query("5m"), limit: int = Query(500)):
     # Fetch historical data
     df = fetch_ohlcv(symbol, timeframe, limit=limit)
     if df is None or df.empty:

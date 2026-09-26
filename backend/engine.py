@@ -159,7 +159,7 @@ def fetch_real_ohlcv_from_market(symbol: str, timeframe: str = "1m", limit: int 
         except Exception as e:
             print(f"Binance spot fetch notice for {symbol}: {e}")
 
-    # ── PRIMARY SPOT FEED FOR GOLD: Kraken (PAXGUSD) ──────
+    # ── SPOT FEED FOR GOLD: Kraken (PAXGUSD only) ──────
     if clean == 'PAXGUSD':
         k_tf_map = {
             '1m': 1, '2m': 1, '3m': 1, '5m': 5, '15m': 15, '30m': 30, '45m': 30,
@@ -209,8 +209,8 @@ def fetch_real_ohlcv_from_market(symbol: str, timeframe: str = "1m", limit: int 
     }
     interval, range_str = tf_map.get(timeframe, ('1m', '1d'))
     
-    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?interval={interval}&range={range_str}"
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+    url = f"https://query2.finance.yahoo.com/v8/finance/chart/{ticker}?interval={interval}&range={range_str}"
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36', 'Accept': 'application/json'}
     
     try:
         r = requests.get(url, headers=headers, timeout=2.5)

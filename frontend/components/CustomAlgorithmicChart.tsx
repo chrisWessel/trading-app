@@ -32,7 +32,7 @@ export default function CustomAlgorithmicChart({ symbol, timeframe, tabId }: Cus
         if (isInitialLoad) setLoading(true);
         setError(null);
         
-        const res = await fetch(`${API_BASE_URL}/api/chart-data?symbol=${encodeURIComponent(symbol)}&timeframe=${encodeURIComponent(timeframe)}&limit=300`);
+        const res = await fetch(`${API_BASE_URL}/api/chart-data?symbol=${encodeURIComponent(symbol)}&timeframe=${encodeURIComponent(timeframe)}&limit=500`);
         if (!res.ok) throw new Error("Failed to fetch chart data");
         const data = await res.json();
         
@@ -61,16 +61,10 @@ export default function CustomAlgorithmicChart({ symbol, timeframe, tabId }: Cus
   }, [symbol, timeframe, tabId]);
   
   function buildTrendLine(pivots: any[]): { time: number; value: number }[] {
-    // Instead of zigzag, draw a single straight trend line:
-    // From the first pivot to the last pivot (the overall market direction)
+    // Zigzag: connect all pivot points in order
     if (pivots.length < 2) return [];
     const sorted = [...pivots].sort((a, b) => a.time - b.time);
-    const first = sorted[0];
-    const last = sorted[sorted.length - 1];
-    return [
-      { time: first.time, value: first.price },
-      { time: last.time, value: last.price }
-    ];
+    return sorted.map(p => ({ time: p.time, value: p.price }));
   }
   
   function renderChart(candles: any[], pivots: any[], isInitialLoad: boolean) {
