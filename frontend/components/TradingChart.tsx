@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useEffect, useRef, useState, useCallback } from 'react';
-import { RefreshCw, Zap, ChevronDown, Clock, Radio, ArrowUpRight, ArrowDownRight, Shield, Target, AlertOctagon } from 'lucide-react';
+import { RefreshCw, Zap, ChevronDown, Clock, Radio, ArrowUpRight, ArrowDownRight, Shield, Target, AlertOctagon, Activity, ArrowRightLeft, TrendingUp } from 'lucide-react';
 import { API_BASE_URL } from '@/lib/apiConfig';
 
 interface TradingChartProps {
@@ -152,6 +152,70 @@ function SignalOverlay({ lines, chartHeight }: { lines: SignalLine[]; chartHeigh
   );
 }
 
+// ── TVWidgetTab Component for Tabs ──
+function TVWidgetTab({ symbol, timeframe, tabId, showSignalOverlay, signalLines, instructions }: { symbol: string, timeframe: string, tabId: string, showSignalOverlay?: boolean, signalLines?: SignalLine[], instructions?: React.ReactNode }) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const widgetIdRef = useRef<string>(`tv_signal_widget_${tabId}_${Math.floor(Math.random() * 1000000)}`);
+
+  useEffect(() => {
+    const scriptId = 'tradingview-widget-script';
+    let script = document.getElementById(scriptId) as HTMLScriptElement;
+
+    const tvSymbol = getTradingViewSymbol(symbol);
+
+    const initWidget = () => {
+      const container = containerRef.current;
+      if (window.TradingView && container) {
+        container.innerHTML = `<div id="${widgetIdRef.current}" style="width:100%;height:100%;"></div>`;
+        new window.TradingView.widget({
+          autosize: true,
+          symbol: tvSymbol,
+          interval: getTradingViewInterval(timeframe),
+          timezone: 'Africa/Johannesburg',
+          theme: 'dark',
+          style: '1',
+          locale: 'en',
+          toolbar_bg: '#0F172A',
+          enable_publishing: false,
+          allow_symbol_change: false,
+          hide_side_toolbar: false, // Turn ON drawing tools for these analysis tabs!
+          hide_top_toolbar: true,
+          details: false,
+          hotlist: false,
+          calendar: false,
+          container_id: widgetIdRef.current,
+        });
+      }
+    };
+
+    if (!script) {
+      script = document.createElement('script');
+      script.id = scriptId;
+      script.src = 'https://s3.tradingview.com/tv.js';
+      script.async = true;
+      script.onload = initWidget;
+      document.head.appendChild(script);
+    } else {
+      const timer = setTimeout(initWidget, 50);
+      return () => clearTimeout(timer);
+    }
+  }, [symbol, timeframe, tabId]);
+
+  return (
+    <div className="flex flex-col gap-3">
+      {instructions && (
+        <div className="bg-slate-950 p-3 rounded-lg border border-slate-800 text-slate-300 text-xs">
+          {instructions}
+        </div>
+      )}
+      <div className="relative w-full h-[420px] rounded-lg overflow-hidden border border-slate-950">
+        <div ref={containerRef} className="w-full h-full" />
+        {showSignalOverlay && signalLines && <SignalOverlay lines={signalLines} chartHeight={420} />}
+      </div>
+    </div>
+  );
+}
+
 export default function TradingChart({
   symbol,
   timeframe,
@@ -169,6 +233,7 @@ export default function TradingChart({
 
   const [signalType, setSignalType] = useState<string>('BUY/LONG');
   const [tradeParams, setTradeParams] = useState<any>(null);
+  const [activeTab, setActiveTab] = useState<string>('live_signals');
 
   const isHighValueAsset = latestPrice > 10.0;
   const precision = isHighValueAsset ? 2 : 4;
@@ -234,50 +299,7 @@ export default function TradingChart({
     } catch (_) {}
   }, [symbol, timeframe, onLatestDataUpdate]);
 
-  // ── Initialize TradingView widget (IDENTICAL to TradingViewDirectChart) ──
-  useEffect(() => {
-    const scriptId = 'tradingview-widget-script';
-    let script = document.getElementById(scriptId) as HTMLScriptElement;
-
-    const tvSymbol = getTradingViewSymbol(symbol);
-
-    const initWidget = () => {
-      const container = chartContainerRef.current;
-      if (window.TradingView && container) {
-        container.innerHTML = `<div id="${widgetIdRef.current}" style="width:100%;height:100%;"></div>`;
-        new window.TradingView.widget({
-          autosize: true,
-          symbol: tvSymbol,
-          interval: getTradingViewInterval(timeframe),
-          timezone: 'Africa/Johannesburg',
-          theme: 'dark',
-          style: '1',
-          locale: 'en',
-          toolbar_bg: '#0F172A',
-          enable_publishing: false,
-          allow_symbol_change: false,
-          hide_side_toolbar: true,
-          hide_top_toolbar: true,
-          details: false,
-          hotlist: false,
-          calendar: false,
-          container_id: widgetIdRef.current,
-        });
-      }
-    };
-
-    if (!script) {
-      script = document.createElement('script');
-      script.id = scriptId;
-      script.src = 'https://s3.tradingview.com/tv.js';
-      script.async = true;
-      script.onload = initWidget;
-      document.head.appendChild(script);
-    } else {
-      const timer = setTimeout(initWidget, 50);
-      return () => clearTimeout(timer);
-    }
-  }, [symbol, timeframe]);
+  // TV widget initialization moved to TVWidgetTab component
 
   // ── Fetch signals on mount and on interval ──
   useEffect(() => {
@@ -458,82 +480,176 @@ export default function TradingChart({
         </div>
       </div>
 
-      {/* Visual Technical Trading Decision Lines Guide Bar */}
-      {signalType === 'SELL/SHORT' ? (
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs font-mono">
-          <div className="bg-slate-950 p-2 rounded-lg border border-rose-800/60 flex items-center justify-between">
-            <div>
-              <span className="text-rose-400 block text-[10px] font-bold">🔴 WHEN TO SELL / SHORT (ENTRY)</span>
-              <span className="text-white font-bold">${latestPrice > 0 ? latestPrice.toFixed(precision) : '---'}</span>
-            </div>
-            <ArrowDownRight className="w-4 h-4 text-rose-400" />
-          </div>
+      {/* Tabs Switcher */}
+      <div className="flex flex-wrap items-center gap-2 border-b border-slate-800 pb-3">
+        {[
+          { id: 'live_signals', label: 'Live Signals & Lines' },
+          { id: 'market_structure', label: 'Market Structure' },
+          { id: 'dow_theory', label: 'Dow Theory / Trend' },
+          { id: 'sideways', label: 'Sideways Channel' },
+          { id: 'swing_analysis', label: 'Swing Analysis (BOS/CHOCH)' },
+        ].map((tab) => (
+          <button
+            key={tab.id}
+            onClick={() => setActiveTab(tab.id)}
+            className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all ${
+              activeTab === tab.id
+                ? 'bg-blue-600 text-white shadow-md shadow-blue-900/40'
+                : 'bg-slate-950 text-slate-400 hover:bg-slate-800 hover:text-slate-200 border border-slate-800'
+            }`}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
 
-          <div className="bg-slate-950 p-2 rounded-lg border border-rose-800/60 flex items-center justify-between">
-            <div>
-              <span className="text-rose-400 block text-[10px] font-bold">🛑 STOP LOSS LINE</span>
-              <span className="text-rose-300 font-bold">${sl > 0 ? sl.toFixed(precision) : '---'}</span>
+      {/* Visual Technical Trading Decision Lines Guide Bar - ONLY on Live Signals */}
+      {activeTab === 'live_signals' && (
+        signalType === 'SELL/SHORT' ? (
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs font-mono">
+            <div className="bg-slate-950 p-2 rounded-lg border border-rose-800/60 flex items-center justify-between">
+              <div>
+                <span className="text-rose-400 block text-[10px] font-bold">🔴 WHEN TO SELL / SHORT (ENTRY)</span>
+                <span className="text-white font-bold">${latestPrice > 0 ? latestPrice.toFixed(precision) : '---'}</span>
+              </div>
+              <ArrowDownRight className="w-4 h-4 text-rose-400" />
             </div>
-            <Shield className="w-4 h-4 text-rose-400" />
-          </div>
 
-          <div className="bg-slate-950 p-2 rounded-lg border border-emerald-800/60 flex items-center justify-between">
-            <div>
-              <span className="text-emerald-400 block text-[10px] font-bold">🎯 TAKE PROFIT (BUY BACK)</span>
-              <span className="text-emerald-300 font-bold">${tp > 0 ? tp.toFixed(precision) : '---'}</span>
+            <div className="bg-slate-950 p-2 rounded-lg border border-rose-800/60 flex items-center justify-between">
+              <div>
+                <span className="text-rose-400 block text-[10px] font-bold">🛑 STOP LOSS LINE</span>
+                <span className="text-rose-300 font-bold">${sl > 0 ? sl.toFixed(precision) : '---'}</span>
+              </div>
+              <Shield className="w-4 h-4 text-rose-400" />
             </div>
-            <Target className="w-4 h-4 text-emerald-400" />
-          </div>
 
-          <div className="bg-slate-950 p-2 rounded-lg border border-amber-800/60 flex items-center justify-between">
-            <div>
-              <span className="text-amber-400 block text-[10px] font-bold">⛔ WHEN NOT TO SELL</span>
-              <span className="text-slate-300 text-[10px]">OBI &gt; 0 or Near Support</span>
+            <div className="bg-slate-950 p-2 rounded-lg border border-emerald-800/60 flex items-center justify-between">
+              <div>
+                <span className="text-emerald-400 block text-[10px] font-bold">🎯 TAKE PROFIT (BUY BACK)</span>
+                <span className="text-emerald-300 font-bold">${tp > 0 ? tp.toFixed(precision) : '---'}</span>
+              </div>
+              <Target className="w-4 h-4 text-emerald-400" />
             </div>
-            <AlertOctagon className="w-4 h-4 text-amber-400" />
-          </div>
-        </div>
-      ) : (
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs font-mono">
-          <div className="bg-slate-950 p-2 rounded-lg border border-blue-800/60 flex items-center justify-between">
-            <div>
-              <span className="text-blue-400 block text-[10px] font-bold">🔵 WHEN TO BUY (ENTRY)</span>
-              <span className="text-white font-bold">${latestPrice > 0 ? latestPrice.toFixed(precision) : '---'}</span>
-            </div>
-            <ArrowUpRight className="w-4 h-4 text-blue-400" />
-          </div>
 
-          <div className="bg-slate-950 p-2 rounded-lg border border-rose-800/60 flex items-center justify-between">
-            <div>
-              <span className="text-rose-400 block text-[10px] font-bold">🛑 STOP LOSS LINE</span>
-              <span className="text-rose-300 font-bold">${sl > 0 ? sl.toFixed(precision) : '---'}</span>
+            <div className="bg-slate-950 p-2 rounded-lg border border-amber-800/60 flex items-center justify-between">
+              <div>
+                <span className="text-amber-400 block text-[10px] font-bold">⛔ WHEN NOT TO SELL</span>
+                <span className="text-slate-300 text-[10px]">OBI &gt; 0 or Near Support</span>
+              </div>
+              <AlertOctagon className="w-4 h-4 text-amber-400" />
             </div>
-            <Shield className="w-4 h-4 text-rose-400" />
           </div>
+        ) : (
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs font-mono">
+            <div className="bg-slate-950 p-2 rounded-lg border border-blue-800/60 flex items-center justify-between">
+              <div>
+                <span className="text-blue-400 block text-[10px] font-bold">🔵 WHEN TO BUY (ENTRY)</span>
+                <span className="text-white font-bold">${latestPrice > 0 ? latestPrice.toFixed(precision) : '---'}</span>
+              </div>
+              <ArrowUpRight className="w-4 h-4 text-blue-400" />
+            </div>
 
-          <div className="bg-slate-950 p-2 rounded-lg border border-emerald-800/60 flex items-center justify-between">
-            <div>
-              <span className="text-emerald-400 block text-[10px] font-bold">🎯 TAKE PROFIT (SELL)</span>
-              <span className="text-emerald-300 font-bold">${tp > 0 ? tp.toFixed(precision) : '---'}</span>
+            <div className="bg-slate-950 p-2 rounded-lg border border-rose-800/60 flex items-center justify-between">
+              <div>
+                <span className="text-rose-400 block text-[10px] font-bold">🛑 STOP LOSS LINE</span>
+                <span className="text-rose-300 font-bold">${sl > 0 ? sl.toFixed(precision) : '---'}</span>
+              </div>
+              <Shield className="w-4 h-4 text-rose-400" />
             </div>
-            <Target className="w-4 h-4 text-emerald-400" />
-          </div>
 
-          <div className="bg-slate-950 p-2 rounded-lg border border-amber-800/60 flex items-center justify-between">
-            <div>
-              <span className="text-amber-400 block text-[10px] font-bold">⛔ WHEN NOT TO BUY</span>
-              <span className="text-slate-300 text-[10px]">Downtrend or Near Resistance</span>
+            <div className="bg-slate-950 p-2 rounded-lg border border-emerald-800/60 flex items-center justify-between">
+              <div>
+                <span className="text-emerald-400 block text-[10px] font-bold">🎯 TAKE PROFIT (SELL)</span>
+                <span className="text-emerald-300 font-bold">${tp > 0 ? tp.toFixed(precision) : '---'}</span>
+              </div>
+              <Target className="w-4 h-4 text-emerald-400" />
             </div>
-            <AlertOctagon className="w-4 h-4 text-amber-400" />
+
+            <div className="bg-slate-950 p-2 rounded-lg border border-amber-800/60 flex items-center justify-between">
+              <div>
+                <span className="text-amber-400 block text-[10px] font-bold">⛔ WHEN NOT TO BUY</span>
+                <span className="text-slate-300 text-[10px]">Downtrend or Near Resistance</span>
+              </div>
+              <AlertOctagon className="w-4 h-4 text-amber-400" />
+            </div>
           </div>
-        </div>
+        )
       )}
 
-      {/* Chart Canvas — TradingView widget (same OANDA feed as Live Chart) with signal overlay */}
-      <div className="relative w-full h-[420px] rounded-lg overflow-hidden border border-slate-950">
-        <div ref={chartContainerRef} className="w-full h-full" />
-        <SignalOverlay lines={signalLines} chartHeight={420} />
-      </div>
+      {/* Tab Content Render */}
+      {activeTab === 'live_signals' && (
+        <TVWidgetTab 
+          symbol={symbol} 
+          timeframe={timeframe} 
+          tabId="live_signals" 
+          showSignalOverlay={true} 
+          signalLines={signalLines} 
+        />
+      )}
+      
+      {activeTab === 'market_structure' && (
+        <TVWidgetTab 
+          symbol={symbol} 
+          timeframe={timeframe} 
+          tabId="market_structure" 
+          instructions={
+            <div className="flex items-center gap-2">
+              <Shield className="w-4 h-4 text-blue-400 flex-shrink-0" />
+              <span><strong className="text-white">Market Structure:</strong> Identify Long Term, Intermediate, and Short Term Highs/Lows to map the overall trend. A trend remains intact until the previous structure is broken.</span>
+            </div>
+          }
+        />
+      )}
+
+      {activeTab === 'dow_theory' && (
+        <TVWidgetTab 
+          symbol={symbol} 
+          timeframe={timeframe} 
+          tabId="dow_theory" 
+          instructions={
+            <div className="flex items-center gap-2">
+              <Activity className="w-4 h-4 text-emerald-400 flex-shrink-0" />
+              <span>
+                <strong className="text-white">The Dow Theory / Trend:</strong> 
+                <span className="text-emerald-400 font-bold ml-2">Uptrend:</span> Higher Highs (HH) & Higher Lows (HL).
+                <span className="text-rose-400 font-bold ml-2">Downtrend:</span> Lower Highs (LH) & Lower Lows (LL).
+              </span>
+            </div>
+          }
+        />
+      )}
+
+      {activeTab === 'sideways' && (
+        <TVWidgetTab 
+          symbol={symbol} 
+          timeframe={timeframe} 
+          tabId="sideways" 
+          instructions={
+            <div className="flex items-center gap-2">
+              <ArrowRightLeft className="w-4 h-4 text-amber-400 flex-shrink-0" />
+              <span><strong className="text-white">Sideways Trend:</strong> Price moves within a horizontal range between Support and Resistance. Strategy: Buy near support, sell near resistance until a breakout occurs.</span>
+            </div>
+          }
+        />
+      )}
+
+      {activeTab === 'swing_analysis' && (
+        <TVWidgetTab 
+          symbol={symbol} 
+          timeframe={timeframe} 
+          tabId="swing_analysis" 
+          instructions={
+            <div className="flex items-center gap-2">
+              <TrendingUp className="w-4 h-4 text-purple-400 flex-shrink-0" />
+              <span>
+                <strong className="text-white">Swing Analysis (BOS/CHOCH):</strong> 
+                <strong className="ml-2">BOS (Break of Structure):</strong> Continuation of the current trend. 
+                <strong className="ml-2">CHOCH (Change of Character):</strong> Early sign of a trend reversal.
+              </span>
+            </div>
+          }
+        />
+      )}
     </div>
   );
 }
