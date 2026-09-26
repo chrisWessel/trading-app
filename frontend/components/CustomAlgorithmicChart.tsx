@@ -19,10 +19,13 @@ export default function CustomAlgorithmicChart({ symbol, timeframe, tabId }: Cus
 
   useEffect(() => {
     let isMounted = true;
+    let pollInterval: NodeJS.Timeout;
     
-    async function fetchData() {
+    async function fetchData(isInitialLoad: boolean = false) {
       try {
-        setLoading(true);
+        if (isInitialLoad) {
+          setLoading(true);
+        }
         setError(null);
         
         const res = await fetch(`${API_BASE_URL}/api/chart-data?symbol=${encodeURIComponent(symbol)}&timeframe=${encodeURIComponent(timeframe)}&limit=300`);
@@ -32,33 +35,44 @@ export default function CustomAlgorithmicChart({ symbol, timeframe, tabId }: Cus
         if (!isMounted) return;
 
         if (data.status === 'success') {
-          renderChart(data.candles, data.pivots);
+          renderChart(data.candles, data.pivots, isInitialLoad);
         } else {
           setError("Failed to load market data");
         }
       } catch (err: any) {
         if (isMounted) setError(err.message || "Error fetching data");
       } finally {
-        if (isMounted) setLoading(false);
+        if (isMounted && isInitialLoad) {
+          setLoading(false);
+        }
       }
     }
     
-    fetchData();
+    // Initial fetch
+    fetchData(true);
+    
+    // Setup polling every 5 seconds for live feed
+    pollInterval = setInterval(() => {
+      fetchData(false);
+    }, 5000);
     
     return () => {
       isMounted = false;
+      clearInterval(pollInterval);
     };
   }, [symbol, timeframe, tabId]);
   
-  function renderChart(candles: any[], pivots: any[]) {
+  function renderChart(candles: any[], pivots: any[], isInitialLoad: boolean) {
     if (!chartContainerRef.current) return;
     
-    if (chartRef.current) {
-      chartRef.current.remove();
-      chartRef.current = null;
-    }
-    
-    const chart = createChart(chartContainerRef.current, {
+    // Only rebuild the chart completely on initial load to avoid flickering
+    if (isInitialLoad) {
+      if (chartRef.current) {
+        chartRef.current.remove();
+        chartRef.current = null;
+      }
+      
+      const chart = createChart(chartContainerRef.current, {
       layout: {
         background: { type: ColorType.Solid, color: '#0f172a' },
         textColor: '#94a3b8',
@@ -78,46 +92,78 @@ export default function CustomAlgorithmicChart({ symbol, timeframe, tabId }: Cus
     
     chartRef.current = chart;
     
-    const sortedCandles = [...candles].sort((a, b) => a.time - b.time);
-    
-    const candlestickSeries = chart.addCandlestickSeries({
-      upColor: '#22c55e',
-      downColor: '#ef4444',
-      borderVisible: false,
-      wickUpColor: '#22c55e',
-      wickDownColor: '#ef4444',
-    });
-    
-    candlestickSeries.setData(sortedCandles);
-    
-    const lineSeries = chart.addLineSeries({
-      color: '#3b82f6',
-      lineWidth: 2,
-      crosshairMarkerVisible: false,
-      lastValueVisible: false,
-      priceLineVisible: false,
-    });
-    
-    const sortedPivots = [...pivots].sort((a, b) => a.time - b.time);
-    const lineData = sortedPivots.map(p => ({ time: p.time, value: p.price }));
-    if (lineData.length > 0) {
-      lineSeries.setData(lineData as any);
+      
+      const sortedCandles = [...candles].sort((a, b) => a.time - b.time);
+      
+      const candlestickSeries = chart.addCandlestickSeries({
+        upColor: '#22c55e',
+        downColor: '#ef4444',
+        borderVisible: false,
+        wickUpColor: '#22c55e',
+        wickDownColor: '#ef4444',
+      });
+      
+      candlestickSeries.setData(sortedCandles);
+      
+      const lineSeries = chart.addLineSeries({
+        color: '#3b82f6',
+        lineWidth: 2,
+        crosshairMarkerVisible: false,
+        lastValueVisible: false,
+        priceLineVisible: false,
+      });
+      
+      const sortedPivots = [...pivots].sort((a, b) => a.time - b.time);
+      const lineData = sortedPivots.map(p => ({ time: p.time, value: p.price }));
+      if (lineData.length > 0) {
+        lineSeries.setData(lineData as any);
+      }
+      
+      const markers: SeriesMarker<Time>[] = sortedPivots.map(p => {
+        const isHigh = p.type === 'HIGH';
+        return {
+          time: p.time as Time,
+          position: isHigh ? 'aboveBar' : 'belowBar',
+          color: p.color,
+          shape: isHigh ? 'arrowDown' : 'arrowUp',
+          text: p.label,
+          size: 1,
+        };
+      });
+      
+      candlestickSeries.setMarkers(markers);
+      chart.timeScale().fitContent();
+      
+      // Store references on the chart object so we can update them on next polls
+      (chart as any)._candlestickSeries = candlestickSeries;
+      (chart as any)._lineSeries = lineSeries;
+    } else if (chartRef.current) {
+      // Update existing chart seamlessly
+      const chart: any = chartRef.current;
+      if (chart._candlestickSeries && chart._lineSeries) {
+        const sortedCandles = [...candles].sort((a, b) => a.time - b.time);
+        chart._candlestickSeries.setData(sortedCandles);
+        
+        const sortedPivots = [...pivots].sort((a, b) => a.time - b.time);
+        const lineData = sortedPivots.map(p => ({ time: p.time, value: p.price }));
+        if (lineData.length > 0) {
+          chart._lineSeries.setData(lineData as any);
+        }
+        
+        const markers: SeriesMarker<Time>[] = sortedPivots.map(p => {
+          const isHigh = p.type === 'HIGH';
+          return {
+            time: p.time as Time,
+            position: isHigh ? 'aboveBar' : 'belowBar',
+            color: p.color,
+            shape: isHigh ? 'arrowDown' : 'arrowUp',
+            text: p.label,
+            size: 1,
+          };
+        });
+        chart._candlestickSeries.setMarkers(markers);
+      }
     }
-    
-    const markers: SeriesMarker<Time>[] = sortedPivots.map(p => {
-      const isHigh = p.type === 'HIGH';
-      return {
-        time: p.time as Time,
-        position: isHigh ? 'aboveBar' : 'belowBar',
-        color: p.color,
-        shape: isHigh ? 'arrowDown' : 'arrowUp',
-        text: p.label,
-        size: 1,
-      };
-    });
-    
-    candlestickSeries.setMarkers(markers);
-    chart.timeScale().fitContent();
   }
 
   useEffect(() => {

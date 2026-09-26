@@ -486,10 +486,7 @@ export default function TradingChart({
       <div className="flex flex-wrap items-center gap-2 border-b border-slate-800 pb-3">
         {[
           { id: 'live_signals', label: 'Live Signals & Lines' },
-          { id: 'market_structure', label: 'Market Structure' },
-          { id: 'dow_theory', label: 'Dow Theory / Trend' },
-          { id: 'sideways', label: 'Sideways Channel' },
-          { id: 'swing_analysis', label: 'Swing Analysis (BOS/CHOCH)' },
+          { id: 'algo_market_structure', label: 'Algo Market Structure (Live Feed)' },
         ].map((tab) => (
           <button
             key={tab.id}
@@ -589,45 +586,13 @@ export default function TradingChart({
         />
       )}
       
-      {activeTab === 'market_structure' && (
-        <div className="space-y-2 mt-4">
-          <div className="flex items-center gap-2 mb-2 p-3 bg-slate-900 border border-slate-800 rounded-lg">
-            <Shield className="w-4 h-4 text-blue-400 flex-shrink-0" />
-            <span className="text-sm"><strong className="text-white">Market Structure (Python Engine):</strong> Live Pivot Points calculated by backend engine.</span>
-          </div>
-          <CustomAlgorithmicChart symbol={symbol} timeframe={timeframe} tabId="market_structure" />
-        </div>
-      )}
-
-      {activeTab === 'dow_theory' && (
-        <div className="space-y-2 mt-4">
-          <div className="flex items-center gap-2 mb-2 p-3 bg-slate-900 border border-slate-800 rounded-lg">
-            <Activity className="w-4 h-4 text-emerald-400 flex-shrink-0" />
-            <span className="text-sm"><strong className="text-white">Dow Theory (Python Engine):</strong> Algorithmic Highs and Lows tracking the trend.</span>
-          </div>
-          <CustomAlgorithmicChart symbol={symbol} timeframe={timeframe} tabId="dow_theory" />
-        </div>
-      )}
-
-      {activeTab === 'sideways' && (
-        <div className="space-y-2 mt-4">
-          <div className="flex items-center gap-2 mb-2 p-3 bg-slate-900 border border-slate-800 rounded-lg">
-            <ArrowRightLeft className="w-4 h-4 text-amber-400 flex-shrink-0" />
-            <span className="text-sm"><strong className="text-white">Sideways Trend:</strong> Showing custom support and resistance mapping.</span>
-          </div>
-          <CustomAlgorithmicChart symbol={symbol} timeframe={timeframe} tabId="sideways" />
-        </div>
-      )}
-
-      {activeTab === 'swing_analysis' && (
+      {activeTab === 'algo_market_structure' && (
         <div className="space-y-2 mt-4">
           <div className="flex items-center gap-2 mb-2 p-3 bg-slate-900 border border-slate-800 rounded-lg">
             <TrendingUp className="w-4 h-4 text-purple-400 flex-shrink-0" />
-            <span className="text-sm">
-              <strong className="text-white">Swing Analysis (BOS/CHOCH):</strong> Algorithmic zig-zag and markers.
-            </span>
+            <span className="text-sm"><strong className="text-white">Algorithmic Market Structure:</strong> Custom Python engine charting HH/HL pivots, trendlines, and BOS/CHOCH markings in real-time.</span>
           </div>
-          <CustomAlgorithmicChart symbol={symbol} timeframe={timeframe} tabId="swing_analysis" />
+          <CustomAlgorithmicChart symbol={symbol} timeframe={timeframe} tabId="algo_market_structure" />
         </div>
       )}
     </div>
