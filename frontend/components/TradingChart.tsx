@@ -218,6 +218,69 @@ function TVWidgetTab({ symbol, timeframe, tabId, showSignalOverlay, signalLines,
   );
 }
 
+// ── AlgoStructureTab: OANDA chart + algo analysis overlay ──
+function AlgoStructureTab({ symbol, timeframe, algoTrend, fetchAlgoAnalysis }: {
+  symbol: string; timeframe: string;
+  algoTrend: { status: string; pivots: any[] } | null;
+  fetchAlgoAnalysis: () => void;
+}) {
+  useEffect(() => {
+    fetchAlgoAnalysis();
+    const interval = setInterval(fetchAlgoAnalysis, 10000);
+    return () => clearInterval(interval);
+  }, [symbol, timeframe, fetchAlgoAnalysis]);
+
+  const isBullish = algoTrend?.status?.includes('Bullish');
+  const isBearish = algoTrend?.status?.includes('Bearish');
+
+  const hhCount = algoTrend?.pivots?.filter((p: any) => p.code === 'HH').length ?? 0;
+  const hlCount = algoTrend?.pivots?.filter((p: any) => p.code === 'HL').length ?? 0;
+  const lhCount = algoTrend?.pivots?.filter((p: any) => p.code === 'LH').length ?? 0;
+  const llCount = algoTrend?.pivots?.filter((p: any) => p.code === 'LL').length ?? 0;
+
+  return (
+    <div className="flex flex-col gap-3">
+      {/* Trend Status Banner */}
+      {algoTrend && (
+        <div className={`flex items-center justify-center gap-3 py-2.5 px-4 rounded-lg border font-bold text-sm tracking-wide ${
+          isBullish
+            ? 'bg-emerald-950/60 border-emerald-700/40 text-emerald-400'
+            : isBearish
+              ? 'bg-rose-950/60 border-rose-700/40 text-rose-400'
+              : 'bg-amber-950/60 border-amber-700/40 text-amber-400'
+        }`}>
+          {isBullish ? '📈' : isBearish ? '📉' : '↔️'} {algoTrend.status}
+        </div>
+      )}
+
+      {/* Pivot Stats */}
+      {algoTrend && (
+        <div className="grid grid-cols-4 gap-2 text-xs font-mono">
+          <div className="bg-slate-950 p-2 rounded-lg border border-emerald-800/50 text-center">
+            <div className="text-emerald-400 font-bold text-base">{hhCount}</div>
+            <div className="text-slate-400">Higher Highs</div>
+          </div>
+          <div className="bg-slate-950 p-2 rounded-lg border border-emerald-800/50 text-center">
+            <div className="text-emerald-400 font-bold text-base">{hlCount}</div>
+            <div className="text-slate-400">Higher Lows</div>
+          </div>
+          <div className="bg-slate-950 p-2 rounded-lg border border-rose-800/50 text-center">
+            <div className="text-rose-400 font-bold text-base">{lhCount}</div>
+            <div className="text-slate-400">Lower Highs</div>
+          </div>
+          <div className="bg-slate-950 p-2 rounded-lg border border-rose-800/50 text-center">
+            <div className="text-rose-400 font-bold text-base">{llCount}</div>
+            <div className="text-slate-400">Lower Lows</div>
+          </div>
+        </div>
+      )}
+
+      {/* SAME TradingView OANDA chart as Live Signals */}
+      <TVWidgetTab symbol={symbol} timeframe={timeframe} tabId="algo_market_structure_tv" />
+    </div>
+  );
+}
+
 export default function TradingChart({
   symbol,
   timeframe,
@@ -236,6 +299,7 @@ export default function TradingChart({
   const [signalType, setSignalType] = useState<string>('BUY/LONG');
   const [tradeParams, setTradeParams] = useState<any>(null);
   const [activeTab, setActiveTab] = useState<string>('live_signals');
+  const [algoTrend, setAlgoTrend] = useState<{ status: string; pivots: any[] } | null>(null);
 
   const isHighValueAsset = latestPrice > 10.0;
   const precision = isHighValueAsset ? 2 : 4;
@@ -244,6 +308,18 @@ export default function TradingChart({
   const stopLossPrice = tradeParams?.stop_loss ?? Number((supportLevel * 0.985).toFixed(precision));
   const riskAmount = Math.max(0.0001, Math.abs(buyEntryPrice - stopLossPrice));
   const takeProfitPrice = tradeParams?.tp1 ?? Number((buyEntryPrice + riskAmount * 1.5).toFixed(precision));
+
+  // ── Fetch algo market structure analysis from backend ──
+  const fetchAlgoAnalysis = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/chart-data?symbol=${encodeURIComponent(symbol)}&timeframe=${encodeURIComponent(timeframe)}&limit=500`);
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.status === 'success') {
+        setAlgoTrend({ status: data.trend?.status || '', pivots: data.pivots || [] });
+      }
+    } catch { /* silent */ }
+  }, [symbol, timeframe]);
 
   // ── Fetch signal data from backend (for overlay lines, NOT for chart candles) ──
   const fetchSignalData = useCallback(async () => {
@@ -587,13 +663,7 @@ export default function TradingChart({
       )}
       
       {activeTab === 'algo_market_structure' && (
-        <div className="space-y-2 mt-4">
-          <div className="flex items-center gap-2 mb-2 p-3 bg-slate-900 border border-slate-800 rounded-lg">
-            <TrendingUp className="w-4 h-4 text-purple-400 flex-shrink-0" />
-            <span className="text-sm"><strong className="text-white">Algorithmic Market Structure:</strong> Custom Python engine charting HH/HL pivots, trendlines, and BOS/CHOCH markings in real-time.</span>
-          </div>
-          <CustomAlgorithmicChart symbol={symbol} timeframe={timeframe} tabId="algo_market_structure" />
-        </div>
+        <AlgoStructureTab symbol={symbol} timeframe={timeframe} algoTrend={algoTrend} fetchAlgoAnalysis={fetchAlgoAnalysis} />
       )}
     </div>
   );
