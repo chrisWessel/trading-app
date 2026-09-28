@@ -59,9 +59,9 @@ export default function CustomAlgorithmicChart({ symbol, timeframe, tabId, trade
         const isGold = ['XAUUSD', 'XAU', 'GOLD'].includes(normalizedSymbol);
         const source = data.data_source || 'unknown';
         setDataSource(source);
-        if (data.status === 'success' && (source === 'SIMULATED' || (isGold && source !== 'OANDA'))) {
+        if (data.status === 'success' && (source === 'SIMULATED' || (isGold && !['OANDA', 'Binance PAXGUSDT (reference)'].includes(source)))) {
           setTrend(null);
-          setError(isGold ? 'Waiting for OANDA data. Configure OANDA_API_TOKEN in the local .env file to enable matching chart structure.' : 'Market data is simulated; chart disabled.');
+          setError(isGold ? 'Waiting for a verified gold data feed.' : 'Market data is simulated; chart disabled.');
           if (chartRef.current) {
             chartRef.current.remove();
             chartRef.current = null;

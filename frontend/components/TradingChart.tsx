@@ -329,7 +329,7 @@ function StructureArrowChart({ pivots }: { pivots: any[] }) {
 // ── AlgoStructureTab: OANDA chart + algo analysis overlay ──
 function AlgoStructureTab({ symbol, timeframe, algoTrend, fetchAlgoAnalysis }: {
   symbol: string; timeframe: string;
-  algoTrend: { status: string; pivots: any[] } | null;
+  algoTrend: { status: string; pivots: any[]; dataSource: string } | null;
   fetchAlgoAnalysis: () => void;
 }) {
   useEffect(() => {
@@ -383,10 +383,14 @@ function AlgoStructureTab({ symbol, timeframe, algoTrend, fetchAlgoAnalysis }: {
         </div>
       )}
 
-      <TVWidgetTab symbol={symbol} timeframe={timeframe} tabId="algo_market_structure_tv" />
+      {algoTrend && algoTrend.dataSource !== 'SIMULATED' ? (
+        <CustomAlgorithmicChart symbol={symbol} timeframe={timeframe} tabId="algo_market_structure_reference" />
+      ) : (
+        <TVWidgetTab symbol={symbol} timeframe={timeframe} tabId="algo_market_structure_tv" />
+      )}
       {!algoTrend && (symbol.toUpperCase().includes('XAU') || symbol.toUpperCase().includes('GOLD')) && (
         <div className="rounded-lg border border-amber-800/60 bg-slate-950 p-3 text-xs font-mono text-amber-300">
-          OANDA pivot markers are shown on the chart. Connect the OANDA API in the local backend for HH/HL/LH/LL labels.
+          TradingView pivots appear immediately. Connecting the free PAXG gold reference for matched HH/HL/LH/LL labels.
         </div>
       )}
 
@@ -417,7 +421,7 @@ export default function TradingChart({
   const [tradeParams, setTradeParams] = useState<any>(null);
   const [marketDataSource, setMarketDataSource] = useState<string>('unknown');
   const [activeTab, setActiveTab] = useState<string>('live_signals');
-  const [algoTrend, setAlgoTrend] = useState<{ status: string; pivots: any[] } | null>(null);
+  const [algoTrend, setAlgoTrend] = useState<{ status: string; pivots: any[]; dataSource: string } | null>(null);
 
   const isHighValueAsset = latestPrice > 10.0;
   const precision = isHighValueAsset ? 2 : 4;
@@ -452,11 +456,11 @@ export default function TradingChart({
         const normalizedSymbol = symbol.toUpperCase().replace(/[^A-Z0-9]/g, '');
         const isGold = ['XAUUSD', 'XAU', 'GOLD'].includes(normalizedSymbol);
         setMarketDataSource(data.data_source || 'unknown');
-        if (data.data_source === 'SIMULATED' || (isGold && data.data_source !== 'OANDA')) {
+        if (data.data_source === 'SIMULATED' || (isGold && !['OANDA', 'Binance PAXGUSDT (reference)'].includes(data.data_source))) {
           setAlgoTrend(null);
           return;
         }
-        setAlgoTrend({ status: data.trend?.status || '', pivots: data.pivots || [] });
+        setAlgoTrend({ status: data.trend?.status || '', pivots: data.pivots || [], dataSource: data.data_source || 'unknown' });
       }
     } catch { /* silent */ }
   }, [symbol, timeframe]);
@@ -764,7 +768,7 @@ export default function TradingChart({
 
       {/* Tab Content Render */}
       {activeTab === 'live_signals' && (
-        marketDataSource === 'OANDA' && (symbol.toUpperCase().includes('XAU') || symbol.toUpperCase().includes('GOLD')) ? (
+        ['OANDA', 'Binance PAXGUSDT (reference)'].includes(marketDataSource) && (symbol.toUpperCase().includes('XAU') || symbol.toUpperCase().includes('GOLD')) ? (
           <CustomAlgorithmicChart
             symbol={symbol}
             timeframe={timeframe}

@@ -233,6 +233,7 @@ def read_root():
         "system": "Multi-Asset Trading & Signal Dispatching System",
         "status": "ONLINE",
         "oanda": backend.engine.get_oanda_status(),
+        "gold_feed": backend.engine.get_gold_feed_status(),
         "telegram_configured": bool(os.getenv("TELEGRAM_BOT_TOKEN") and os.getenv("TELEGRAM_CHAT_ID")),
         "endpoints": ["/api/candles", "/api/orderbook", "/api/signals/check", "/api/trade/close", "/api/trades/history", "/api/report/pdf", "/api/news", "/ws/candles/{symbol}"]
     }

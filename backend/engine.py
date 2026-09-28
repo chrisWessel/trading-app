@@ -110,6 +110,20 @@ def get_oanda_status() -> Dict[str, Any]:
     }
 
 
+def get_gold_feed_status() -> Dict[str, Any]:
+    if OANDA_API_TOKEN:
+        return {
+            "source": "OANDA",
+            "label": "OANDA API",
+            "message": "Gold signals use OANDA candles, matching the TradingView chart feed.",
+        }
+    return {
+        "source": "Binance PAXGUSDT",
+        "label": "FREE PAXG REFERENCE",
+        "message": "Signals use Binance PAXG/USDT as a free gold-backed reference; its quote can differ from OANDA and Exness.",
+    }
+
+
 def fetch_oanda_ohlcv(timeframe: str, limit: int) -> Optional[pd.DataFrame]:
     if not OANDA_API_TOKEN:
         return None
@@ -291,7 +305,9 @@ def fetch_real_ohlcv_from_market(symbol: str, timeframe: str = "1m", limit: int 
     clean = clean_symbol_string(symbol)
 
     if is_mt5_gold_symbol(symbol):
-        return fetch_oanda_ohlcv(timeframe, limit)
+        oanda_frame = fetch_oanda_ohlcv(timeframe, limit)
+        if oanda_frame is not None:
+            return oanda_frame
     
     # ── PRIMARY SPOT FEED: Binance for Gold Spot (PAXGUSDT) & Crypto ──────
     binance_symbol_map = {
@@ -328,7 +344,7 @@ def fetch_real_ohlcv_from_market(symbol: str, timeframe: str = "1m", limit: int 
                             'volume': float(k[5])
                         })
                     df = pd.DataFrame(records)
-                    df.attrs['data_source'] = 'Binance'
+                    df.attrs['data_source'] = 'Binance PAXGUSDT (reference)' if is_mt5_gold_symbol(symbol) else 'Binance'
                     _, precision = get_asset_base_config(symbol)
                     for col in ['open', 'high', 'low', 'close']:
                         df[col] = df[col].round(precision)
@@ -579,12 +595,6 @@ def fetch_orderbook(symbol: str = "EUR/USD", depth: int = 20) -> Dict[str, Any]:
         if now - cached_time < CACHE_TTL_SECONDS:
             return cached_ob.copy()
 
-    if is_mt5_gold_symbol(symbol):
-        return {
-            "symbol": symbol, "bids": [], "asks": [], "bid_volume": 0.0,
-            "ask_volume": 0.0, "obi_score": 0.0, "data_source": "unavailable",
-        }
-
     binance_symbol_map = {
         'XAUUSD': 'PAXGUSDT', 'XAU': 'PAXGUSDT', 'GOLD': 'PAXGUSDT', 'PAXGUSD': 'PAXGUSDT',
         'PAXGUSDT': 'PAXGUSDT', 'BTC': 'BTCUSDT', 'BTCUSDT': 'BTCUSDT',
@@ -626,7 +636,7 @@ def fetch_orderbook(symbol: str = "EUR/USD", depth: int = 20) -> Dict[str, Any]:
         "bid_volume": round(bid_volume, 2),
         "ask_volume": round(ask_volume, 2),
         "obi_score": round(obi_score, 4),
-        "data_source": "Binance",
+        "data_source": "Binance PAXGUSDT (reference)" if is_mt5_gold_symbol(symbol) else "Binance",
     }
 
     ORDERBOOK_CACHE[cache_key] = (now, res)

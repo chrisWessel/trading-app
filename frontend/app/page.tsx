@@ -51,8 +51,8 @@ export default function DashboardPage() {
   const [externalTradeParams, setExternalTradeParams] = useState<any>(null);
   const [engineStatus, setEngineStatus] = useState<'checking' | 'online' | 'offline'>('checking');
   const [telegramStatus, setTelegramStatus] = useState<'unknown' | 'configured' | 'simulation'>('unknown');
-  const [oandaStatus, setOandaStatus] = useState<'checking' | 'configured' | 'not-configured'>('checking');
-  const [oandaMessage, setOandaMessage] = useState<string>('');
+  const [goldFeedLabel, setGoldFeedLabel] = useState<string>('CHECKING');
+  const [goldFeedMessage, setGoldFeedMessage] = useState<string>('');
 
   useEffect(() => {
     let mounted = true;
@@ -64,15 +64,15 @@ export default function DashboardPage() {
         if (mounted) {
           setEngineStatus('online');
           setTelegramStatus(data.telegram_configured ? 'configured' : 'simulation');
-          setOandaStatus(data.oanda?.configured ? 'configured' : 'not-configured');
-          setOandaMessage(data.oanda?.message || '');
+          setGoldFeedLabel(data.gold_feed?.label || 'FREE PAXG REFERENCE');
+          setGoldFeedMessage(data.gold_feed?.message || '');
         }
       } catch {
         if (mounted) {
           setEngineStatus('offline');
           setTelegramStatus('unknown');
-          setOandaStatus('not-configured');
-          setOandaMessage('Backend health check failed.');
+          setGoldFeedLabel('BACKEND OFFLINE');
+          setGoldFeedMessage('Backend health check failed.');
         }
       }
     };
@@ -238,9 +238,9 @@ export default function DashboardPage() {
             <Calculator className="w-4 h-4 text-amber-300" />
             <span>📐 MT4/MT5 Orders & Risk Guide</span>
           </button>
-          <div title={oandaMessage} className={`flex items-center gap-1.5 bg-slate-950 border border-slate-800 px-3 py-1.5 rounded-lg ${oandaStatus === 'configured' ? 'text-emerald-400' : 'text-amber-300'}`}>
+          <div title={goldFeedMessage} className={`flex items-center gap-1.5 bg-slate-950 border border-slate-800 px-3 py-1.5 rounded-lg ${goldFeedLabel === 'OANDA API' ? 'text-emerald-400' : 'text-amber-300'}`}>
             <Activity className="w-4 h-4" />
-            <span>OANDA analysis: <strong>{oandaStatus === 'configured' ? 'READY' : oandaStatus === 'checking' ? 'CHECKING' : 'TOKEN NEEDED'}</strong></span>
+            <span>Gold signal feed: <strong>{goldFeedLabel}</strong></span>
           </div>
           <div className="flex items-center gap-1.5 bg-slate-950 border border-slate-800 px-3 py-1.5 rounded-lg text-slate-300">
             <Cpu className={`w-4 h-4 ${engineStatus === 'online' ? 'text-emerald-400' : 'text-rose-400'}`} />
