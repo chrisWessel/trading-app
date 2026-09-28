@@ -42,11 +42,11 @@ export default function DashboardPage() {
   const [symbol, setSymbol] = useState<string>('XAU/USD');
   const [activeCategory, setActiveCategory] = useState<'All' | 'Forex' | 'Gold' | 'Crypto'>('All');
   const [customSymbol, setCustomSymbol] = useState<string>('');
-  const [timeframe, setTimeframe] = useState<string>('1m');
+  const [timeframe, setTimeframe] = useState<string>('5m');
   const [currentPrice, setCurrentPrice] = useState<number>(0);
   const priceIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const [refreshAuditCount, setRefreshAuditCount] = useState<number>(0);
-  const [chartMode, setChartMode] = useState<'TradingViewDirect' | 'CustomEngine'>('CustomEngine');
+  const [chartMode, setChartMode] = useState<'TradingViewDirect' | 'CustomEngine'>('TradingViewDirect');
   const [showPositionGuide, setShowPositionGuide] = useState<boolean>(false);
   const [externalTradeParams, setExternalTradeParams] = useState<any>(null);
   const [engineStatus, setEngineStatus] = useState<'checking' | 'online' | 'offline'>('checking');
@@ -147,7 +147,7 @@ export default function DashboardPage() {
   const handleAssetSelect = (selectedSymbol: string) => {
     setSymbol(selectedSymbol);
     setCurrentPrice(0);
-    if (selectedSymbol.toUpperCase().includes('REXT') || selectedSymbol.toUpperCase().includes('XAU') || selectedSymbol.toUpperCase().includes('GOLD')) {
+    if (selectedSymbol.toUpperCase().includes('REXT')) {
       setChartMode('CustomEngine');
     } else {
       setChartMode('TradingViewDirect');
@@ -170,7 +170,7 @@ export default function DashboardPage() {
       const sym = customSymbol.trim().toUpperCase();
       setSymbol(sym);
       setCurrentPrice(0);
-      if (sym.includes('REXT') || sym.includes('XAU') || sym.includes('GOLD')) {
+      if (sym.includes('REXT')) {
         setChartMode('CustomEngine');
       } else {
         setChartMode('TradingViewDirect');
@@ -270,16 +270,16 @@ export default function DashboardPage() {
           <div className="flex items-center gap-1 bg-slate-950 p-1 rounded-lg border border-slate-800 text-xs font-mono">
             <button
               onClick={() => setChartMode('TradingViewDirect')}
-              disabled={isRextAsset || isGoldAsset}
+              disabled={isRextAsset}
               className={`px-3 py-1.5 rounded-md font-bold transition flex items-center gap-1.5 ${
                 chartMode === 'TradingViewDirect' && !isRextAsset
                   ? 'bg-blue-600 text-white shadow-md shadow-blue-900/50'
                   : 'text-slate-400 hover:text-white hover:bg-slate-800 disabled:opacity-40 disabled:cursor-not-allowed'
               }`}
-              title={isGoldAsset ? 'Gold uses the local MT5 broker feed to match your trading chart' : isRextAsset ? 'TradingView does not index REXT; rendered using Technical Signal Engine' : 'External reference feed; not your MT5 broker data'}
+              title={isGoldAsset ? 'TradingView OANDA:XAUUSD reference chart' : isRextAsset ? 'TradingView does not index REXT; rendered using Technical Signal Engine' : 'External TradingView reference feed'}
             >
               <Monitor className="w-3.5 h-3.5 text-blue-300" />
-              <span>🌐 External TradingView Reference Feed</span>
+              <span>🌐 TradingView Reference Feed</span>
             </button>
             <button
               onClick={() => setChartMode('CustomEngine')}
@@ -372,7 +372,7 @@ export default function DashboardPage() {
                   <TradingViewDirectChart
                     symbol={symbol}
                     timeframe={timeframe}
-                    currentPrice={currentPrice}
+                    currentPrice={isGoldAsset ? undefined : currentPrice}
                     onTimeframeChange={(tf) => setTimeframe(tf)}
                   />
                 ) : (
