@@ -446,7 +446,7 @@ export default function TradingChart({
   const [wsConnected, setWsConnected] = useState<boolean>(false);
   const [showDropdown, setShowDropdown] = useState<boolean>(false);
 
-  const [signalType, setSignalType] = useState<string>('BUY/LONG');
+  const [signalType, setSignalType] = useState<string>('NEUTRAL');
   const [tradeParams, setTradeParams] = useState<any>(null);
   const [activeTab, setActiveTab] = useState<string>('live_signals');
   const [algoTrend, setAlgoTrend] = useState<{ status: string; pivots: any[] } | null>(null);
@@ -454,10 +454,24 @@ export default function TradingChart({
   const isHighValueAsset = latestPrice > 10.0;
   const precision = isHighValueAsset ? 2 : 4;
 
-  const buyEntryPrice = latestPrice;
-  const stopLossPrice = tradeParams?.stop_loss ?? Number((supportLevel * 0.985).toFixed(precision));
-  const riskAmount = Math.max(0.0001, Math.abs(buyEntryPrice - stopLossPrice));
-  const takeProfitPrice = tradeParams?.tp1 ?? Number((buyEntryPrice + riskAmount * 1.5).toFixed(precision));
+  const isSellSignal = signalType === 'SELL/SHORT';
+  const isBuySignal = signalType === 'BUY/LONG';
+  const hasDirectionalSignal = isSellSignal || isBuySignal;
+  const signalEntryPrice = Number(tradeParams?.entry ?? latestPrice);
+  const rawStopLoss = Number(tradeParams?.stop_loss);
+  const riskAmount = Number.isFinite(rawStopLoss) && rawStopLoss > 0
+    ? Math.abs(signalEntryPrice - rawStopLoss)
+    : Math.max(Math.abs(resistanceLevel - supportLevel) * 0.1, signalEntryPrice * 0.001, 0.0001);
+  const stopLossPrice = hasDirectionalSignal
+    ? Number((signalEntryPrice + (isSellSignal ? riskAmount : -riskAmount)).toFixed(precision))
+    : 0;
+  const rawTakeProfit = Number(tradeParams?.tp1);
+  const targetDistance = Number.isFinite(rawTakeProfit) && rawTakeProfit > 0 && rawTakeProfit !== signalEntryPrice
+    ? Math.abs(signalEntryPrice - rawTakeProfit)
+    : riskAmount * 1.5;
+  const takeProfitPrice = hasDirectionalSignal
+    ? Number((signalEntryPrice + (isSellSignal ? -targetDistance : targetDistance)).toFixed(precision))
+    : 0;
 
   // ── Fetch algo market structure analysis from backend ──
   const fetchAlgoAnalysis = useCallback(async () => {
@@ -598,9 +612,9 @@ export default function TradingChart({
   }, [symbol]);
 
   // ── Build signal overlay lines ──
-  const isSell = signalType === 'SELL/SHORT';
-  const sl = tradeParams?.stop_loss ?? stopLossPrice;
-  const tp = tradeParams?.tp1 ?? takeProfitPrice;
+  const isSell = isSellSignal;
+  const sl = stopLossPrice;
+  const tp = takeProfitPrice;
 
   const signalLines: SignalLine[] = [];
 
@@ -608,16 +622,20 @@ export default function TradingChart({
     signalLines.push(
       { label: 'RESISTANCE', price: resistanceLevel, color: '#EF4444', borderColor: '#EF4444', icon: '🔴', dashed: true },
       { label: 'SUPPORT', price: supportLevel, color: '#10B981', borderColor: '#10B981', icon: '🟢', dashed: true },
-      {
-        label: isSell ? 'SELL ENTRY' : 'BUY ENTRY',
-        price: latestPrice,
-        color: isSell ? '#EF4444' : '#3B82F6',
-        borderColor: isSell ? '#EF4444' : '#3B82F6',
-        icon: isSell ? '🔴' : '🔵',
-      },
-      { label: 'STOP LOSS', price: sl, color: '#F43F5E', borderColor: '#F43F5E', icon: '🛑' },
-      { label: 'TAKE PROFIT', price: tp, color: '#10B981', borderColor: '#10B981', icon: '🎯' },
     );
+    if (hasDirectionalSignal && signalEntryPrice > 0) {
+      signalLines.push(
+        {
+          label: isSell ? 'SELL ENTRY' : 'BUY ENTRY',
+          price: signalEntryPrice,
+          color: isSell ? '#EF4444' : '#3B82F6',
+          borderColor: isSell ? '#EF4444' : '#3B82F6',
+          icon: isSell ? '🔴' : '🔵',
+        },
+        { label: 'STOP LOSS', price: sl, color: '#F43F5E', borderColor: '#F43F5E', icon: '🛑' },
+        { label: 'TAKE PROFIT', price: tp, color: '#10B981', borderColor: '#10B981', icon: '🎯' },
+      );
+    }
   }
 
   return (
@@ -770,7 +788,7 @@ export default function TradingChart({
               <AlertOctagon className="w-4 h-4 text-amber-400" />
             </div>
           </div>
-        ) : (
+        ) : signalType === 'BUY/LONG' ? (
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs font-mono">
             <div className="bg-slate-950 p-2 rounded-lg border border-blue-800/60 flex items-center justify-between">
               <div>
@@ -803,6 +821,10 @@ export default function TradingChart({
               </div>
               <AlertOctagon className="w-4 h-4 text-amber-400" />
             </div>
+          </div>
+        ) : (
+          <div className="col-span-full bg-slate-950 p-3 rounded-lg border border-amber-800/60 text-xs font-mono text-amber-300">
+            SIGNAL LEVELS UNAVAILABLE: waiting for verified directional market data.
           </div>
         )
       )}
