@@ -5,10 +5,14 @@ import { RefreshCw, Zap, ChevronDown, Clock, Radio, ArrowUpRight, ArrowDownRight
 import { API_BASE_URL } from '@/lib/apiConfig';
 import CustomAlgorithmicChart from './CustomAlgorithmicChart';
 
+export type ChartTabId = 'live_signals' | 'algo_market_structure';
+
 interface TradingChartProps {
   symbol: string;
   timeframe: string;
   onTimeframeChange: (tf: string) => void;
+  activeTab: ChartTabId;
+  onActiveTabChange: (tab: ChartTabId) => void;
   onLatestDataUpdate?: (data: { price: number; support: number; resistance: number }) => void;
 }
 
@@ -327,10 +331,18 @@ function StructureArrowChart({ pivots }: { pivots: any[] }) {
 }
 
 // ── AlgoStructureTab: OANDA chart + algo analysis overlay ──
-function AlgoStructureTab({ symbol, timeframe, algoTrend, fetchAlgoAnalysis }: {
+function AlgoStructureTab({ symbol, timeframe, algoTrend, fetchAlgoAnalysis, tradeLevels }: {
   symbol: string; timeframe: string;
   algoTrend: { status: string; pivots: any[]; dataSource: string } | null;
   fetchAlgoAnalysis: () => void;
+  tradeLevels: {
+    signalType: 'BUY/LONG' | 'SELL/SHORT';
+    entry: number;
+    stopLoss: number;
+    takeProfit: number;
+    support: number;
+    resistance: number;
+  } | null;
 }) {
   useEffect(() => {
     fetchAlgoAnalysis();
@@ -384,7 +396,7 @@ function AlgoStructureTab({ symbol, timeframe, algoTrend, fetchAlgoAnalysis }: {
       )}
 
       {algoTrend && algoTrend.dataSource !== 'SIMULATED' ? (
-        <CustomAlgorithmicChart symbol={symbol} timeframe={timeframe} tabId="algo_market_structure_reference" />
+        <CustomAlgorithmicChart symbol={symbol} timeframe={timeframe} tabId="algo_market_structure_reference" tradeLevels={tradeLevels} />
       ) : (
         <TVWidgetTab symbol={symbol} timeframe={timeframe} tabId="algo_market_structure_tv" />
       )}
@@ -406,6 +418,8 @@ export default function TradingChart({
   symbol,
   timeframe,
   onTimeframeChange,
+  activeTab,
+  onActiveTabChange,
   onLatestDataUpdate,
 }: TradingChartProps) {
   const chartContainerRef = useRef<HTMLDivElement>(null);
@@ -420,7 +434,6 @@ export default function TradingChart({
   const [signalType, setSignalType] = useState<string>('NEUTRAL');
   const [tradeParams, setTradeParams] = useState<any>(null);
   const [marketDataSource, setMarketDataSource] = useState<string>('unknown');
-  const [activeTab, setActiveTab] = useState<string>('live_signals');
   const [algoTrend, setAlgoTrend] = useState<{ status: string; pivots: any[]; dataSource: string } | null>(null);
 
   const isHighValueAsset = latestPrice > 10.0;
@@ -677,7 +690,9 @@ export default function TradingChart({
         ].map((tab) => (
           <button
             key={tab.id}
-            onClick={() => setActiveTab(tab.id)}
+            onClick={() => {
+              onActiveTabChange(tab.id as ChartTabId);
+            }}
             className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all ${
               activeTab === tab.id
                 ? 'bg-blue-600 text-white shadow-md shadow-blue-900/40'
@@ -778,6 +793,8 @@ export default function TradingChart({
               entry: signalEntryPrice,
               stopLoss: sl,
               takeProfit: tp,
+              support: supportLevel,
+              resistance: resistanceLevel,
             } : null}
           />
         ) : (
@@ -786,7 +803,20 @@ export default function TradingChart({
       )}
       
       {activeTab === 'algo_market_structure' && (
-        <AlgoStructureTab symbol={symbol} timeframe={timeframe} algoTrend={algoTrend} fetchAlgoAnalysis={fetchAlgoAnalysis} />
+        <AlgoStructureTab
+          symbol={symbol}
+          timeframe={timeframe}
+          algoTrend={algoTrend}
+          fetchAlgoAnalysis={fetchAlgoAnalysis}
+          tradeLevels={hasDirectionalSignal && signalEntryPrice > 0 ? {
+            signalType: signalType as 'BUY/LONG' | 'SELL/SHORT',
+            entry: signalEntryPrice,
+            stopLoss: sl,
+            takeProfit: tp,
+            support: supportLevel,
+            resistance: resistanceLevel,
+          } : null}
+        />
       )}
     </div>
   );

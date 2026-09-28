@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { API_BASE_URL } from '@/lib/apiConfig';
 import TradingChart from '@/components/TradingChart';
+import type { ChartTabId } from '@/components/TradingChart';
 import TradingViewDirectChart from '@/components/TradingViewDirectChart';
 import PaperTradingPanel from '@/components/PaperTradingPanel';
 import OrderBookOBIGauge from '@/components/OrderBookOBIGauge';
@@ -134,6 +135,19 @@ export default function DashboardPage() {
   }, [symbol, timeframe]);
 
   const [workspaceTab, setWorkspaceTab] = useState<'terminal' | 'paperDesk'>('terminal');
+  const [activeChartTab, setActiveChartTab] = useState<ChartTabId>('live_signals');
+
+  useEffect(() => {
+    const storedTab = window.sessionStorage.getItem('wesignal.active-chart-tab');
+    if (storedTab === 'live_signals' || storedTab === 'algo_market_structure') {
+      setActiveChartTab(storedTab);
+    }
+  }, []);
+
+  const handleChartTabChange = (tab: ChartTabId) => {
+    setActiveChartTab(tab);
+    window.sessionStorage.setItem('wesignal.active-chart-tab', tab);
+  };
 
   const filteredAssets = activeCategory === 'All'
     ? PRESET_ASSETS
@@ -375,9 +389,11 @@ export default function DashboardPage() {
                   />
                 ) : (
                   <TradingChart
-                    key={`tc_${symbol}_${timeframe}`}
+                    key={`tc_${symbol}`}
                     symbol={symbol}
                     timeframe={timeframe}
+                    activeTab={activeChartTab}
+                    onActiveTabChange={handleChartTabChange}
                     onTimeframeChange={(tf) => setTimeframe(tf)}
                     onLatestDataUpdate={handleDataUpdate}
                   />

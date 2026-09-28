@@ -21,6 +21,8 @@ interface TradeLevels {
   entry: number;
   stopLoss: number;
   takeProfit: number;
+  support?: number;
+  resistance?: number;
 }
 
 interface CustomChartProps {
@@ -119,6 +121,10 @@ export default function CustomAlgorithmicChart({ symbol, timeframe, tabId, trade
       series.createPriceLine({ price: levels.entry, color: isSell ? '#f43f5e' : '#3b82f6', lineWidth: 2, axisLabelVisible: true, title: isSell ? 'SELL ENTRY' : 'BUY ENTRY' }),
       series.createPriceLine({ price: levels.stopLoss, color: '#f43f5e', lineWidth: 2, axisLabelVisible: true, title: 'STOP LOSS' }),
       series.createPriceLine({ price: levels.takeProfit, color: '#10b981', lineWidth: 2, axisLabelVisible: true, title: isSell ? 'TAKE PROFIT · BUY BACK' : 'TAKE PROFIT · SELL' }),
+      ...(levels.support ? [series.createPriceLine({ price: levels.support, color: '#22c55e', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: 'SUPPORT' })] : []),
+      ...(levels.resistance ? [series.createPriceLine({ price: levels.resistance, color: '#f97316', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: 'RESISTANCE' })] : []),
+      ...(levels.support ? [series.createPriceLine({ price: levels.support, color: '#22c55e', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: 'SUPPORT' })] : []),
+      ...(levels.resistance ? [series.createPriceLine({ price: levels.resistance, color: '#f97316', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: 'RESISTANCE' })] : []),
     ];
   }, [tradeLevels?.signalType, tradeLevels?.entry, tradeLevels?.stopLoss, tradeLevels?.takeProfit]);
   
@@ -141,16 +147,17 @@ export default function CustomAlgorithmicChart({ symbol, timeframe, tabId, trade
     const isBearish = trendStatus.includes('Bearish');
     const lineColor = isBullish ? '#a855f7' : isBearish ? '#ef4444' : '#6366f1'; // purple/red/indigo
 
-    // Markers — circle shape with full label text
+    // Compact structure codes stay legible over dense candle history.
     const markers: SeriesMarker<Time>[] = sortedPivots.map(p => {
       const isHigh = p.type === 'HIGH';
+      const isHigherStructure = p.code === 'HH' || p.code === 'HL';
       return {
         time: p.time as Time,
         position: isHigh ? 'aboveBar' : 'belowBar',
-        color: '#eab308', // yellow
+        color: isHigherStructure ? '#22c55e' : '#f43f5e',
         shape: 'circle',
-        text: p.label,
-        size: 1,
+        text: p.code,
+        size: 2,
       };
     });
 
@@ -238,6 +245,10 @@ export default function CustomAlgorithmicChart({ symbol, timeframe, tabId, trade
           series.createPriceLine({ price: levels.entry, color: isSell ? '#f43f5e' : '#3b82f6', lineWidth: 2, axisLabelVisible: true, title: isSell ? 'SELL ENTRY' : 'BUY ENTRY' }),
           series.createPriceLine({ price: levels.stopLoss, color: '#f43f5e', lineWidth: 2, axisLabelVisible: true, title: 'STOP LOSS' }),
           series.createPriceLine({ price: levels.takeProfit, color: '#10b981', lineWidth: 2, axisLabelVisible: true, title: isSell ? 'TAKE PROFIT · BUY BACK' : 'TAKE PROFIT · SELL' }),
+          ...(levels.support ? [series.createPriceLine({ price: levels.support, color: '#22c55e', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: 'SUPPORT' })] : []),
+          ...(levels.resistance ? [series.createPriceLine({ price: levels.resistance, color: '#f97316', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: 'RESISTANCE' })] : []),
+          ...(levels.support ? [series.createPriceLine({ price: levels.support, color: '#22c55e', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: 'SUPPORT' })] : []),
+          ...(levels.resistance ? [series.createPriceLine({ price: levels.resistance, color: '#f97316', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: 'RESISTANCE' })] : []),
         ] : [];
       } else {
         chart._signalPriceLines = [];
