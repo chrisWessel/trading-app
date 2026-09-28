@@ -198,7 +198,7 @@ def read_root():
     return {
         "system": "Multi-Asset Trading & Signal Dispatching System",
         "status": "ONLINE",
-        "mt5": backend.engine.get_mt5_status(),
+        "oanda": backend.engine.get_oanda_status(),
         "telegram_configured": bool(os.getenv("TELEGRAM_BOT_TOKEN") and os.getenv("TELEGRAM_CHAT_ID")),
         "endpoints": ["/api/candles", "/api/orderbook", "/api/signals/check", "/api/trade/close", "/api/trades/history", "/api/report/pdf", "/api/news", "/ws/candles/{symbol}"]
     }

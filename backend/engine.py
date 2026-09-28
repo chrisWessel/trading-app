@@ -27,6 +27,15 @@ MT5_TERMINAL_PATH = os.getenv("MT5_TERMINAL_PATH", r"C:\Program Files\MetaTrader
 MT5_LOGIN = os.getenv("MT5_LOGIN", "")
 MT5_PASSWORD = os.getenv("MT5_PASSWORD", "")
 MT5_SERVER = os.getenv("MT5_SERVER", "")
+OANDA_API_TOKEN = os.getenv("OANDA_API_TOKEN", "")
+OANDA_ENV = os.getenv("OANDA_ENV", "practice").lower()
+OANDA_GOLD_INSTRUMENT = os.getenv("OANDA_GOLD_INSTRUMENT", "XAU_USD")
+OANDA_API_BASE = "https://api-fxtrade.oanda.com" if OANDA_ENV == "live" else "https://api-fxpractice.oanda.com"
+OANDA_TIMEFRAMES = {
+    '1m': 'M1', '2m': 'M2', '3m': 'M3', '4m': 'M4', '5m': 'M5', '10m': 'M10',
+    '15m': 'M15', '30m': 'M30', '1h': 'H1', '2h': 'H2', '3h': 'H3', '4h': 'H4',
+    '6h': 'H6', '8h': 'H8', '12h': 'H12', '1d': 'D', '1w': 'W', '1M': 'M',
+}
 MT5_CONNECT_TIMEOUT_MS = 2500
 MT5_RETRY_SECONDS = 10
 MT5_INITIALIZED = False
@@ -90,6 +99,55 @@ def get_mt5_status() -> Dict[str, Any]:
         return {"connected": True, "symbol": MT5_GOLD_SYMBOL, "message": "Connected to local MetaTrader 5 terminal."}
     except Exception as exc:
         return {"connected": False, "symbol": MT5_GOLD_SYMBOL, "message": str(exc)}
+
+
+def get_oanda_status() -> Dict[str, Any]:
+    return {
+        "configured": bool(OANDA_API_TOKEN),
+        "environment": OANDA_ENV,
+        "instrument": OANDA_GOLD_INSTRUMENT,
+        "message": "OANDA candles available for analysis." if OANDA_API_TOKEN else "Set OANDA_API_TOKEN in the local .env file to enable matching OANDA signals and HH structure.",
+    }
+
+
+def fetch_oanda_ohlcv(timeframe: str, limit: int) -> Optional[pd.DataFrame]:
+    if not OANDA_API_TOKEN:
+        return None
+    granularity = OANDA_TIMEFRAMES.get(timeframe)
+    if not granularity:
+        return None
+    try:
+        response = requests.get(
+            f"{OANDA_API_BASE}/v3/instruments/{OANDA_GOLD_INSTRUMENT}/candles",
+            headers={"Authorization": f"Bearer {OANDA_API_TOKEN}"},
+            params={"granularity": granularity, "count": min(max(limit, 1), 5000), "price": "M"},
+            timeout=5.0,
+        )
+        response.raise_for_status()
+        candles = response.json().get("candles", [])
+        records = []
+        for candle in candles:
+            midpoint = candle.get("mid")
+            if not midpoint:
+                continue
+            records.append({
+                "timestamp": int(pd.Timestamp(candle["time"]).timestamp() * 1000),
+                "open": float(midpoint["o"]),
+                "high": float(midpoint["h"]),
+                "low": float(midpoint["l"]),
+                "close": float(midpoint["c"]),
+                "volume": float(candle.get("volume", 0)),
+            })
+        if not records:
+            return None
+        frame = pd.DataFrame(records)
+        frame.attrs["data_source"] = "OANDA"
+        frame.attrs["price_digits"] = 3
+        UNIVERSAL_PRICE_HUB[clean_symbol_string(OANDA_GOLD_INSTRUMENT)] = float(frame["close"].iloc[-1])
+        return frame
+    except Exception as exc:
+        print(f"OANDA candle fetch notice for {OANDA_GOLD_INSTRUMENT}: {exc}")
+        return None
 
 
 def fetch_mt5_ohlcv(timeframe: str, limit: int) -> Optional[pd.DataFrame]:
@@ -233,7 +291,7 @@ def fetch_real_ohlcv_from_market(symbol: str, timeframe: str = "1m", limit: int 
     clean = clean_symbol_string(symbol)
 
     if is_mt5_gold_symbol(symbol):
-        return fetch_mt5_ohlcv(timeframe, limit)
+        return fetch_oanda_ohlcv(timeframe, limit)
     
     # ── PRIMARY SPOT FEED: Binance for Gold Spot (PAXGUSDT) & Crypto ──────
     binance_symbol_map = {
@@ -521,44 +579,10 @@ def fetch_orderbook(symbol: str = "EUR/USD", depth: int = 20) -> Dict[str, Any]:
             return cached_ob.copy()
 
     if is_mt5_gold_symbol(symbol):
-        unavailable = {
+        return {
             "symbol": symbol, "bids": [], "asks": [], "bid_volume": 0.0,
             "ask_volume": 0.0, "obi_score": 0.0, "data_source": "unavailable",
         }
-        if mt5 is None:
-            return unavailable
-        try:
-            if not ensure_mt5_connection():
-                return unavailable
-            if mt5.symbol_info(MT5_GOLD_SYMBOL) is None:
-                return unavailable
-            if not mt5.market_book_add(MT5_GOLD_SYMBOL):
-                return unavailable
-            try:
-                book = mt5.market_book_get(MT5_GOLD_SYMBOL) or []
-            finally:
-                mt5.market_book_release(MT5_GOLD_SYMBOL)
-            buy_type = getattr(mt5, 'BOOK_TYPE_BUY', 2)
-            sell_type = getattr(mt5, 'BOOK_TYPE_SELL', 1)
-            bids = [[float(item.price), float(getattr(item, 'volume_real', 0) or item.volume)]
-                    for item in book if item.type == buy_type][:depth]
-            asks = [[float(item.price), float(getattr(item, 'volume_real', 0) or item.volume)]
-                    for item in book if item.type == sell_type][:depth]
-            bid_volume = sum(level[1] for level in bids)
-            ask_volume = sum(level[1] for level in asks)
-            total_volume = bid_volume + ask_volume
-            result = {
-                "symbol": symbol, "bids": bids, "asks": asks,
-                "bid_volume": round(bid_volume, 2), "ask_volume": round(ask_volume, 2),
-                "obi_score": round((bid_volume - ask_volume) / total_volume, 4) if total_volume else 0.0,
-                "data_source": "MetaTrader5" if book else "unavailable",
-            }
-            if book:
-                ORDERBOOK_CACHE[cache_key] = (now, result)
-            return result
-        except Exception as exc:
-            print(f"MetaTrader 5 orderbook notice for {MT5_GOLD_SYMBOL}: {exc}")
-            return unavailable
 
     binance_symbol_map = {
         'XAUUSD': 'PAXGUSDT', 'XAU': 'PAXGUSDT', 'GOLD': 'PAXGUSDT', 'PAXGUSD': 'PAXGUSDT',

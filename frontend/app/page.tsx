@@ -46,14 +46,13 @@ export default function DashboardPage() {
   const [currentPrice, setCurrentPrice] = useState<number>(0);
   const priceIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const [refreshAuditCount, setRefreshAuditCount] = useState<number>(0);
-  const [chartMode, setChartMode] = useState<'TradingViewDirect' | 'CustomEngine'>('TradingViewDirect');
+  const [chartMode, setChartMode] = useState<'TradingViewDirect' | 'CustomEngine'>('CustomEngine');
   const [showPositionGuide, setShowPositionGuide] = useState<boolean>(false);
   const [externalTradeParams, setExternalTradeParams] = useState<any>(null);
   const [engineStatus, setEngineStatus] = useState<'checking' | 'online' | 'offline'>('checking');
   const [telegramStatus, setTelegramStatus] = useState<'unknown' | 'configured' | 'simulation'>('unknown');
-  const [mt5Status, setMt5Status] = useState<'checking' | 'connected' | 'disconnected'>('checking');
-  const [mt5Symbol, setMt5Symbol] = useState<string>('XAUUSD');
-  const [mt5Message, setMt5Message] = useState<string>('');
+  const [oandaStatus, setOandaStatus] = useState<'checking' | 'configured' | 'not-configured'>('checking');
+  const [oandaMessage, setOandaMessage] = useState<string>('');
 
   useEffect(() => {
     let mounted = true;
@@ -65,16 +64,15 @@ export default function DashboardPage() {
         if (mounted) {
           setEngineStatus('online');
           setTelegramStatus(data.telegram_configured ? 'configured' : 'simulation');
-          setMt5Status(data.mt5?.connected ? 'connected' : 'disconnected');
-          setMt5Symbol(data.mt5?.symbol || 'XAUUSD');
-          setMt5Message(data.mt5?.message || '');
+          setOandaStatus(data.oanda?.configured ? 'configured' : 'not-configured');
+          setOandaMessage(data.oanda?.message || '');
         }
       } catch {
         if (mounted) {
           setEngineStatus('offline');
           setTelegramStatus('unknown');
-          setMt5Status('disconnected');
-          setMt5Message('Backend health check failed.');
+          setOandaStatus('not-configured');
+          setOandaMessage('Backend health check failed.');
         }
       }
     };
@@ -147,7 +145,7 @@ export default function DashboardPage() {
   const handleAssetSelect = (selectedSymbol: string) => {
     setSymbol(selectedSymbol);
     setCurrentPrice(0);
-    if (selectedSymbol.toUpperCase().includes('REXT')) {
+    if (selectedSymbol.toUpperCase().includes('REXT') || selectedSymbol.toUpperCase().includes('XAU') || selectedSymbol.toUpperCase().includes('GOLD')) {
       setChartMode('CustomEngine');
     } else {
       setChartMode('TradingViewDirect');
@@ -170,7 +168,7 @@ export default function DashboardPage() {
       const sym = customSymbol.trim().toUpperCase();
       setSymbol(sym);
       setCurrentPrice(0);
-      if (sym.includes('REXT')) {
+      if (sym.includes('REXT') || sym.includes('XAU') || sym.includes('GOLD')) {
         setChartMode('CustomEngine');
       } else {
         setChartMode('TradingViewDirect');
@@ -240,9 +238,9 @@ export default function DashboardPage() {
             <Calculator className="w-4 h-4 text-amber-300" />
             <span>📐 MT4/MT5 Orders & Risk Guide</span>
           </button>
-          <div title={mt5Message} className={`flex items-center gap-1.5 bg-slate-950 border border-slate-800 px-3 py-1.5 rounded-lg ${mt5Status === 'connected' ? 'text-emerald-400' : 'text-amber-300'}`}>
+          <div title={oandaMessage} className={`flex items-center gap-1.5 bg-slate-950 border border-slate-800 px-3 py-1.5 rounded-lg ${oandaStatus === 'configured' ? 'text-emerald-400' : 'text-amber-300'}`}>
             <Activity className="w-4 h-4" />
-            <span>MT5: <strong>{mt5Status === 'connected' ? `CONNECTED · ${mt5Symbol}` : mt5Status === 'checking' ? 'CHECKING' : 'DISCONNECTED'}</strong></span>
+            <span>OANDA analysis: <strong>{oandaStatus === 'configured' ? 'READY' : oandaStatus === 'checking' ? 'CHECKING' : 'TOKEN NEEDED'}</strong></span>
           </div>
           <div className="flex items-center gap-1.5 bg-slate-950 border border-slate-800 px-3 py-1.5 rounded-lg text-slate-300">
             <Cpu className={`w-4 h-4 ${engineStatus === 'online' ? 'text-emerald-400' : 'text-rose-400'}`} />
@@ -279,7 +277,7 @@ export default function DashboardPage() {
               title={isGoldAsset ? 'TradingView OANDA:XAUUSD reference chart' : isRextAsset ? 'TradingView does not index REXT; rendered using Technical Signal Engine' : 'External TradingView reference feed'}
             >
               <Monitor className="w-3.5 h-3.5 text-blue-300" />
-              <span>🌐 TradingView Reference Feed</span>
+              <span>🌐 TradingView Chart Only</span>
             </button>
             <button
               onClick={() => setChartMode('CustomEngine')}
@@ -290,7 +288,7 @@ export default function DashboardPage() {
               }`}
             >
               <Eye className="w-3.5 h-3.5 text-emerald-300" />
-              <span>⚡ Technical Signal Engine & Price Lines</span>
+              <span>⚡ OANDA Chart + Signal Lines & Structure</span>
             </button>
           </div>
 

@@ -63,7 +63,7 @@ const INTERVAL_CATEGORIES = [
 // ── Map symbols to TradingView ticker format (identical to TradingViewDirectChart) ──
 const getTradingViewSymbol = (sym: string): string => {
   const s = sym.toUpperCase().replace(' ', '').replace('/', '').replace('_', '');
-  if (s.includes('XAU') || s.includes('GOLD')) return 'BINANCE:PAXGUSDT';
+  if (s.includes('XAU') || s.includes('GOLD')) return 'OANDA:XAUUSD';
   if (s.includes('PAXG')) return 'BINANCE:PAXGUSDT';
   if (s.includes('EURUSD')) return 'OANDA:EURUSD';
   if (s.includes('GBPUSD')) return 'OANDA:GBPUSD';
@@ -97,64 +97,8 @@ const getTradingViewInterval = (tf: string): string => {
   return '5';
 };
 
-// ── Signal Price Line Overlay (absolute-positioned labels over the chart) ──
-interface SignalLine {
-  label: string;
-  price: number;
-  color: string;
-  borderColor: string;
-  icon: string;
-  dashed?: boolean;
-}
-
-function SignalOverlay({ lines, chartHeight }: { lines: SignalLine[]; chartHeight: number }) {
-  if (!lines.length) return null;
-
-  // Calculate price range from the lines to position them proportionally
-  const prices = lines.map((l) => l.price);
-  const minPrice = Math.min(...prices);
-  const maxPrice = Math.max(...prices);
-  const range = maxPrice - minPrice || 1;
-  const padding = range * 0.15; // 15% padding top/bottom
-
-  return (
-    <div className="absolute inset-0 pointer-events-none z-10 overflow-hidden">
-      {lines.map((line, i) => {
-        // Map price to Y position (inverted: high price = top)
-        const pct = 1 - (line.price - (minPrice - padding)) / (range + 2 * padding);
-        const top = Math.max(4, Math.min(chartHeight - 24, pct * chartHeight));
-
-        return (
-          <div key={i} className="absolute left-0 right-0" style={{ top: `${top}px` }}>
-            {/* Horizontal line */}
-            <div
-              className="absolute left-0 right-16 h-px"
-              style={{
-                backgroundColor: line.color,
-                opacity: 0.7,
-                borderTop: line.dashed ? `1px dashed ${line.color}` : undefined,
-              }}
-            />
-            {/* Price label */}
-            <div
-              className="absolute right-0 px-2 py-0.5 text-[10px] font-mono font-bold rounded-l-md whitespace-nowrap"
-              style={{
-                backgroundColor: line.color,
-                color: '#fff',
-                transform: 'translateY(-50%)',
-              }}
-            >
-              {line.icon} {line.label}: ${line.price.toFixed(2)}
-            </div>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
 // ── TVWidgetTab Component for Tabs ──
-function TVWidgetTab({ symbol, timeframe, tabId, showSignalOverlay, signalLines, instructions, studies }: { symbol: string, timeframe: string, tabId: string, showSignalOverlay?: boolean, signalLines?: SignalLine[], instructions?: React.ReactNode, studies?: string[] }) {
+function TVWidgetTab({ symbol, timeframe, tabId, instructions, studies }: { symbol: string, timeframe: string, tabId: string, instructions?: React.ReactNode, studies?: string[] }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const widgetIdRef = useRef<string>(`tv_signal_widget_${tabId}_${Math.floor(Math.random() * 1000000)}`);
 
@@ -210,9 +154,8 @@ function TVWidgetTab({ symbol, timeframe, tabId, showSignalOverlay, signalLines,
           {instructions}
         </div>
       )}
-      <div className="relative w-full h-[420px] rounded-lg overflow-hidden border border-slate-950">
+      <div className="relative w-full h-[520px] rounded-lg overflow-hidden border border-slate-950">
         <div ref={containerRef} className="w-full h-full" />
-        {showSignalOverlay && signalLines && <SignalOverlay lines={signalLines} chartHeight={420} />}
       </div>
     </div>
   );
@@ -420,8 +363,18 @@ function AlgoStructureTab({ symbol, timeframe, algoTrend, fetchAlgoAnalysis }: {
         </div>
       )}
 
-      {/* SAME TradingView OANDA chart as Live Signals */}
-      <CustomAlgorithmicChart symbol={symbol} timeframe={timeframe} tabId="algo_market_structure_mt5" />
+      {algoTrend ? (
+        <CustomAlgorithmicChart symbol={symbol} timeframe={timeframe} tabId="algo_market_structure_oanda" />
+      ) : (
+        <>
+          <TVWidgetTab symbol={symbol} timeframe={timeframe} tabId="algo_market_structure_tv" />
+          {(symbol.toUpperCase().includes('XAU') || symbol.toUpperCase().includes('GOLD')) && (
+            <div className="rounded-lg border border-amber-800/60 bg-slate-950 p-3 text-xs font-mono text-amber-300">
+              OANDA TradingView chart is live. Connect the OANDA API in the local backend to calculate matching HH/HL/LH/LL structure.
+            </div>
+          )}
+        </>
+      )}
 
       {/* SVG Arrow Structure Visualization */}
       {algoTrend && algoTrend.pivots.length > 1 && (
@@ -448,6 +401,7 @@ export default function TradingChart({
 
   const [signalType, setSignalType] = useState<string>('NEUTRAL');
   const [tradeParams, setTradeParams] = useState<any>(null);
+  const [marketDataSource, setMarketDataSource] = useState<string>('unknown');
   const [activeTab, setActiveTab] = useState<string>('live_signals');
   const [algoTrend, setAlgoTrend] = useState<{ status: string; pivots: any[] } | null>(null);
 
@@ -480,6 +434,13 @@ export default function TradingChart({
       if (!res.ok) return;
       const data = await res.json();
       if (data.status === 'success') {
+        const normalizedSymbol = symbol.toUpperCase().replace(/[^A-Z0-9]/g, '');
+        const isGold = ['XAUUSD', 'XAU', 'GOLD'].includes(normalizedSymbol);
+        setMarketDataSource(data.data_source || 'unknown');
+        if (data.data_source === 'SIMULATED' || (isGold && data.data_source !== 'OANDA')) {
+          setAlgoTrend(null);
+          return;
+        }
         setAlgoTrend({ status: data.trend?.status || '', pivots: data.pivots || [] });
       }
     } catch { /* silent */ }
@@ -496,6 +457,7 @@ export default function TradingChart({
       if (sigRes.ok) {
         const sigData = await sigRes.json();
         if (sigData.analysis) {
+          setMarketDataSource(sigData.analysis.data_source || 'unknown');
           if (sigData.analysis.data_source === 'SIMULATED') {
             setSignalType('NEUTRAL');
             setTradeParams(null);
@@ -611,32 +573,9 @@ export default function TradingChart({
     };
   }, [symbol]);
 
-  // ── Build signal overlay lines ──
   const isSell = isSellSignal;
   const sl = stopLossPrice;
   const tp = takeProfitPrice;
-
-  const signalLines: SignalLine[] = [];
-
-  if (latestPrice > 0 && supportLevel > 0 && resistanceLevel > 0) {
-    signalLines.push(
-      { label: 'RESISTANCE', price: resistanceLevel, color: '#EF4444', borderColor: '#EF4444', icon: '🔴', dashed: true },
-      { label: 'SUPPORT', price: supportLevel, color: '#10B981', borderColor: '#10B981', icon: '🟢', dashed: true },
-    );
-    if (hasDirectionalSignal && signalEntryPrice > 0) {
-      signalLines.push(
-        {
-          label: isSell ? 'SELL ENTRY' : 'BUY ENTRY',
-          price: signalEntryPrice,
-          color: isSell ? '#EF4444' : '#3B82F6',
-          borderColor: isSell ? '#EF4444' : '#3B82F6',
-          icon: isSell ? '🔴' : '🔵',
-        },
-        { label: 'STOP LOSS', price: sl, color: '#F43F5E', borderColor: '#F43F5E', icon: '🛑' },
-        { label: 'TAKE PROFIT', price: tp, color: '#10B981', borderColor: '#10B981', icon: '🎯' },
-      );
-    }
-  }
 
   return (
     <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 shadow-xl space-y-3">
@@ -831,17 +770,21 @@ export default function TradingChart({
 
       {/* Tab Content Render */}
       {activeTab === 'live_signals' && (
-        <CustomAlgorithmicChart
-          symbol={symbol}
-          timeframe={timeframe}
-          tabId="live_signals_mt5"
-          tradeLevels={hasDirectionalSignal && signalEntryPrice > 0 ? {
-            signalType: signalType as 'BUY/LONG' | 'SELL/SHORT',
-            entry: signalEntryPrice,
-            stopLoss: sl,
-            takeProfit: tp,
-          } : null}
-        />
+        marketDataSource === 'OANDA' && (symbol.toUpperCase().includes('XAU') || symbol.toUpperCase().includes('GOLD')) ? (
+          <CustomAlgorithmicChart
+            symbol={symbol}
+            timeframe={timeframe}
+            tabId="live_signals_oanda"
+            tradeLevels={hasDirectionalSignal && signalEntryPrice > 0 ? {
+              signalType: signalType as 'BUY/LONG' | 'SELL/SHORT',
+              entry: signalEntryPrice,
+              stopLoss: sl,
+              takeProfit: tp,
+            } : null}
+          />
+        ) : (
+          <TVWidgetTab symbol={symbol} timeframe={timeframe} tabId="live_signals_tv" />
+        )
       )}
       
       {activeTab === 'algo_market_structure' && (
