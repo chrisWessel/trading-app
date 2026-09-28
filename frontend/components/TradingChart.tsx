@@ -513,6 +513,11 @@ export default function TradingChart({
 
   // ── WebSocket for live price updates ──
   useEffect(() => {
+    if (isGoldSymbol) {
+      setWsConnected(false);
+      return;
+    }
+
     let ws: WebSocket | null = null;
     let reconnectTimer: NodeJS.Timeout | null = null;
 
@@ -560,7 +565,7 @@ export default function TradingChart({
       if (reconnectTimer) clearTimeout(reconnectTimer);
       if (ws) ws.close();
     };
-  }, [symbol]);
+  }, [symbol, isGoldSymbol]);
 
   const isSell = isSellSignal;
   const sl = stopLossPrice;

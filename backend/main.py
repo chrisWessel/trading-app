@@ -6,6 +6,8 @@ import random
 import requests
 import importlib
 import threading
+import xml.etree.ElementTree as ET
+from email.utils import parsedate_to_datetime
 from fastapi import FastAPI, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
@@ -82,6 +84,33 @@ def fetch_market_news(symbol: str = "XAU/USD") -> Dict[str, Any]:
             raw_news = data.get('news', [])
     except Exception as e:
         print("Yahoo news fetch notice:", e)
+
+    if not raw_news:
+        news_query = 'XAUUSD gold price' if any(term in symbol.upper() for term in ('XAU', 'GOLD')) else f'{symbol} market'
+        try:
+            response = requests.get(
+                'https://news.google.com/rss/search',
+                params={'q': news_query, 'hl': 'en-US', 'gl': 'US', 'ceid': 'US:en'},
+                headers=headers,
+                timeout=4.0,
+            )
+            response.raise_for_status()
+            feed = ET.fromstring(response.content)
+            for item in feed.findall('./channel/item')[:15]:
+                published = item.findtext('pubDate', default='')
+                try:
+                    published_at = parsedate_to_datetime(published).timestamp()
+                except (TypeError, ValueError, OverflowError):
+                    published_at = time.time()
+                raw_news.append({
+                    'uuid': item.findtext('guid') or item.findtext('link') or str(random.randint(10000, 99999)),
+                    'title': item.findtext('title', default='').rsplit(' - ', 1)[0],
+                    'publisher': item.findtext('source', default='Google News'),
+                    'link': item.findtext('link', default='#'),
+                    'providerPublishTime': int(published_at),
+                })
+        except Exception as e:
+            print("Google News RSS notice:", e)
 
     news_items = []
     now = time.time()
@@ -278,8 +307,7 @@ def check_signals(req: SignalCheckRequest):
 
 @app.get("/api/news")
 def get_news(symbol: str = Query("XAU/USD")):
-    items = fetch_market_news(symbol)
-    return {"symbol": symbol, "news": items}
+    return fetch_market_news(symbol)
 
 @app.get("/api/signals/market-bias")
 def get_market_bias(
