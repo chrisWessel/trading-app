@@ -204,7 +204,7 @@ export default function LiveSignalNotificationPanel({
     setFrozenParams(null);
     setSelectedTpIndex(0);
     fetchSignal();
-    const interval = setInterval(fetchSignal, 3000);
+    const interval = setInterval(fetchSignal, 8000);
     return () => clearInterval(interval);
   }, [symbol, timeframe]);
 
@@ -247,7 +247,9 @@ export default function LiveSignalNotificationPanel({
                 </span>
                 {analysis?.data_source && (
                   <span className={`text-[9px] px-1.5 py-0.5 rounded border ${analysis.data_source === 'SIMULATED' ? 'text-amber-300 bg-amber-950 border-amber-800' : 'text-emerald-300 bg-emerald-950 border-emerald-800'}`}>
-                    {analysis.data_source === 'SIMULATED' ? 'SIMULATED · NO SIGNAL' : analysis.data_source.toUpperCase()}
+                    {analysis.data_source === 'SIMULATED'
+                      ? (symbol.toUpperCase().includes('XAU') || symbol.toUpperCase().includes('GOLD') ? 'OANDA TOKEN NEEDED' : 'SIMULATED · NO SIGNAL')
+                      : analysis.data_source.toUpperCase()}
                   </span>
                 )}
               </span>

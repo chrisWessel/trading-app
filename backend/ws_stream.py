@@ -80,7 +80,7 @@ async def websocket_candles_endpoint(websocket: WebSocket, symbol: str, timefram
             }
             
             await websocket.send_text(json.dumps(payload))
-            await asyncio.sleep(1)
+            await asyncio.sleep(5)
     except WebSocketDisconnect:
         manager.disconnect(websocket, clean)
     except Exception as e:

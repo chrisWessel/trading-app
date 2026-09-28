@@ -126,10 +126,10 @@ export default function SignalsStream({ symbol, timeframe, onPriceUpdate }: Sign
     if (forceDispatch) setLoading(false);
   };
 
-  // High-frequency 2.5-second live signal evaluator
+  // Refresh signal state without competing with the navigator's analysis request.
   useEffect(() => {
     checkSignals(false);
-    const interval = setInterval(() => checkSignals(false), 2500);
+    const interval = setInterval(() => checkSignals(false), 10000);
     return () => clearInterval(interval);
   }, [symbol, timeframe]);
 
@@ -155,7 +155,9 @@ export default function SignalsStream({ symbol, timeframe, onPriceUpdate }: Sign
           </span>
           {analysis?.data_source && (
             <span className={`text-[10px] px-2 py-0.5 rounded-full font-mono font-bold border ${analysis.data_source === 'SIMULATED' ? 'bg-amber-950 text-amber-300 border-amber-700' : 'bg-emerald-950 text-emerald-300 border-emerald-800'}`}>
-              {analysis.data_source === 'SIMULATED' ? 'SIMULATED DATA · SIGNALS DISABLED' : `DATA: ${analysis.data_source.toUpperCase()}`}
+              {analysis.data_source === 'SIMULATED'
+                ? (symbol.toUpperCase().includes('XAU') || symbol.toUpperCase().includes('GOLD') ? 'OANDA TOKEN NEEDED · SIGNALS PAUSED' : 'SIMULATED DATA · SIGNALS DISABLED')
+                : `DATA: ${analysis.data_source.toUpperCase()}`}
             </span>
           )}
         </div>

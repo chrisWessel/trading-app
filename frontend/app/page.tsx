@@ -127,7 +127,7 @@ export default function DashboardPage() {
     };
 
     fetchLivePrice();
-    priceIntervalRef.current = setInterval(fetchLivePrice, 3000);
+    priceIntervalRef.current = setInterval(fetchLivePrice, 10000);
     return () => {
       if (priceIntervalRef.current) clearInterval(priceIntervalRef.current);
     };

@@ -49,7 +49,7 @@ export default function CustomAlgorithmicChart({ symbol, timeframe, tabId, trade
         if (isInitialLoad) setLoading(true);
         setError(null);
         
-        const res = await fetch(`${API_BASE_URL}/api/chart-data?symbol=${encodeURIComponent(symbol)}&timeframe=${encodeURIComponent(timeframe)}&limit=500`);
+        const res = await fetch(`${API_BASE_URL}/api/chart-data?symbol=${encodeURIComponent(symbol)}&timeframe=${encodeURIComponent(timeframe)}&limit=200`);
         if (!res.ok) throw new Error("Failed to fetch chart data");
         const data = await res.json();
         
@@ -83,7 +83,7 @@ export default function CustomAlgorithmicChart({ symbol, timeframe, tabId, trade
     }
     
     fetchData(true);
-    pollInterval = setInterval(() => fetchData(false), 5000);
+    pollInterval = setInterval(() => fetchData(false), 15000);
     
     return () => {
       isMounted = false;

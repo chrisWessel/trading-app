@@ -104,13 +104,19 @@ function TVWidgetTab({ symbol, timeframe, tabId, instructions, studies }: { symb
 
   useEffect(() => {
     const scriptId = 'tradingview-widget-script';
-    let script = document.getElementById(scriptId) as HTMLScriptElement;
+    let script = document.getElementById(scriptId) as HTMLScriptElement | null;
+    let loadPoll: NodeJS.Timeout | null = null;
+    let cancelled = false;
 
     const tvSymbol = getTradingViewSymbol(symbol);
+    const symbolKey = symbol.toUpperCase().replace(/[^A-Z0-9]/g, '');
+    const widgetStudies = studies ?? (['XAUUSD', 'XAU', 'GOLD'].includes(symbolKey)
+      ? ['STD;Pivot Points High Low']
+      : []);
 
     const initWidget = () => {
       const container = containerRef.current;
-      if (window.TradingView && container) {
+      if (!cancelled && window.TradingView && container) {
         container.innerHTML = `<div id="${widgetIdRef.current}" style="width:100%;height:100%;"></div>`;
         new window.TradingView.widget({
           autosize: true,
@@ -128,23 +134,37 @@ function TVWidgetTab({ symbol, timeframe, tabId, instructions, studies }: { symb
           details: false,
           hotlist: false,
           calendar: false,
-          studies: studies,
+          studies: widgetStudies,
           container_id: widgetIdRef.current,
         });
       }
     };
 
-    if (!script) {
-      script = document.createElement('script');
-      script.id = scriptId;
-      script.src = 'https://s3.tradingview.com/tv.js';
-      script.async = true;
-      script.onload = initWidget;
-      document.head.appendChild(script);
+    if (window.TradingView) {
+      initWidget();
     } else {
-      const timer = setTimeout(initWidget, 50);
-      return () => clearTimeout(timer);
+      if (!script) {
+        script = document.createElement('script');
+        script.id = scriptId;
+        script.src = 'https://s3.tradingview.com/tv.js';
+        script.async = true;
+        document.head.appendChild(script);
+      }
+      const startedAt = Date.now();
+      loadPoll = setInterval(() => {
+        if (window.TradingView) {
+          if (loadPoll) clearInterval(loadPoll);
+          initWidget();
+        } else if (Date.now() - startedAt > 15000 && loadPoll) {
+          clearInterval(loadPoll);
+        }
+      }, 50);
     }
+
+    return () => {
+      cancelled = true;
+      if (loadPoll) clearInterval(loadPoll);
+    };
   }, [symbol, timeframe, tabId]);
 
   return (
@@ -363,17 +383,11 @@ function AlgoStructureTab({ symbol, timeframe, algoTrend, fetchAlgoAnalysis }: {
         </div>
       )}
 
-      {algoTrend ? (
-        <CustomAlgorithmicChart symbol={symbol} timeframe={timeframe} tabId="algo_market_structure_oanda" />
-      ) : (
-        <>
-          <TVWidgetTab symbol={symbol} timeframe={timeframe} tabId="algo_market_structure_tv" />
-          {(symbol.toUpperCase().includes('XAU') || symbol.toUpperCase().includes('GOLD')) && (
-            <div className="rounded-lg border border-amber-800/60 bg-slate-950 p-3 text-xs font-mono text-amber-300">
-              OANDA TradingView chart is live. Connect the OANDA API in the local backend to calculate matching HH/HL/LH/LL structure.
-            </div>
-          )}
-        </>
+      <TVWidgetTab symbol={symbol} timeframe={timeframe} tabId="algo_market_structure_tv" />
+      {!algoTrend && (symbol.toUpperCase().includes('XAU') || symbol.toUpperCase().includes('GOLD')) && (
+        <div className="rounded-lg border border-amber-800/60 bg-slate-950 p-3 text-xs font-mono text-amber-300">
+          OANDA pivot markers are shown on the chart. Connect the OANDA API in the local backend for HH/HL/LH/LL labels.
+        </div>
       )}
 
       {/* SVG Arrow Structure Visualization */}
@@ -410,6 +424,7 @@ export default function TradingChart({
 
   const isSellSignal = signalType === 'SELL/SHORT';
   const isBuySignal = signalType === 'BUY/LONG';
+  const isGoldSymbol = symbol.toUpperCase().includes('XAU') || symbol.toUpperCase().includes('GOLD');
   const hasDirectionalSignal = isSellSignal || isBuySignal;
   const signalEntryPrice = Number(tradeParams?.entry ?? latestPrice);
   const rawStopLoss = Number(tradeParams?.stop_loss);
@@ -430,7 +445,7 @@ export default function TradingChart({
   // ── Fetch algo market structure analysis from backend ──
   const fetchAlgoAnalysis = useCallback(async () => {
     try {
-      const res = await fetch(`${API_BASE_URL}/api/chart-data?symbol=${encodeURIComponent(symbol)}&timeframe=${encodeURIComponent(timeframe)}&limit=500`);
+      const res = await fetch(`${API_BASE_URL}/api/chart-data?symbol=${encodeURIComponent(symbol)}&timeframe=${encodeURIComponent(timeframe)}&limit=200`);
       if (!res.ok) return;
       const data = await res.json();
       if (data.status === 'success') {
@@ -483,44 +498,18 @@ export default function TradingChart({
     }
   }, [symbol, timeframe, onLatestDataUpdate]);
 
-  // ── Also try a simple candle fetch for price if signals endpoint fails ──
-  const fetchPriceData = useCallback(async () => {
-    try {
-      const res = await fetch(
-        `${API_BASE_URL}/api/candles?symbol=${encodeURIComponent(symbol)}&timeframe=${timeframe}&limit=2`
-      );
-      if (res.ok) {
-        const data = await res.json();
-        if (data.data_source !== 'SIMULATED' && data.latest_price && data.latest_price > 0) {
-          setLatestPrice(data.latest_price);
-          setSupportLevel(data.support);
-          setResistanceLevel(data.resistance);
-
-          if (onLatestDataUpdate) {
-            onLatestDataUpdate({
-              price: data.latest_price,
-              support: data.support,
-              resistance: data.resistance,
-            });
-          }
-        }
-      }
-    } catch (_) {}
-  }, [symbol, timeframe, onLatestDataUpdate]);
-
   // TV widget initialization moved to TVWidgetTab component
 
   // ── Fetch signals on mount and on interval ──
   useEffect(() => {
     fetchSignalData();
-    fetchPriceData();
 
     const interval = setInterval(() => {
       fetchSignalData();
-    }, 5000);
+    }, 10000);
 
     return () => clearInterval(interval);
-  }, [fetchSignalData, fetchPriceData]);
+  }, [fetchSignalData]);
 
   // ── WebSocket for live price updates ──
   useEffect(() => {
@@ -587,16 +576,16 @@ export default function TradingChart({
             <span>{symbol}</span>
           </div>
           <div className="flex items-center gap-2">
-            <span className="text-2xl font-bold font-mono text-white">
-              ${latestPrice > 0 ? latestPrice.toFixed(precision) : '---'}
-            </span>
+            {latestPrice > 0 && (
+              <span className="text-2xl font-bold font-mono text-white">${latestPrice.toFixed(precision)}</span>
+            )}
             <span className={`flex items-center gap-1.5 text-xs border px-2.5 py-0.5 rounded-full font-mono font-bold transition ${
-              wsConnected
+              isGoldSymbol || wsConnected
                 ? 'bg-emerald-950 text-emerald-400 border-emerald-800/80'
                 : 'bg-amber-950 text-amber-400 border-amber-800/80'
             }`}>
-              <Radio className={`w-3.5 h-3.5 ${wsConnected ? 'animate-pulse text-emerald-400' : 'text-amber-400'}`} />
-              <span>{wsConnected ? 'Connected' : 'Connecting...'}</span>
+              <Radio className={`w-3.5 h-3.5 ${isGoldSymbol || wsConnected ? 'animate-pulse text-emerald-400' : 'text-amber-400'}`} />
+              <span>{isGoldSymbol ? 'OANDA TradingView' : wsConnected ? 'Connected' : 'Connecting...'}</span>
             </span>
           </div>
         </div>
@@ -662,7 +651,7 @@ export default function TradingChart({
           </div>
 
           <button
-            onClick={() => { fetchSignalData(); fetchPriceData(); }}
+            onClick={() => fetchSignalData()}
             title="Refresh signal data"
             className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded-md transition border-l border-slate-800 pl-1"
           >
@@ -763,7 +752,7 @@ export default function TradingChart({
           </div>
         ) : (
           <div className="col-span-full bg-slate-950 p-3 rounded-lg border border-amber-800/60 text-xs font-mono text-amber-300">
-            SIGNAL LEVELS UNAVAILABLE: waiting for verified directional market data.
+            SIGNAL LEVELS UNAVAILABLE: connect the OANDA API for verified gold entries, stops, and targets.
           </div>
         )
       )}

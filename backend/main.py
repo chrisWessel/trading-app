@@ -5,11 +5,12 @@ import datetime
 import random
 import requests
 import importlib
+import threading
 from fastapi import FastAPI, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 
 # Force UTF-8 output encoding for Windows terminals
 if hasattr(sys.stdout, 'reconfigure'):
@@ -44,6 +45,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+SIGNAL_CACHE_TTL_SECONDS = 2.5
+SIGNAL_CACHE: Dict[str, Tuple[float, Dict[str, Any]]] = {}
+SIGNAL_CACHE_LOCK = threading.Lock()
 
 # Initialize SQLite Database on startup
 init_db()
@@ -244,7 +249,15 @@ def get_orderbook(
 
 @app.post("/api/signals/check")
 def check_signals(req: SignalCheckRequest):
-    analysis = analyze_signal_conditions(symbol=req.symbol, timeframe=req.timeframe)
+    cache_key = f"{req.symbol.upper()}:{req.timeframe}"
+    with SIGNAL_CACHE_LOCK:
+        now = time.monotonic()
+        cached = SIGNAL_CACHE.get(cache_key)
+        if cached and now - cached[0] < SIGNAL_CACHE_TTL_SECONDS:
+            analysis = cached[1]
+        else:
+            analysis = analyze_signal_conditions(symbol=req.symbol, timeframe=req.timeframe)
+            SIGNAL_CACHE[cache_key] = (time.monotonic(), analysis)
     telegram_res = None
     if req.force_dispatch and analysis["signal_type"] not in {"NONE", "NEUTRAL"}:
         tp = analysis["trade_params"]
