@@ -63,7 +63,7 @@ const INTERVAL_CATEGORIES = [
 // ── Map symbols to TradingView ticker format (identical to TradingViewDirectChart) ──
 const getTradingViewSymbol = (sym: string): string => {
   const s = sym.toUpperCase().replace(' ', '').replace('/', '').replace('_', '');
-  if (s.includes('XAU') || s.includes('GOLD')) return 'OANDA:XAUUSD';
+  if (s.includes('XAU') || s.includes('GOLD')) return 'BINANCE:PAXGUSDT';
   if (s.includes('PAXG')) return 'BINANCE:PAXGUSDT';
   if (s.includes('EURUSD')) return 'OANDA:EURUSD';
   if (s.includes('GBPUSD')) return 'OANDA:GBPUSD';
@@ -482,6 +482,11 @@ export default function TradingChart({
       if (sigRes.ok) {
         const sigData = await sigRes.json();
         if (sigData.analysis) {
+          if (sigData.analysis.data_source === 'SIMULATED') {
+            setSignalType('NEUTRAL');
+            setTradeParams(null);
+            return;
+          }
           setSignalType(sigData.analysis.signal_type);
           setTradeParams(sigData.analysis.trade_params);
           setLatestPrice(sigData.analysis.latest_price);
@@ -510,7 +515,7 @@ export default function TradingChart({
       );
       if (res.ok) {
         const data = await res.json();
-        if (data.latest_price && data.latest_price > 0) {
+        if (data.data_source !== 'SIMULATED' && data.latest_price && data.latest_price > 0) {
           setLatestPrice(data.latest_price);
           setSupportLevel(data.support);
           setResistanceLevel(data.resistance);
@@ -557,6 +562,7 @@ export default function TradingChart({
         ws.onmessage = (event) => {
           try {
             const data = JSON.parse(event.data);
+            if (data.data_source === 'SIMULATED') return;
             if (data.price && data.price > 0) {
               setLatestPrice(data.price);
               if (data.support) setSupportLevel(data.support);

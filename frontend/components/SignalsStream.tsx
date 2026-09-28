@@ -7,6 +7,7 @@ import { API_BASE_URL } from '@/lib/apiConfig';
 interface SignalAnalysis {
   symbol: string;
   timeframe: string;
+  data_source?: string;
   latest_price: number;
   support: number;
   resistance: number;
@@ -95,7 +96,7 @@ export default function SignalsStream({ symbol, timeframe, onPriceUpdate }: Sign
     }
 
     if (!success) {
-      // Fallback for standalone frontend: fetch live public spot price directly
+      setAnalysis(null);
       try {
         const symUpper = symbol.toUpperCase().replace('/', '').replace('_', '');
         let bSym = 'PAXGUSDT';
@@ -111,44 +112,6 @@ export default function SignalsStream({ symbol, timeframe, onPriceUpdate }: Sign
             const livePrice = parseFloat(bData[0][4]);
             if (livePrice > 0) {
               if (onPriceUpdate) onPriceUpdate(livePrice);
-              const isGold = symbol.toUpperCase().includes('XAU') || symbol.toUpperCase().includes('GOLD');
-              const prec = isGold || livePrice > 10 ? 2 : 4;
-              const atr = livePrice * 0.003;
-
-              // Default SELL/SHORT signal for Gold Spot
-              const isBuy = false;
-              const sigType = isBuy ? 'BUY/LONG' : 'SELL/SHORT';
-              const sl = Number((isBuy ? livePrice - atr * 1.5 : livePrice + atr * 1.5).toFixed(prec));
-              const tp1 = Number((isBuy ? livePrice + atr * 1.2 : livePrice - atr * 1.2).toFixed(prec));
-              const tp2 = Number((isBuy ? livePrice + atr * 2.5 : livePrice - atr * 2.5).toFixed(prec));
-
-              const fallbackAnalysis: SignalAnalysis = {
-                symbol,
-                timeframe,
-                latest_price: livePrice,
-                support: Number((livePrice - atr * 3).toFixed(prec)),
-                resistance: Number((livePrice + atr * 3).toFixed(prec)),
-                volume: 1250,
-                vol_ma_10: 1000,
-                vol_ratio: 1.25,
-                obi_score: -0.045,
-                conditions: {
-                  support_retest: true,
-                  volume_surge: true,
-                  obi_demand: true,
-                },
-                signal_triggered: true,
-                signal_type: sigType,
-                trade_params: {
-                  entry: livePrice,
-                  stop_loss: sl,
-                  tp1,
-                  tp2,
-                  rationale: `Bearish Rejection / Downtrend on ${timeframe} timeframe at $${livePrice.toFixed(prec)}. Stop Loss: $${sl.toFixed(prec)}`,
-                },
-              };
-              setAnalysis(fallbackAnalysis);
-              setLastSignalCheck(new Date().toLocaleTimeString('en-US', { timeZone: 'Africa/Harare' }));
             }
           }
         }
@@ -185,6 +148,11 @@ export default function SignalsStream({ symbol, timeframe, onPriceUpdate }: Sign
           }`}>
             {isRecommendedTf ? `⭐ ${timeframe.toUpperCase()} (80%+ WIN RATE TARGET)` : `TIMEFRAME: ${timeframe.toUpperCase()}`}
           </span>
+          {analysis?.data_source && (
+            <span className={`text-[10px] px-2 py-0.5 rounded-full font-mono font-bold border ${analysis.data_source === 'SIMULATED' ? 'bg-amber-950 text-amber-300 border-amber-700' : 'bg-emerald-950 text-emerald-300 border-emerald-800'}`}>
+              {analysis.data_source === 'SIMULATED' ? 'SIMULATED DATA · SIGNALS DISABLED' : `DATA: ${analysis.data_source.toUpperCase()}`}
+            </span>
+          )}
         </div>
 
         {/* Live Ticking Clock (Harare Time) */}
@@ -234,7 +202,7 @@ export default function SignalsStream({ symbol, timeframe, onPriceUpdate }: Sign
 
         <button
           onClick={() => checkSignals(true)}
-          disabled={loading}
+          disabled={loading || !analysis?.signal_triggered}
           className="bg-blue-600 hover:bg-blue-500 text-white font-semibold px-3.5 py-2 rounded-lg text-xs flex items-center gap-1.5 shadow-md shadow-blue-950 transition shrink-0"
         >
           <Send className="w-3.5 h-3.5" />

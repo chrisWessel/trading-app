@@ -17,6 +17,7 @@ interface TradeParams {
 interface SignalAnalysis {
   symbol: string;
   timeframe: string;
+  data_source?: string;
   latest_price: number;
   support: number;
   resistance: number;
@@ -98,6 +99,12 @@ export default function LiveSignalNotificationPanel({
         const data = await res.json();
         const a: SignalAnalysis = data.analysis;
         setAnalysis(a);
+        if (a.data_source === 'SIMULATED') {
+          frozenRef.current = null;
+          setFrozenParams(null);
+          setNotifications([]);
+          return;
+        }
 
         // Format Harare Time
         const now = new Date();
@@ -238,6 +245,11 @@ export default function LiveSignalNotificationPanel({
                 <span className="bg-blue-950 text-blue-300 border border-blue-800 px-1.5 py-0.2 rounded font-mono">
                   {timeframe.toUpperCase()}
                 </span>
+                {analysis?.data_source && (
+                  <span className={`text-[9px] px-1.5 py-0.5 rounded border ${analysis.data_source === 'SIMULATED' ? 'text-amber-300 bg-amber-950 border-amber-800' : 'text-emerald-300 bg-emerald-950 border-emerald-800'}`}>
+                    {analysis.data_source === 'SIMULATED' ? 'SIMULATED · NO SIGNAL' : analysis.data_source.toUpperCase()}
+                  </span>
+                )}
               </span>
             </div>
           </div>

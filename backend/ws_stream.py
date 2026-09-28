@@ -1,6 +1,4 @@
 import time
-import math
-import random
 import asyncio
 import json
 from typing import List, Dict
@@ -52,7 +50,7 @@ async def websocket_candles_endpoint(websocket: WebSocket, symbol: str, timefram
             # AUTO-INCREMENT TIME TO NEW MINUTE BAR IN REAL TIME
             bar_ts = (now_sec // step_sec) * step_sec
             
-            # Fetch latest authentic candles & support/resistance
+            # Fetch latest candles & support/resistance
             df = engine.fetch_ohlcv(symbol=symbol, timeframe=timeframe, limit=100)
             support, resistance, df = engine.calculate_support_resistance(df)
             
@@ -62,36 +60,27 @@ async def websocket_candles_endpoint(websocket: WebSocket, symbol: str, timefram
             last_high = float(latest_candle['high'])
             last_low = float(latest_candle['low'])
             
-            base_price, precision = engine.get_asset_base_config(symbol)
-            spread = 0.0002 if precision == 4 else 0.20
-            
-            # Continuous live ticking simulation on the active forming bar
-            tick_scale = 0.0002 if precision == 4 else 0.35
-            tick_delta = (math.sin(now_float * 3.5) * tick_scale) + (random.uniform(-0.5, 0.5) * tick_scale)
-            live_price = max(0.0001, round(last_price + tick_delta, precision))
-            
-            live_high = max(last_high, live_price)
-            live_low = min(last_low, live_price)
+            _, precision = engine.get_asset_base_config(symbol)
+            data_source = df.attrs.get('data_source', 'unknown')
             
             payload = {
                 "symbol": symbol,
                 "timeframe": timeframe,
-                "time": bar_ts,  # Auto-advances to 11:55, 11:56, 11:57... in real time!
-                "price": live_price,
+                "time": bar_ts,
+                "price": last_price,
                 "open": round(last_open, precision),
-                "high": round(live_high, precision),
-                "low": round(live_low, precision),
-                "close": live_price,
+                "high": round(last_high, precision),
+                "low": round(last_low, precision),
+                "close": last_price,
                 "volume": round(float(latest_candle['volume']), 2),
                 "support": round(support, precision),
                 "resistance": round(resistance, precision),
-                "bid": round(live_price - spread, precision),
-                "ask": round(live_price + spread, precision),
+                "data_source": data_source,
                 "timestamp_ms": int(now_float * 1000)
             }
             
             await websocket.send_text(json.dumps(payload))
-            await asyncio.sleep(0.25)  # High-frequency 4Hz tick stream
+            await asyncio.sleep(1)
     except WebSocketDisconnect:
         manager.disconnect(websocket, clean)
     except Exception as e:

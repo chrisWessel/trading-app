@@ -128,83 +128,7 @@ def fetch_market_news(symbol: str = "XAU/USD") -> Dict[str, Any]:
                 'summary': f"Coverage for {symbol} regarding global economic catalysts, {category.lower()} headlines, and order flow."
             })
 
-    # Comprehensive Curated News Feed across ALL 4 Core User Categories (WAR, POLITICS, ELECTIONS, MACRO)
-    curated_items = [
-        {
-            'id': 'NW-WAR-1',
-            'title': "Middle East Conflict Escalation Triggers Safe-Haven Capital Inflows into Gold & Commodities",
-            'source': 'Reuters World Desk',
-            'url': 'https://www.reuters.com',
-            'timestamp_sec': int(now - 300),
-            'time_harare': datetime.datetime.fromtimestamp(now - 300).strftime('%H:%M'),
-            'category': 'WAR',
-            'sentiment': 'BULLISH',
-            'impact': 'HIGH',
-            'summary': "Military tensions and missile threats across key trade corridors trigger strong institutional hedging. Safe-haven assets like Gold (XAU/USD) experience rapid order accumulation."
-        },
-        {
-            'id': 'NW-WAR-2',
-            'title': "Black Sea & Eastern European Geopolitical Tensions Threaten Supply Chain Logistics",
-            'source': 'Defense & Macro Intelligence',
-            'url': 'https://www.bloomberg.com',
-            'timestamp_sec': int(now - 1200),
-            'time_harare': datetime.datetime.fromtimestamp(now - 1200).strftime('%H:%M'),
-            'category': 'WAR',
-            'sentiment': 'BULLISH',
-            'impact': 'HIGH',
-            'summary': "Renewed geopolitical risk premiums drive crude oil and precious metals higher as international military units increase alert levels."
-        },
-        {
-            'id': 'NW-ELECT-1',
-            'title': "US Presidential Election Night Polls Tighten: Fiscal Policy & Currency Volatility Expected",
-            'source': 'Associated Press',
-            'url': 'https://apnews.com',
-            'timestamp_sec': int(now - 600),
-            'time_harare': datetime.datetime.fromtimestamp(now - 600).strftime('%H:%M'),
-            'category': 'ELECTIONS',
-            'sentiment': 'NEUTRAL',
-            'impact': 'HIGH',
-            'summary': "Key swing state election results create heightened market uncertainty. Currency pairs and index futures experience widening spreads prior to electoral vote counting."
-        },
-        {
-            'id': 'NW-POL-1',
-            'title': "Global Trade Policy & Tariff Restructuring Bill Introduced in US Congress",
-            'source': 'Financial Times',
-            'url': 'https://www.ft.com',
-            'timestamp_sec': int(now - 1800),
-            'time_harare': datetime.datetime.fromtimestamp(now - 1800).strftime('%H:%M'),
-            'category': 'POLITICS',
-            'sentiment': 'BEARISH',
-            'impact': 'HIGH',
-            'summary': "Bipartisan trade tariff proposals threaten supply chain costs for multinational corporations, placing downward pressure on equity index futures."
-        },
-        {
-            'id': 'NW-MACRO-1',
-            'title': "Federal Reserve Interest Rate Policy Update & CPI Inflation Data Release Pending",
-            'source': 'Wall Street Journal',
-            'url': 'https://www.wsj.com',
-            'timestamp_sec': int(now - 900),
-            'time_harare': datetime.datetime.fromtimestamp(now - 900).strftime('%H:%M'),
-            'category': 'MACRO',
-            'sentiment': 'BULLISH',
-            'impact': 'HIGH',
-            'summary': "Fed Chairman comments hint at potential rate cuts if inflation cooling trend continues. US Dollar Index dips while Gold and Forex pairs break out of tight range."
-        },
-        {
-            'id': 'NW-MACRO-2',
-            'title': "Non-Farm Payrolls (NFP) & Labor Statistics Exceed Analyst Expectations",
-            'source': 'Bloomberg Markets',
-            'url': 'https://www.bloomberg.com',
-            'timestamp_sec': int(now - 2700),
-            'time_harare': datetime.datetime.fromtimestamp(now - 2700).strftime('%H:%M'),
-            'category': 'MACRO',
-            'sentiment': 'NEUTRAL',
-            'impact': 'HIGH',
-            'summary': "Stronger labor participation keeps yields steady as institutional desks rebalance portfolios ahead of upcoming central bank meetings."
-        }
-    ]
-
-    all_items = news_items + curated_items
+    all_items = news_items
 
     # ── SYSTEM RECOMMENDATION ANALYZER ("TRADE" vs "HOLD ON") ────────────
     high_impact_war = [i for i in all_items if i['category'] == 'WAR' and i['impact'] == 'HIGH']
@@ -216,7 +140,13 @@ def fetch_market_news(symbol: str = "XAU/USD") -> Dict[str, Any]:
 
     has_extreme_volatility = (len(high_impact_war) >= 2) or (len(high_impact_election) >= 2 and len(high_impact_macro) >= 2)
 
-    if has_extreme_volatility:
+    if not all_items:
+        recommendation = "HOLD ON"
+        risk_status = "NO LIVE HEADLINES"
+        directive = f"HOLD ON — No live news headlines are currently available for {symbol}; news conditions cannot be assessed."
+        confidence = 0
+        recommendation_badge = "⚠️ HOLD ON (NO LIVE HEADLINES)"
+    elif has_extreme_volatility:
         recommendation = "HOLD ON"
         risk_status = "CRITICAL NEWS VOLATILITY SPIKE"
         directive = "HOLD ON — Major breaking war & election news catalysts are active! Spreads may widen sharply. Wait 15–30 minutes for volatility spikes to normalize before entering trades."
@@ -228,7 +158,7 @@ def fetch_market_news(symbol: str = "XAU/USD") -> Dict[str, Any]:
         directive = f"TRADE CONFIRMED — Geopolitical safe-haven demand & macro news favor {symbol} BUY positions. Technical signals align with news sentiment. Execute with standard SL."
         confidence = 88
         recommendation_badge = "🟢 TRADE (CONFIRMED BULLISH CATALYST)"
-    elif bearish_count > bearish_count + 1:
+    elif bearish_count > bullish_count + 1:
         recommendation = "TRADE"
         risk_status = "BEARISH CATALYST ALIGNED"
         directive = f"TRADE CONFIRMED — Economic policy news favors {symbol} SELL positions. Order flow indicates negative sentiment. Execute with strict risk limits."
@@ -268,6 +198,7 @@ def read_root():
     return {
         "system": "Multi-Asset Trading & Signal Dispatching System",
         "status": "ONLINE",
+        "telegram_configured": bool(os.getenv("TELEGRAM_BOT_TOKEN") and os.getenv("TELEGRAM_CHAT_ID")),
         "endpoints": ["/api/candles", "/api/orderbook", "/api/signals/check", "/api/trade/close", "/api/trades/history", "/api/report/pdf", "/api/news", "/ws/candles/{symbol}"]
     }
 
@@ -296,6 +227,7 @@ def get_candles(
     return {
         "symbol": symbol,
         "timeframe": timeframe,
+        "data_source": df.attrs.get("data_source", "unknown"),
         "latest_price": latest_price,
         "support": support,
         "resistance": resistance,
@@ -313,7 +245,7 @@ def get_orderbook(
 def check_signals(req: SignalCheckRequest):
     analysis = analyze_signal_conditions(symbol=req.symbol, timeframe=req.timeframe)
     telegram_res = None
-    if req.force_dispatch and analysis["signal_type"] != "NONE":
+    if req.force_dispatch and analysis["signal_type"] not in {"NONE", "NEUTRAL"}:
         tp = analysis["trade_params"]
         telegram_res = send_telegram_signal(
             symbol=analysis["symbol"],
@@ -356,21 +288,17 @@ def close_trade(req: TradeCloseRequest):
         pnl_pct = ((entry_p - exit_p) / entry_p) * 100
     pnl_usd = pos_usd * (pnl_pct / 100)
     
-    trade_data = {
-        "symbol": req.symbol,
-        "signal_type": req.signal_type,
-        "entry_price": req.entry_price,
-        "exit_price": req.exit_price,
-        "stop_loss": req.stop_loss,
-        "take_profit": req.take_profit,
-        "position_size_usd": req.position_size_usd,
-        "outcome": req.outcome.upper(),
-        "pnl_usd": pnl_usd,
-        "pnl_percentage": pnl_pct,
-        "rationale": req.rationale
-    }
-    
-    log_closed_trade(trade_data)
+    log_closed_trade(
+        symbol=req.symbol,
+        signal_type=req.signal_type,
+        entry=entry_p,
+        exit_p=exit_p,
+        sl=req.stop_loss,
+        tp=req.take_profit,
+        size_usd=pos_usd,
+        outcome=req.outcome.upper(),
+        rationale=req.rationale or "",
+    )
     return {
         "status": "success",
         "message": "Trade logged successfully to SQLite closed_signals database.",
@@ -386,7 +314,7 @@ def trade_history():
 @app.get("/api/report/pdf")
 def download_pdf_report():
     pdf_path = generate_pdf_monthly_report()
-    if not os.path.exists(pdf_path):
+    if not pdf_path or not os.path.exists(pdf_path):
         raise HTTPException(status_code=404, detail="PDF report creation failed.")
     return FileResponse(
         pdf_path,
@@ -486,6 +414,7 @@ def get_chart_data(symbol: str = Query("XAU/USD"), timeframe: str = Query("5m"),
         "status": "success",
         "symbol": symbol,
         "timeframe": timeframe,
+        "data_source": df.attrs.get("data_source", "unknown"),
         "candles": candles,
         "pivots": labeled_pivots,
         "trend": {

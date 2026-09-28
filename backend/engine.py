@@ -39,7 +39,7 @@ def is_forex_symbol(symbol: str) -> bool:
 def map_symbol_to_yahoo_ticker(symbol: str) -> str:
     clean = clean_symbol_string(symbol)
     if "XAU" in clean or "GOLD" in clean:
-        return "GC=F"
+        return "PAXG-USD"
     if "PAXG" in clean:
         return "PAXG-USD"
     elif "EURUSD" in clean:
@@ -116,7 +116,7 @@ def fetch_real_ohlcv_from_market(symbol: str, timeframe: str = "1m", limit: int 
     
     # ── PRIMARY SPOT FEED: Binance for Gold Spot (PAXGUSDT) & Crypto ──────
     binance_symbol_map = {
-        'PAXGUSDT': 'PAXGUSDT',
+        'XAUUSD': 'PAXGUSDT', 'XAU': 'PAXGUSDT', 'GOLD': 'PAXGUSDT', 'PAXGUSDT': 'PAXGUSDT',
         'BTCUSDT': 'BTCUSDT', 'BTC': 'BTCUSDT',
         'ETHUSD': 'ETHUSDT', 'ETHUSDT': 'ETHUSDT',
         'SOLUSD': 'SOLUSDT', 'SOLUSDT': 'SOLUSDT'
@@ -149,6 +149,7 @@ def fetch_real_ohlcv_from_market(symbol: str, timeframe: str = "1m", limit: int 
                             'volume': float(k[5])
                         })
                     df = pd.DataFrame(records)
+                    df.attrs['data_source'] = 'Binance'
                     _, precision = get_asset_base_config(symbol)
                     for col in ['open', 'high', 'low', 'close']:
                         df[col] = df[col].round(precision)
@@ -187,6 +188,7 @@ def fetch_real_ohlcv_from_market(symbol: str, timeframe: str = "1m", limit: int 
                                 'volume': float(k[6])
                             })
                         df = pd.DataFrame(records)
+                        df.attrs['data_source'] = 'Kraken'
                         _, precision = get_asset_base_config(symbol)
                         for col in ['open', 'high', 'low', 'close']:
                             df[col] = df[col].round(precision)
@@ -242,6 +244,7 @@ def fetch_real_ohlcv_from_market(symbol: str, timeframe: str = "1m", limit: int 
                 
                 if len(records) > 0:
                     df = pd.DataFrame(records)
+                    df.attrs['data_source'] = 'Yahoo Finance'
                     _, precision = get_asset_base_config(symbol)
                     for col in ['open', 'high', 'low', 'close']:
                         df[col] = df[col].round(precision)
@@ -340,7 +343,9 @@ def generate_live_ticking_ohlcv(symbol: str = "EUR/USD", timeframe: str = "1m", 
         'volume': round(vol_live, 2)
     })
 
-    return pd.DataFrame(records)
+    df = pd.DataFrame(records)
+    df.attrs['data_source'] = 'SIMULATED'
+    return df
 
 def fetch_ohlcv(symbol: str = "EUR/USD", timeframe: str = "1m", limit: int = 100) -> pd.DataFrame:
     clean = clean_symbol_string(symbol)
@@ -394,18 +399,33 @@ def fetch_orderbook(symbol: str = "EUR/USD", depth: int = 20) -> Dict[str, Any]:
         if now - cached_time < CACHE_TTL_SECONDS:
             return cached_ob.copy()
 
-    _, precision = get_asset_base_config(symbol)
-    mid_price = get_synchronized_live_price(symbol)
-    
-    if is_forex_symbol(symbol):
-        step_pct = 0.0001
-        vol_scale = 100000
-    else:
-        step_pct = 0.0005
-        vol_scale = 25000
-    
-    bids = [[round(mid_price * (1 - step_pct * i), precision), round(random.uniform(vol_scale * 0.5, vol_scale * 2.0), 2)] for i in range(1, depth + 1)]
-    asks = [[round(mid_price * (1 + step_pct * i), precision), round(random.uniform(vol_scale * 0.5, vol_scale * 1.8), 2)] for i in range(1, depth + 1)]
+    binance_symbol_map = {
+        'XAUUSD': 'PAXGUSDT', 'XAU': 'PAXGUSDT', 'GOLD': 'PAXGUSDT', 'PAXGUSD': 'PAXGUSDT',
+        'PAXGUSDT': 'PAXGUSDT', 'BTC': 'BTCUSDT', 'BTCUSDT': 'BTCUSDT',
+        'ETHUSD': 'ETHUSDT', 'ETHUSDT': 'ETHUSDT', 'SOLUSD': 'SOLUSDT', 'SOLUSDT': 'SOLUSDT',
+    }
+    binance_symbol = binance_symbol_map.get(clean)
+    if not binance_symbol:
+        return {
+            "symbol": symbol, "bids": [], "asks": [], "bid_volume": 0.0,
+            "ask_volume": 0.0, "obi_score": 0.0, "data_source": "unavailable",
+        }
+
+    try:
+        response = requests.get(
+            f"https://api.binance.com/api/v3/depth?symbol={binance_symbol}&limit={min(depth, 1000)}",
+            timeout=2.5,
+        )
+        response.raise_for_status()
+        orderbook = response.json()
+        bids = [[float(price), float(volume)] for price, volume in orderbook.get('bids', [])[:depth]]
+        asks = [[float(price), float(volume)] for price, volume in orderbook.get('asks', [])[:depth]]
+    except Exception as e:
+        print(f"Binance orderbook fetch notice for {symbol}: {e}")
+        return {
+            "symbol": symbol, "bids": [], "asks": [], "bid_volume": 0.0,
+            "ask_volume": 0.0, "obi_score": 0.0, "data_source": "unavailable",
+        }
 
     bid_volume = sum(b[1] for b in bids)
     ask_volume = sum(a[1] for a in asks)
@@ -419,7 +439,8 @@ def fetch_orderbook(symbol: str = "EUR/USD", depth: int = 20) -> Dict[str, Any]:
         "asks": asks[:depth],
         "bid_volume": round(bid_volume, 2),
         "ask_volume": round(ask_volume, 2),
-        "obi_score": round(obi_score, 4)
+        "obi_score": round(obi_score, 4),
+        "data_source": "Binance",
     }
 
     ORDERBOOK_CACHE[cache_key] = (now, res)
@@ -463,6 +484,7 @@ def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m") ->
     Targeting 80%+ win rate with optimal Risk-to-Reward parameters.
     """
     df = fetch_ohlcv(symbol=symbol, timeframe=timeframe, limit=100)
+    data_source = df.attrs.get('data_source', 'unknown')
     support, resistance, df = calculate_support_resistance(df)
     
     df['vol_ma_10'] = df['volume'].rolling(window=10, min_periods=1).mean()
@@ -539,6 +561,9 @@ def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m") ->
             signal_type = "SELL/SHORT"
         else:
             signal_type = "NEUTRAL"  # Genuine indecision — do not trade
+
+    if data_source == 'SIMULATED':
+        signal_type = "NEUTRAL"
 
     _, precision = get_asset_base_config(symbol)
     entry_price = latest_price
@@ -711,6 +736,7 @@ def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m") ->
     return {
         "symbol": symbol,
         "timeframe": timeframe,
+        "data_source": data_source,
         "latest_price": entry_price,
         "support": support,
         "resistance": resistance,
@@ -721,6 +747,7 @@ def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m") ->
         "vol_ma_10": vol_ma_10,
         "vol_ratio": round(vol_ratio, 2),
         "obi_score": obi_score,
+        "orderbook_source": orderbook_data.get('data_source', 'unknown'),
         "price_position_pct": round(price_position_pct, 1),
         "conditions": {
             "support_retest": cond_support_zone,
@@ -755,6 +782,9 @@ def analyze_market_bias(symbol: str, timeframe: str) -> Dict[str, Any]:
     df = fetch_ohlcv(symbol=symbol, timeframe=timeframe, limit=120)
     if df is None or len(df) < 55:
         return {"error": "Insufficient candle data for market bias analysis."}
+    data_source = df.attrs.get('data_source', 'unknown')
+    if data_source == 'SIMULATED':
+        return {"error": "Market bias is unavailable because only simulated candles are available.", "data_source": data_source}
 
     _, precision = get_asset_base_config(symbol)
     latest_price = float(df['close'].iloc[-1])
@@ -829,7 +859,7 @@ def analyze_market_bias(symbol: str, timeframe: str) -> Dict[str, Any]:
     # OBI from last poll (recompute lightweight here)
     try:
         ob = fetch_orderbook(symbol=symbol, depth=15)
-        obi_score = round(float(ob.get("obi", 0.0)), 3)
+        obi_score = round(float(ob.get("obi_score", 0.0)), 3)
     except Exception:
         obi_score = 0.0
 
@@ -956,6 +986,7 @@ def analyze_market_bias(symbol: str, timeframe: str) -> Dict[str, Any]:
     return {
         "symbol": symbol,
         "timeframe": timeframe,
+        "data_source": data_source,
         "latest_price": round(latest_price, precision),
         "trend": {
             "direction": trend_direction,

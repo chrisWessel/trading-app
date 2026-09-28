@@ -11,6 +11,7 @@ interface OrderBookData {
   bid_volume: number;
   ask_volume: number;
   obi_score: number;
+  data_source?: string;
 }
 
 interface OrderBookOBIGaugeProps {
@@ -55,7 +56,7 @@ export default function OrderBookOBIGauge({ symbol }: OrderBookOBIGaugeProps) {
           <h2 className="text-lg font-bold text-white">Order Book & OBI Gauge</h2>
         </div>
         <span className="text-xs bg-slate-950 text-slate-400 border border-slate-800 px-2.5 py-1 rounded-full font-mono">
-          Depth 10 Levels
+          {orderbook?.data_source === 'Binance' ? 'Binance Depth' : orderbook?.data_source === 'unavailable' ? 'Depth Unavailable' : 'Connecting'}
         </span>
       </div>
 

@@ -49,6 +49,34 @@ export default function DashboardPage() {
   const [chartMode, setChartMode] = useState<'TradingViewDirect' | 'CustomEngine'>('TradingViewDirect');
   const [showPositionGuide, setShowPositionGuide] = useState<boolean>(false);
   const [externalTradeParams, setExternalTradeParams] = useState<any>(null);
+  const [engineStatus, setEngineStatus] = useState<'checking' | 'online' | 'offline'>('checking');
+  const [telegramStatus, setTelegramStatus] = useState<'unknown' | 'configured' | 'simulation'>('unknown');
+
+  useEffect(() => {
+    let mounted = true;
+    const checkServices = async () => {
+      try {
+        const res = await fetch(`${API_BASE_URL}/`, { cache: 'no-store' });
+        if (!res.ok) throw new Error('Backend health check failed');
+        const data = await res.json();
+        if (mounted) {
+          setEngineStatus('online');
+          setTelegramStatus(data.telegram_configured ? 'configured' : 'simulation');
+        }
+      } catch {
+        if (mounted) {
+          setEngineStatus('offline');
+          setTelegramStatus('unknown');
+        }
+      }
+    };
+    checkServices();
+    const interval = setInterval(checkServices, 15000);
+    return () => {
+      mounted = false;
+      clearInterval(interval);
+    };
+  }, []);
 
   // ── LIVE PRICE POLLER: keep currentPrice in sync with backend or public spot feed ──────
   useEffect(() => {
@@ -60,7 +88,7 @@ export default function DashboardPage() {
         );
         if (res.ok) {
           const data = await res.json();
-          if (data.latest_price && data.latest_price > 0) {
+          if (data.data_source !== 'SIMULATED' && data.latest_price && data.latest_price > 0) {
             setCurrentPrice(data.latest_price);
             return;
           }
@@ -156,7 +184,7 @@ export default function DashboardPage() {
               </span>
             </h1>
             <p className="text-xs text-slate-400">
-              Institutional Navigation Sidebar • Left Column Signal Feed • Zimbabwe Local Time • 35ms Flash Speed • Telegram Dispatcher
+              Institutional Navigation Sidebar • Zimbabwe Local Time • Live Market Data • Telegram Dispatcher
             </p>
           </div>
         </div>
@@ -197,12 +225,12 @@ export default function DashboardPage() {
             <span>📐 MT4/MT5 Orders & Risk Guide</span>
           </button>
           <div className="flex items-center gap-1.5 bg-slate-950 border border-slate-800 px-3 py-1.5 rounded-lg text-slate-300">
-            <Cpu className="w-4 h-4 text-emerald-400" />
-            <span>FastAPI Engine: <strong className="text-emerald-400">ONLINE (8000)</strong></span>
+            <Cpu className={`w-4 h-4 ${engineStatus === 'online' ? 'text-emerald-400' : 'text-rose-400'}`} />
+            <span>FastAPI Engine: <strong className={engineStatus === 'online' ? 'text-emerald-400' : 'text-rose-400'}>{engineStatus.toUpperCase()}</strong></span>
           </div>
           <div className="flex items-center gap-1.5 bg-slate-950 border border-slate-800 px-3 py-1.5 rounded-lg text-slate-300">
-            <Radio className="w-4 h-4 text-rose-400 animate-pulse" />
-            <span>Telegram Bot: <strong className="text-slate-200">ACTIVE</strong></span>
+            <Radio className={`w-4 h-4 ${telegramStatus === 'configured' ? 'text-emerald-400' : 'text-amber-400'}`} />
+            <span>Telegram: <strong className={telegramStatus === 'configured' ? 'text-emerald-400' : 'text-amber-300'}>{telegramStatus === 'configured' ? 'CONFIGURED' : telegramStatus === 'simulation' ? 'SIMULATION' : 'UNKNOWN'}</strong></span>
           </div>
         </div>
       </header>
@@ -242,7 +270,7 @@ export default function DashboardPage() {
               }`}
             >
               <Eye className="w-3.5 h-3.5 text-emerald-300" />
-              <span>⚡ Technical Signal Engine & Price Lines (35ms Flash Speed)</span>
+              <span>⚡ Technical Signal Engine & Price Lines</span>
             </button>
           </div>
 

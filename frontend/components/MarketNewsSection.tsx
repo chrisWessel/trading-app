@@ -46,69 +46,6 @@ export interface SystemRecommendation {
   last_updated_harare: string;
 }
 
-const DEFAULT_FALLBACK_NEWS: NewsItem[] = [
-  {
-    id: 'FB-WAR-1',
-    title: 'Middle East Conflict Escalation Triggers Safe-Haven Inflows into Gold & Commodities',
-    source: 'Reuters World Desk',
-    url: 'https://www.reuters.com',
-    timestamp_sec: 1727174000,
-    time_harare: '12:45',
-    category: 'WAR',
-    sentiment: 'BULLISH',
-    impact: 'HIGH',
-    summary: 'Military tensions and missile threats across key trade corridors trigger strong institutional hedging. Safe-haven assets like Gold (XAU/USD) experience rapid order accumulation.'
-  },
-  {
-    id: 'FB-WAR-2',
-    title: 'Black Sea & Eastern European Geopolitical Tensions Threaten Supply Lines',
-    source: 'Defense & Macro Intelligence',
-    url: 'https://www.bloomberg.com',
-    timestamp_sec: 1727173100,
-    time_harare: '12:30',
-    category: 'WAR',
-    sentiment: 'BULLISH',
-    impact: 'HIGH',
-    summary: 'Renewed geopolitical risk premiums drive crude oil and precious metals higher as international military units increase alert levels.'
-  },
-  {
-    id: 'FB-ELECT-1',
-    title: 'US Presidential Election Night Polls Tighten: Fiscal Policy Volatility Expected',
-    source: 'Associated Press',
-    url: 'https://apnews.com',
-    timestamp_sec: 1727172200,
-    time_harare: '12:15',
-    category: 'ELECTIONS',
-    sentiment: 'NEUTRAL',
-    impact: 'HIGH',
-    summary: 'Key swing state election results create heightened market uncertainty. Currency pairs and index futures experience widening spreads prior to vote counting.'
-  },
-  {
-    id: 'FB-POL-1',
-    title: 'Global Trade Policy & Tariff Restructuring Bill Introduced in US Congress',
-    source: 'Financial Times',
-    url: 'https://www.ft.com',
-    timestamp_sec: 1727171300,
-    time_harare: '12:00',
-    category: 'POLITICS',
-    sentiment: 'BEARISH',
-    impact: 'HIGH',
-    summary: 'Bipartisan trade tariff proposals threaten supply chain costs for multinational corporations, placing downward pressure on equity index futures.'
-  },
-  {
-    id: 'FB-MACRO-1',
-    title: 'Federal Reserve Interest Rate Policy Update & CPI Inflation Release Pending',
-    source: 'Wall Street Journal',
-    url: 'https://www.wsj.com',
-    timestamp_sec: 1727170400,
-    time_harare: '11:45',
-    category: 'MACRO',
-    sentiment: 'BULLISH',
-    impact: 'HIGH',
-    summary: 'Fed Chairman comments hint at potential rate cuts if inflation cooling trend continues. US Dollar Index dips while Gold and Forex pairs break out.'
-  }
-];
-
 interface MarketNewsSectionProps {
   symbol: string;
 }
@@ -152,7 +89,7 @@ export default function MarketNewsSection({ symbol }: MarketNewsSectionProps) {
   }, [symbol]);
 
   // Always guaranteed to be a valid Array
-  const safeNews = Array.isArray(news) && news.length > 0 ? news : DEFAULT_FALLBACK_NEWS;
+  const safeNews = Array.isArray(news) ? news : [];
 
   // Category counts safely calculated
   const warCount = safeNews.filter(n => n.category === 'WAR').length;
@@ -164,10 +101,10 @@ export default function MarketNewsSection({ symbol }: MarketNewsSectionProps) {
   const activeRec: SystemRecommendation = recommendation || {
     symbol,
     recommendation: 'HOLD ON',
-    badge: '🛑 HOLD ON (HIGH VOLATILITY RISK)',
-    risk_status: 'GEOPOLITICAL & ELECTIONS HEADLINE ALERT',
-    directive: `HOLD ON — Breaking War, Politics & Election headlines detected for ${symbol}! Market volatility and orderbook spreads are elevated. System advises holding execution for 15-30 minutes until news impact settles.`,
-    confidence: 88,
+    badge: '⚠️ HOLD ON (LIVE NEWS UNAVAILABLE)',
+    risk_status: 'LIVE NEWS UNAVAILABLE',
+    directive: `HOLD ON — No live news analysis is available for ${symbol}. Do not treat an empty feed as confirmation of market conditions.`,
+    confidence: 0,
     bullish_count: safeNews.filter(n => n.sentiment === 'BULLISH').length,
     bearish_count: safeNews.filter(n => n.sentiment === 'BEARISH').length,
     war_news_count: warCount,
