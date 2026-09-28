@@ -16,12 +16,29 @@ interface TrendInfo {
   color: string;
 }
 
-export default function CustomAlgorithmicChart({ symbol, timeframe, tabId }: CustomChartProps) {
+interface TradeLevels {
+  signalType: 'BUY/LONG' | 'SELL/SHORT';
+  entry: number;
+  stopLoss: number;
+  takeProfit: number;
+}
+
+interface CustomChartProps {
+  symbol: string;
+  timeframe: string;
+  tabId: string;
+  tradeLevels?: TradeLevels | null;
+}
+
+export default function CustomAlgorithmicChart({ symbol, timeframe, tabId, tradeLevels }: CustomChartProps) {
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [trend, setTrend] = useState<TrendInfo | null>(null);
+  const [dataSource, setDataSource] = useState<string>('connecting');
+  const tradeLevelsRef = useRef<TradeLevels | null | undefined>(tradeLevels);
+  tradeLevelsRef.current = tradeLevels;
 
   useEffect(() => {
     let isMounted = true;
@@ -37,6 +54,20 @@ export default function CustomAlgorithmicChart({ symbol, timeframe, tabId }: Cus
         const data = await res.json();
         
         if (!isMounted) return;
+
+        const normalizedSymbol = symbol.toUpperCase().replace(/[^A-Z0-9]/g, '');
+        const isGold = ['XAUUSD', 'XAU', 'GOLD'].includes(normalizedSymbol);
+        const source = data.data_source || 'unknown';
+        setDataSource(source);
+        if (data.status === 'success' && (source === 'SIMULATED' || (isGold && source !== 'MetaTrader5'))) {
+          setTrend(null);
+          setError(isGold ? 'Waiting for local MT5 feed. Check that MT5 is open, logged in, and XAUUSD is visible.' : 'Market data is simulated; chart disabled.');
+          if (chartRef.current) {
+            chartRef.current.remove();
+            chartRef.current = null;
+          }
+          return;
+        }
 
         if (data.status === 'success') {
           if (data.trend) setTrend(data.trend);
@@ -59,6 +90,37 @@ export default function CustomAlgorithmicChart({ symbol, timeframe, tabId }: Cus
       clearInterval(pollInterval);
     };
   }, [symbol, timeframe, tabId]);
+
+  useEffect(() => {
+    const chart = chartRef.current as any;
+    const series = chart?._candlestickSeries;
+    if (!series) return;
+
+    for (const line of chart._signalPriceLines || []) {
+      series.removePriceLine(line);
+    }
+
+    const levels = tradeLevelsRef.current;
+    if (!levels) {
+      chart._signalPriceLines = [];
+      return;
+    }
+
+    const isSell = levels.signalType === 'SELL/SHORT';
+    const levelsAreDirectional = isSell
+      ? levels.stopLoss > levels.entry && levels.takeProfit < levels.entry
+      : levels.stopLoss < levels.entry && levels.takeProfit > levels.entry;
+    if (!levelsAreDirectional) {
+      chart._signalPriceLines = [];
+      return;
+    }
+
+    chart._signalPriceLines = [
+      series.createPriceLine({ price: levels.entry, color: isSell ? '#f43f5e' : '#3b82f6', lineWidth: 2, axisLabelVisible: true, title: isSell ? 'SELL ENTRY' : 'BUY ENTRY' }),
+      series.createPriceLine({ price: levels.stopLoss, color: '#f43f5e', lineWidth: 2, axisLabelVisible: true, title: 'STOP LOSS' }),
+      series.createPriceLine({ price: levels.takeProfit, color: '#10b981', lineWidth: 2, axisLabelVisible: true, title: isSell ? 'TAKE PROFIT · BUY BACK' : 'TAKE PROFIT · SELL' }),
+    ];
+  }, [tradeLevels?.signalType, tradeLevels?.entry, tradeLevels?.stopLoss, tradeLevels?.takeProfit]);
   
   function buildTrendLine(pivots: any[]): { time: number; value: number }[] {
     // Zigzag: connect all pivot points in order
@@ -159,6 +221,28 @@ export default function CustomAlgorithmicChart({ symbol, timeframe, tabId }: Cus
         chart._trendLine.setData(trendLineData as any);
       }
     }
+
+    const chart: any = chartRef.current;
+    const series = chart?._candlestickSeries;
+    if (series) {
+      for (const line of chart._signalPriceLines || []) {
+        series.removePriceLine(line);
+      }
+      const levels = tradeLevelsRef.current;
+      if (levels) {
+        const isSell = levels.signalType === 'SELL/SHORT';
+        const levelsAreDirectional = isSell
+          ? levels.stopLoss > levels.entry && levels.takeProfit < levels.entry
+          : levels.stopLoss < levels.entry && levels.takeProfit > levels.entry;
+        chart._signalPriceLines = levelsAreDirectional ? [
+          series.createPriceLine({ price: levels.entry, color: isSell ? '#f43f5e' : '#3b82f6', lineWidth: 2, axisLabelVisible: true, title: isSell ? 'SELL ENTRY' : 'BUY ENTRY' }),
+          series.createPriceLine({ price: levels.stopLoss, color: '#f43f5e', lineWidth: 2, axisLabelVisible: true, title: 'STOP LOSS' }),
+          series.createPriceLine({ price: levels.takeProfit, color: '#10b981', lineWidth: 2, axisLabelVisible: true, title: isSell ? 'TAKE PROFIT · BUY BACK' : 'TAKE PROFIT · SELL' }),
+        ] : [];
+      } else {
+        chart._signalPriceLines = [];
+      }
+    }
   }
 
   useEffect(() => {
@@ -183,6 +267,10 @@ export default function CustomAlgorithmicChart({ symbol, timeframe, tabId }: Cus
 
   return (
     <div className="w-full rounded-lg overflow-hidden border border-slate-800 bg-slate-900">
+      <div className="flex items-center justify-between px-3 py-2 border-b border-slate-800 text-xs font-mono">
+        <span className="text-slate-200 font-bold">{symbol} · {timeframe.toUpperCase()}</span>
+        <span className={dataSource === 'MetaTrader5' ? 'text-emerald-400' : 'text-amber-300'}>{dataSource.toUpperCase()}</span>
+      </div>
       {/* Trend Status Banner */}
       {trend && (
         <div className={`flex items-center justify-center gap-3 py-2.5 px-4 border-b ${

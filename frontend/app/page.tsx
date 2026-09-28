@@ -46,11 +46,14 @@ export default function DashboardPage() {
   const [currentPrice, setCurrentPrice] = useState<number>(0);
   const priceIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const [refreshAuditCount, setRefreshAuditCount] = useState<number>(0);
-  const [chartMode, setChartMode] = useState<'TradingViewDirect' | 'CustomEngine'>('TradingViewDirect');
+  const [chartMode, setChartMode] = useState<'TradingViewDirect' | 'CustomEngine'>('CustomEngine');
   const [showPositionGuide, setShowPositionGuide] = useState<boolean>(false);
   const [externalTradeParams, setExternalTradeParams] = useState<any>(null);
   const [engineStatus, setEngineStatus] = useState<'checking' | 'online' | 'offline'>('checking');
   const [telegramStatus, setTelegramStatus] = useState<'unknown' | 'configured' | 'simulation'>('unknown');
+  const [mt5Status, setMt5Status] = useState<'checking' | 'connected' | 'disconnected'>('checking');
+  const [mt5Symbol, setMt5Symbol] = useState<string>('XAUUSD');
+  const [mt5Message, setMt5Message] = useState<string>('');
 
   useEffect(() => {
     let mounted = true;
@@ -62,11 +65,16 @@ export default function DashboardPage() {
         if (mounted) {
           setEngineStatus('online');
           setTelegramStatus(data.telegram_configured ? 'configured' : 'simulation');
+          setMt5Status(data.mt5?.connected ? 'connected' : 'disconnected');
+          setMt5Symbol(data.mt5?.symbol || 'XAUUSD');
+          setMt5Message(data.mt5?.message || '');
         }
       } catch {
         if (mounted) {
           setEngineStatus('offline');
           setTelegramStatus('unknown');
+          setMt5Status('disconnected');
+          setMt5Message('Backend health check failed.');
         }
       }
     };
@@ -97,15 +105,16 @@ export default function DashboardPage() {
         // Backend offline / mixed content block on standalone Vercel deploy
       }
 
-      // 2. Public Spot Feed Fallback (Binance API for Gold Spot & Crypto)
+      const normalizedSymbol = symbol.toUpperCase();
+      if (normalizedSymbol.includes('XAU') || normalizedSymbol.includes('GOLD')) return;
+
+      // 2. Public Spot Feed Fallback (Binance API for crypto)
       try {
         const symUpper = symbol.toUpperCase().replace('/', '').replace('_', '');
         let binanceSym = 'PAXGUSDT';
         if (symUpper.includes('BTC')) binanceSym = 'BTCUSDT';
         else if (symUpper.includes('ETH')) binanceSym = 'ETHUSDT';
         else if (symUpper.includes('SOL')) binanceSym = 'SOLUSDT';
-        else if (symUpper.includes('XAU') || symUpper.includes('GOLD')) binanceSym = 'PAXGUSDT';
-
         const bRes = await fetch(`https://api.binance.com/api/v3/klines?symbol=${binanceSym}&interval=1m&limit=1`);
         if (bRes.ok) {
           const bData = await bRes.json();
@@ -133,11 +142,15 @@ export default function DashboardPage() {
     : PRESET_ASSETS.filter((a) => a.category === activeCategory);
 
   const isRextAsset = symbol.toUpperCase().includes('REXT');
+  const isGoldAsset = symbol.toUpperCase().includes('XAU') || symbol.toUpperCase().includes('GOLD');
 
   const handleAssetSelect = (selectedSymbol: string) => {
     setSymbol(selectedSymbol);
-    if (selectedSymbol.toUpperCase().includes('REXT')) {
+    setCurrentPrice(0);
+    if (selectedSymbol.toUpperCase().includes('REXT') || selectedSymbol.toUpperCase().includes('XAU') || selectedSymbol.toUpperCase().includes('GOLD')) {
       setChartMode('CustomEngine');
+    } else {
+      setChartMode('TradingViewDirect');
     }
   };
 
@@ -156,8 +169,11 @@ export default function DashboardPage() {
     if (customSymbol.trim()) {
       const sym = customSymbol.trim().toUpperCase();
       setSymbol(sym);
-      if (sym.includes('REXT')) {
+      setCurrentPrice(0);
+      if (sym.includes('REXT') || sym.includes('XAU') || sym.includes('GOLD')) {
         setChartMode('CustomEngine');
+      } else {
+        setChartMode('TradingViewDirect');
       }
       setCustomSymbol('');
     }
@@ -224,6 +240,10 @@ export default function DashboardPage() {
             <Calculator className="w-4 h-4 text-amber-300" />
             <span>📐 MT4/MT5 Orders & Risk Guide</span>
           </button>
+          <div title={mt5Message} className={`flex items-center gap-1.5 bg-slate-950 border border-slate-800 px-3 py-1.5 rounded-lg ${mt5Status === 'connected' ? 'text-emerald-400' : 'text-amber-300'}`}>
+            <Activity className="w-4 h-4" />
+            <span>MT5: <strong>{mt5Status === 'connected' ? `CONNECTED · ${mt5Symbol}` : mt5Status === 'checking' ? 'CHECKING' : 'DISCONNECTED'}</strong></span>
+          </div>
           <div className="flex items-center gap-1.5 bg-slate-950 border border-slate-800 px-3 py-1.5 rounded-lg text-slate-300">
             <Cpu className={`w-4 h-4 ${engineStatus === 'online' ? 'text-emerald-400' : 'text-rose-400'}`} />
             <span>FastAPI Engine: <strong className={engineStatus === 'online' ? 'text-emerald-400' : 'text-rose-400'}>{engineStatus.toUpperCase()}</strong></span>
@@ -250,16 +270,16 @@ export default function DashboardPage() {
           <div className="flex items-center gap-1 bg-slate-950 p-1 rounded-lg border border-slate-800 text-xs font-mono">
             <button
               onClick={() => setChartMode('TradingViewDirect')}
-              disabled={isRextAsset}
+              disabled={isRextAsset || isGoldAsset}
               className={`px-3 py-1.5 rounded-md font-bold transition flex items-center gap-1.5 ${
                 chartMode === 'TradingViewDirect' && !isRextAsset
                   ? 'bg-blue-600 text-white shadow-md shadow-blue-900/50'
                   : 'text-slate-400 hover:text-white hover:bg-slate-800 disabled:opacity-40 disabled:cursor-not-allowed'
               }`}
-              title={isRextAsset ? 'TradingView does not index REXT; rendered using Technical Signal Engine' : ''}
+              title={isGoldAsset ? 'Gold uses the local MT5 broker feed to match your trading chart' : isRextAsset ? 'TradingView does not index REXT; rendered using Technical Signal Engine' : 'External reference feed; not your MT5 broker data'}
             >
               <Monitor className="w-3.5 h-3.5 text-blue-300" />
-              <span>🌐 TradingView Official Direct Feed</span>
+              <span>🌐 External TradingView Reference Feed</span>
             </button>
             <button
               onClick={() => setChartMode('CustomEngine')}

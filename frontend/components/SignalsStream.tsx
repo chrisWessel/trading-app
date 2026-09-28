@@ -82,7 +82,7 @@ export default function SignalsStream({ symbol, timeframe, onPriceUpdate }: Sign
       if (res.ok) {
         const json = await res.json();
         setAnalysis(json.analysis);
-        if (json.analysis?.latest_price && json.analysis.latest_price > 0 && onPriceUpdate) {
+        if (json.analysis?.data_source !== 'SIMULATED' && json.analysis?.latest_price && json.analysis.latest_price > 0 && onPriceUpdate) {
           onPriceUpdate(json.analysis.latest_price);
         }
         if (json.telegram_result) {
@@ -97,6 +97,11 @@ export default function SignalsStream({ symbol, timeframe, onPriceUpdate }: Sign
 
     if (!success) {
       setAnalysis(null);
+      const normalizedSymbol = symbol.toUpperCase();
+      if (normalizedSymbol.includes('XAU') || normalizedSymbol.includes('GOLD')) {
+        if (forceDispatch) setLoading(false);
+        return;
+      }
       try {
         const symUpper = symbol.toUpperCase().replace('/', '').replace('_', '');
         let bSym = 'PAXGUSDT';

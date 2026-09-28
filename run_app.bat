@@ -6,9 +6,13 @@ echo   Starting REXT/USDT Full-Stack Trading & Signal System
 echo ============================================================
 echo.
 
+cd /d "%~dp0"
+set "PYTHON_EXE=%~dp0.venv\Scripts\python.exe"
+if not exist "%PYTHON_EXE%" set "PYTHON_EXE=python"
+
 :: 1. Start FastAPI Backend Server in new window
 echo Starting FastAPI Backend Engine (Port 8000)...
-start "FastAPI Backend Engine (Port 8000)" cmd /k "cd /d "%~dp0" && python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000 --reload"
+start "FastAPI Backend Engine (Port 8000)" cmd /k ""%PYTHON_EXE%" -m uvicorn backend.main:app --host 127.0.0.1 --port 8000 --reload"
 
 :: 2. Start Next.js Frontend Dev Server in new window
 echo Starting Next.js Frontend Dashboard (Port 3000)...

@@ -1,3 +1,4 @@
+import os
 import time
 import math
 import random
@@ -8,11 +9,119 @@ import pandas as pd
 import ccxt
 from typing import Dict, Any, List, Tuple, Optional
 
+try:
+    import MetaTrader5 as mt5
+except (ImportError, OSError):
+    mt5 = None
+
 # High-Performance Memory Caches & Ultra-Fast Single Source of Truth
 OHLCV_CACHE: Dict[str, Tuple[float, pd.DataFrame]] = {}
 ORDERBOOK_CACHE: Dict[str, Tuple[float, Dict[str, Any]]] = {}
 UNIVERSAL_PRICE_HUB: Dict[str, float] = {}
 CACHE_TTL_SECONDS = 1.0  # Ultra-fast memory cache TTL
+MT5_GOLD_SYMBOL = os.getenv("MT5_GOLD_SYMBOL", "XAUUSD")
+MT5_TERMINAL_PATH = os.getenv("MT5_TERMINAL_PATH", r"C:\Program Files\MetaTrader 5\terminal64.exe")
+MT5_CONNECT_TIMEOUT_MS = 2500
+MT5_RETRY_SECONDS = 10
+MT5_INITIALIZED = False
+MT5_RETRY_AFTER = 0.0
+MT5_LAST_ERROR = ""
+MT5_CONNECTION_LOCK = threading.Lock()
+MT5_TIMEFRAME_NAMES = {
+    '1m': 'TIMEFRAME_M1', '2m': 'TIMEFRAME_M2', '3m': 'TIMEFRAME_M3', '4m': 'TIMEFRAME_M4',
+    '5m': 'TIMEFRAME_M5', '6m': 'TIMEFRAME_M6', '10m': 'TIMEFRAME_M10', '12m': 'TIMEFRAME_M12',
+    '15m': 'TIMEFRAME_M15', '20m': 'TIMEFRAME_M20', '30m': 'TIMEFRAME_M30',
+    '1h': 'TIMEFRAME_H1', '2h': 'TIMEFRAME_H2', '3h': 'TIMEFRAME_H3', '4h': 'TIMEFRAME_H4',
+    '6h': 'TIMEFRAME_H6', '8h': 'TIMEFRAME_H8', '12h': 'TIMEFRAME_H12',
+    '1d': 'TIMEFRAME_D1', '1w': 'TIMEFRAME_W1', '1M': 'TIMEFRAME_MN1',
+}
+
+
+def is_mt5_gold_symbol(symbol: str) -> bool:
+    return clean_symbol_string(symbol) in {'XAUUSD', 'XAU', 'GOLD'}
+
+
+def ensure_mt5_connection() -> bool:
+    global MT5_INITIALIZED, MT5_RETRY_AFTER, MT5_LAST_ERROR
+    if mt5 is None:
+        MT5_LAST_ERROR = "MetaTrader5 Python package is not installed."
+        return False
+    with MT5_CONNECTION_LOCK:
+        if MT5_INITIALIZED:
+            try:
+                if mt5.terminal_info() is not None:
+                    return True
+            except Exception:
+                pass
+            MT5_INITIALIZED = False
+        now = time.monotonic()
+        if now < MT5_RETRY_AFTER:
+            return False
+        try:
+            MT5_INITIALIZED = bool(mt5.initialize(path=MT5_TERMINAL_PATH, timeout=MT5_CONNECT_TIMEOUT_MS))
+            if MT5_INITIALIZED:
+                MT5_LAST_ERROR = ""
+                return True
+            MT5_LAST_ERROR = str(mt5.last_error())
+        except Exception as exc:
+            MT5_LAST_ERROR = str(exc)
+            MT5_INITIALIZED = False
+        MT5_RETRY_AFTER = now + MT5_RETRY_SECONDS
+        return False
+
+
+def get_mt5_status() -> Dict[str, Any]:
+    if mt5 is None:
+        return {"connected": False, "symbol": MT5_GOLD_SYMBOL, "message": "MetaTrader5 Python package is not installed."}
+    try:
+        if not ensure_mt5_connection():
+            return {"connected": False, "symbol": MT5_GOLD_SYMBOL, "message": MT5_LAST_ERROR}
+        if mt5.symbol_info(MT5_GOLD_SYMBOL) is None:
+            return {"connected": False, "symbol": MT5_GOLD_SYMBOL, "message": "Symbol not found in the connected MT5 terminal."}
+        return {"connected": True, "symbol": MT5_GOLD_SYMBOL, "message": "Connected to local MetaTrader 5 terminal."}
+    except Exception as exc:
+        return {"connected": False, "symbol": MT5_GOLD_SYMBOL, "message": str(exc)}
+
+
+def fetch_mt5_ohlcv(timeframe: str, limit: int) -> Optional[pd.DataFrame]:
+    if mt5 is None:
+        return None
+    timeframe_name = MT5_TIMEFRAME_NAMES.get(timeframe)
+    mt5_timeframe = getattr(mt5, timeframe_name, None) if timeframe_name else None
+    if mt5_timeframe is None:
+        return None
+
+    try:
+        if not ensure_mt5_connection():
+            print(f"MetaTrader 5 initialize notice: {MT5_LAST_ERROR}")
+            return None
+        symbol_info = mt5.symbol_info(MT5_GOLD_SYMBOL)
+        if symbol_info is None:
+            print(f"MetaTrader 5 symbol notice: {MT5_GOLD_SYMBOL} was not found")
+            return None
+        if not symbol_info.visible and not mt5.symbol_select(MT5_GOLD_SYMBOL, True):
+            return None
+
+        rates = mt5.copy_rates_from_pos(MT5_GOLD_SYMBOL, mt5_timeframe, 0, limit)
+        if rates is None or len(rates) == 0:
+            print(f"MetaTrader 5 rates notice: {mt5.last_error()}")
+            return None
+
+        df = pd.DataFrame(rates)
+        df['timestamp'] = df['time'].astype('int64') * 1000
+        volume_column = 'tick_volume' if 'tick_volume' in df else 'volume'
+        df['volume'] = df[volume_column].astype(float)
+        digits = int(getattr(symbol_info, 'digits', 2))
+        for column in ('open', 'high', 'low', 'close'):
+            df[column] = df[column].astype(float).round(digits)
+        df = df[['timestamp', 'open', 'high', 'low', 'close', 'volume']]
+        df.attrs['data_source'] = 'MetaTrader5'
+        df.attrs['price_digits'] = digits
+        UNIVERSAL_PRICE_HUB[clean_symbol_string(MT5_GOLD_SYMBOL)] = float(df['close'].iloc[-1])
+        return df
+    except Exception as exc:
+        print(f"MetaTrader 5 rates notice for {MT5_GOLD_SYMBOL}: {exc}")
+        return None
 
 TIMEFRAME_TO_YAHOO = {
     '1s': ('1m', '1d'), '5s': ('1m', '1d'), '15s': ('1m', '1d'), '30s': ('1m', '1d'),
@@ -113,6 +222,9 @@ def get_pip_size(symbol: str) -> float:
 
 def fetch_real_ohlcv_from_market(symbol: str, timeframe: str = "1m", limit: int = 100) -> Optional[pd.DataFrame]:
     clean = clean_symbol_string(symbol)
+
+    if is_mt5_gold_symbol(symbol):
+        return fetch_mt5_ohlcv(timeframe, limit)
     
     # ── PRIMARY SPOT FEED: Binance for Gold Spot (PAXGUSDT) & Crypto ──────
     binance_symbol_map = {
@@ -398,6 +510,46 @@ def fetch_orderbook(symbol: str = "EUR/USD", depth: int = 20) -> Dict[str, Any]:
         cached_time, cached_ob = ORDERBOOK_CACHE[cache_key]
         if now - cached_time < CACHE_TTL_SECONDS:
             return cached_ob.copy()
+
+    if is_mt5_gold_symbol(symbol):
+        unavailable = {
+            "symbol": symbol, "bids": [], "asks": [], "bid_volume": 0.0,
+            "ask_volume": 0.0, "obi_score": 0.0, "data_source": "unavailable",
+        }
+        if mt5 is None:
+            return unavailable
+        try:
+            if not ensure_mt5_connection():
+                return unavailable
+            if mt5.symbol_info(MT5_GOLD_SYMBOL) is None:
+                return unavailable
+            if not mt5.market_book_add(MT5_GOLD_SYMBOL):
+                return unavailable
+            try:
+                book = mt5.market_book_get(MT5_GOLD_SYMBOL) or []
+            finally:
+                mt5.market_book_release(MT5_GOLD_SYMBOL)
+            buy_type = getattr(mt5, 'BOOK_TYPE_BUY', 2)
+            sell_type = getattr(mt5, 'BOOK_TYPE_SELL', 1)
+            bids = [[float(item.price), float(getattr(item, 'volume_real', 0) or item.volume)]
+                    for item in book if item.type == buy_type][:depth]
+            asks = [[float(item.price), float(getattr(item, 'volume_real', 0) or item.volume)]
+                    for item in book if item.type == sell_type][:depth]
+            bid_volume = sum(level[1] for level in bids)
+            ask_volume = sum(level[1] for level in asks)
+            total_volume = bid_volume + ask_volume
+            result = {
+                "symbol": symbol, "bids": bids, "asks": asks,
+                "bid_volume": round(bid_volume, 2), "ask_volume": round(ask_volume, 2),
+                "obi_score": round((bid_volume - ask_volume) / total_volume, 4) if total_volume else 0.0,
+                "data_source": "MetaTrader5" if book else "unavailable",
+            }
+            if book:
+                ORDERBOOK_CACHE[cache_key] = (now, result)
+            return result
+        except Exception as exc:
+            print(f"MetaTrader 5 orderbook notice for {MT5_GOLD_SYMBOL}: {exc}")
+            return unavailable
 
     binance_symbol_map = {
         'XAUUSD': 'PAXGUSDT', 'XAU': 'PAXGUSDT', 'GOLD': 'PAXGUSDT', 'PAXGUSD': 'PAXGUSDT',

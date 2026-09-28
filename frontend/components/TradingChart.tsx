@@ -421,7 +421,7 @@ function AlgoStructureTab({ symbol, timeframe, algoTrend, fetchAlgoAnalysis }: {
       )}
 
       {/* SAME TradingView OANDA chart as Live Signals */}
-      <TVWidgetTab symbol={symbol} timeframe={timeframe} tabId="algo_market_structure_tv" />
+      <CustomAlgorithmicChart symbol={symbol} timeframe={timeframe} tabId="algo_market_structure_mt5" />
 
       {/* SVG Arrow Structure Visualization */}
       {algoTrend && algoTrend.pivots.length > 1 && (
@@ -831,12 +831,16 @@ export default function TradingChart({
 
       {/* Tab Content Render */}
       {activeTab === 'live_signals' && (
-        <TVWidgetTab 
-          symbol={symbol} 
-          timeframe={timeframe} 
-          tabId="live_signals" 
-          showSignalOverlay={true} 
-          signalLines={signalLines} 
+        <CustomAlgorithmicChart
+          symbol={symbol}
+          timeframe={timeframe}
+          tabId="live_signals_mt5"
+          tradeLevels={hasDirectionalSignal && signalEntryPrice > 0 ? {
+            signalType: signalType as 'BUY/LONG' | 'SELL/SHORT',
+            entry: signalEntryPrice,
+            stopLoss: sl,
+            takeProfit: tp,
+          } : null}
         />
       )}
       
