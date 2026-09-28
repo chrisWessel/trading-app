@@ -553,8 +553,9 @@ def fetch_ohlcv(symbol: str = "EUR/USD", timeframe: str = "1m", limit: int = 100
 
 def calculate_support_resistance(df: pd.DataFrame, window: int = 14) -> Tuple[float, float, pd.DataFrame]:
     df = df.copy()
-    df['rolling_low'] = df['low'].rolling(window=window, min_periods=3).min()
-    df['rolling_high'] = df['high'].rolling(window=window, min_periods=3).max()
+    min_periods = min(3, len(df))
+    df['rolling_low'] = df['low'].rolling(window=window, min_periods=min_periods).min()
+    df['rolling_high'] = df['high'].rolling(window=window, min_periods=min_periods).max()
     
     current_support = float(df['rolling_low'].iloc[-1]) if not df['rolling_low'].empty else float(df['low'].min())
     current_resistance = float(df['rolling_high'].iloc[-1]) if not df['rolling_high'].empty else float(df['high'].max())
