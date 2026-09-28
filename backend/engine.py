@@ -7,7 +7,10 @@ import threading
 import numpy as np
 import pandas as pd
 import ccxt
+from dotenv import load_dotenv
 from typing import Dict, Any, List, Tuple, Optional
+
+load_dotenv()
 
 try:
     import MetaTrader5 as mt5
@@ -21,6 +24,9 @@ UNIVERSAL_PRICE_HUB: Dict[str, float] = {}
 CACHE_TTL_SECONDS = 1.0  # Ultra-fast memory cache TTL
 MT5_GOLD_SYMBOL = os.getenv("MT5_GOLD_SYMBOL", "XAUUSD")
 MT5_TERMINAL_PATH = os.getenv("MT5_TERMINAL_PATH", r"C:\Program Files\MetaTrader 5\terminal64.exe")
+MT5_LOGIN = os.getenv("MT5_LOGIN", "")
+MT5_PASSWORD = os.getenv("MT5_PASSWORD", "")
+MT5_SERVER = os.getenv("MT5_SERVER", "")
 MT5_CONNECT_TIMEOUT_MS = 2500
 MT5_RETRY_SECONDS = 10
 MT5_INITIALIZED = False
@@ -58,7 +64,10 @@ def ensure_mt5_connection() -> bool:
         if now < MT5_RETRY_AFTER:
             return False
         try:
-            MT5_INITIALIZED = bool(mt5.initialize(path=MT5_TERMINAL_PATH, timeout=MT5_CONNECT_TIMEOUT_MS))
+            options = {"path": MT5_TERMINAL_PATH, "timeout": MT5_CONNECT_TIMEOUT_MS}
+            if MT5_LOGIN and MT5_PASSWORD and MT5_SERVER:
+                options.update(login=int(MT5_LOGIN), password=MT5_PASSWORD, server=MT5_SERVER)
+            MT5_INITIALIZED = bool(mt5.initialize(**options))
             if MT5_INITIALIZED:
                 MT5_LAST_ERROR = ""
                 return True
