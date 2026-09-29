@@ -28,3 +28,7 @@ ENV/
 .vscode/
 .idea/
 .DS_Store
+
+# Build artifacts
+.kilo/agents/
+frontend/tsconfig.tsbuildinfo
