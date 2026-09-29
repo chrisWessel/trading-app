@@ -395,7 +395,7 @@ function AlgoStructureTab({ symbol, timeframe, algoTrend, fetchAlgoAnalysis, tra
         </div>
       )}
 
-      {algoTrend && algoTrend.dataSource !== 'SIMULATED' ? (
+      {algoTrend ? (
         <CustomAlgorithmicChart symbol={symbol} timeframe={timeframe} tabId="algo_market_structure_reference" tradeLevels={tradeLevels} />
       ) : (
         <TVWidgetTab symbol={symbol} timeframe={timeframe} tabId="algo_market_structure_tv" />
@@ -443,19 +443,20 @@ export default function TradingChart({
   const isBuySignal = signalType === 'BUY/LONG';
   const isGoldSymbol = symbol.toUpperCase().includes('XAU') || symbol.toUpperCase().includes('GOLD');
   const hasDirectionalSignal = isSellSignal || isBuySignal;
+  const hasTradeParams = tradeParams != null;
   const signalEntryPrice = Number(tradeParams?.entry ?? latestPrice);
   const rawStopLoss = Number(tradeParams?.stop_loss);
   const riskAmount = Number.isFinite(rawStopLoss) && rawStopLoss > 0
     ? Math.abs(signalEntryPrice - rawStopLoss)
     : Math.max(Math.abs(resistanceLevel - supportLevel) * 0.1, signalEntryPrice * 0.001, 0.0001);
-  const stopLossPrice = hasDirectionalSignal
+  const stopLossPrice = signalEntryPrice > 0 && (Number.isFinite(rawStopLoss) && rawStopLoss > 0)
     ? Number((signalEntryPrice + (isSellSignal ? riskAmount : -riskAmount)).toFixed(precision))
     : 0;
   const rawTakeProfit = Number(tradeParams?.tp1);
   const targetDistance = Number.isFinite(rawTakeProfit) && rawTakeProfit > 0 && rawTakeProfit !== signalEntryPrice
     ? Math.abs(signalEntryPrice - rawTakeProfit)
     : riskAmount * 1.5;
-  const takeProfitPrice = hasDirectionalSignal
+  const takeProfitPrice = signalEntryPrice > 0 && (Number.isFinite(rawTakeProfit) && rawTakeProfit > 0 && rawTakeProfit !== signalEntryPrice)
     ? Number((signalEntryPrice + (isSellSignal ? -targetDistance : targetDistance)).toFixed(precision))
     : 0;
 
@@ -466,13 +467,7 @@ export default function TradingChart({
       if (!res.ok) return;
       const data = await res.json();
       if (data.status === 'success') {
-        const normalizedSymbol = symbol.toUpperCase().replace(/[^A-Z0-9]/g, '');
-        const isGold = ['XAUUSD', 'XAU', 'GOLD'].includes(normalizedSymbol);
         setMarketDataSource(data.data_source || 'unknown');
-        if (data.data_source === 'SIMULATED' || (isGold && !['OANDA', 'Binance PAXGUSDT (reference)'].includes(data.data_source))) {
-          setAlgoTrend(null);
-          return;
-        }
         setAlgoTrend({ status: data.trend?.status || '', pivots: data.pivots || [], dataSource: data.data_source || 'unknown' });
       }
     } catch { /* silent */ }
@@ -490,11 +485,6 @@ export default function TradingChart({
         const sigData = await sigRes.json();
         if (sigData.analysis) {
           setMarketDataSource(sigData.analysis.data_source || 'unknown');
-          if (sigData.analysis.data_source === 'SIMULATED') {
-            setSignalType('NEUTRAL');
-            setTradeParams(null);
-            return;
-          }
           setSignalType(sigData.analysis.signal_type);
           setTradeParams(sigData.analysis.trade_params);
           setLatestPrice(sigData.analysis.latest_price);
@@ -711,7 +701,7 @@ export default function TradingChart({
             <div className="bg-slate-950 p-2 rounded-lg border border-rose-800/60 flex items-center justify-between">
               <div>
                 <span className="text-rose-400 block text-[10px] font-bold">🔴 WHEN TO SELL / SHORT (ENTRY)</span>
-                <span className="text-white font-bold">${latestPrice > 0 ? latestPrice.toFixed(precision) : '---'}</span>
+                <span className="text-white font-bold">${signalEntryPrice > 0 ? signalEntryPrice.toFixed(precision) : '---'}</span>
               </div>
               <ArrowDownRight className="w-4 h-4 text-rose-400" />
             </div>
@@ -745,7 +735,7 @@ export default function TradingChart({
             <div className="bg-slate-950 p-2 rounded-lg border border-blue-800/60 flex items-center justify-between">
               <div>
                 <span className="text-blue-400 block text-[10px] font-bold">🔵 WHEN TO BUY (ENTRY)</span>
-                <span className="text-white font-bold">${latestPrice > 0 ? latestPrice.toFixed(precision) : '---'}</span>
+                <span className="text-white font-bold">${signalEntryPrice > 0 ? signalEntryPrice.toFixed(precision) : '---'}</span>
               </div>
               <ArrowUpRight className="w-4 h-4 text-blue-400" />
             </div>
@@ -774,22 +764,52 @@ export default function TradingChart({
               <AlertOctagon className="w-4 h-4 text-amber-400" />
             </div>
           </div>
-        ) : (
-          <div className="col-span-full bg-slate-950 p-3 rounded-lg border border-amber-800/60 text-xs font-mono text-amber-300">
-            SIGNAL LEVELS UNAVAILABLE: connect the OANDA API for verified gold entries, stops, and targets.
+         ) : (
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs font-mono">
+            <div className="bg-slate-950 p-2 rounded-lg border border-slate-700 flex items-center justify-between">
+              <div>
+                <span className="text-slate-400 block text-[10px] font-bold">◇ ENTRY / CURRENT PRICE</span>
+                <span className="text-white font-bold">${signalEntryPrice > 0 ? signalEntryPrice.toFixed(precision) : '---'}</span>
+              </div>
+              <Activity className="w-4 h-4 text-slate-400" />
+            </div>
+
+            <div className="bg-slate-950 p-2 rounded-lg border border-slate-700 flex items-center justify-between">
+              <div>
+                <span className="text-slate-400 block text-[10px] font-bold">🛑 STOP LOSS LINE</span>
+                <span className="text-slate-300 font-bold">${sl > 0 ? sl.toFixed(precision) : '---'}</span>
+              </div>
+              <Shield className="w-4 h-4 text-slate-400" />
+            </div>
+
+            <div className="bg-slate-950 p-2 rounded-lg border border-slate-700 flex items-center justify-between">
+              <div>
+                <span className="text-slate-400 block text-[10px] font-bold">🎯 TAKE PROFIT (TARGET)</span>
+                <span className="text-slate-300 font-bold">${tp > 0 ? tp.toFixed(precision) : '---'}</span>
+              </div>
+              <Target className="w-4 h-4 text-slate-400" />
+            </div>
+
+            <div className="bg-slate-950 p-2 rounded-lg border border-slate-700 flex items-center justify-between">
+              <div>
+                <span className="text-slate-400 block text-[10px] font-bold">⛔ NO ACTIVE SIGNAL</span>
+                <span className="text-slate-400 text-[10px]">Monitor trend / OBI for entry</span>
+              </div>
+              <AlertOctagon className="w-4 h-4 text-slate-400" />
+            </div>
           </div>
         )
       )}
 
       {/* Tab Content Render */}
       {activeTab === 'live_signals' && (
-        ['OANDA', 'Binance PAXGUSDT (reference)'].includes(marketDataSource) && (symbol.toUpperCase().includes('XAU') || symbol.toUpperCase().includes('GOLD')) ? (
+        hasTradeParams && signalEntryPrice > 0 ? (
           <CustomAlgorithmicChart
             symbol={symbol}
             timeframe={timeframe}
-            tabId="live_signals_oanda"
-            tradeLevels={hasDirectionalSignal && signalEntryPrice > 0 ? {
-              signalType: signalType as 'BUY/LONG' | 'SELL/SHORT',
+            tabId="live_signals_chart"
+            tradeLevels={signalEntryPrice > 0 && (sl > 0 || tp > 0) ? {
+              signalType: (signalType === 'SELL/SHORT' ? 'SELL/SHORT' : 'BUY/LONG'),
               entry: signalEntryPrice,
               stopLoss: sl,
               takeProfit: tp,
@@ -808,8 +828,8 @@ export default function TradingChart({
           timeframe={timeframe}
           algoTrend={algoTrend}
           fetchAlgoAnalysis={fetchAlgoAnalysis}
-          tradeLevels={hasDirectionalSignal && signalEntryPrice > 0 ? {
-            signalType: signalType as 'BUY/LONG' | 'SELL/SHORT',
+          tradeLevels={signalEntryPrice > 0 && (sl > 0 || tp > 0) ? {
+            signalType: (signalType === 'SELL/SHORT' ? 'SELL/SHORT' : 'BUY/LONG'),
             entry: signalEntryPrice,
             stopLoss: sl,
             takeProfit: tp,

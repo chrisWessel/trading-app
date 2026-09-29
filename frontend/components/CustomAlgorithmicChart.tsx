@@ -61,17 +61,7 @@ export default function CustomAlgorithmicChart({ symbol, timeframe, tabId, trade
         const isGold = ['XAUUSD', 'XAU', 'GOLD'].includes(normalizedSymbol);
         const source = data.data_source || 'unknown';
         setDataSource(source);
-        if (data.status === 'success' && (source === 'SIMULATED' || (isGold && !['OANDA', 'Binance PAXGUSDT (reference)'].includes(source)))) {
-          setTrend(null);
-          setError(isGold ? 'Waiting for a verified gold data feed.' : 'Market data is simulated; chart disabled.');
-          if (chartRef.current) {
-            chartRef.current.remove();
-            chartRef.current = null;
-          }
-          return;
-        }
-
-        if (data.status === 'success') {
+         if (data.status === 'success') {
           if (data.trend) setTrend(data.trend);
           renderChart(data.candles, data.pivots, isInitialLoad);
         } else {
@@ -121,8 +111,6 @@ export default function CustomAlgorithmicChart({ symbol, timeframe, tabId, trade
       series.createPriceLine({ price: levels.entry, color: isSell ? '#f43f5e' : '#3b82f6', lineWidth: 2, axisLabelVisible: true, title: isSell ? 'SELL ENTRY' : 'BUY ENTRY' }),
       series.createPriceLine({ price: levels.stopLoss, color: '#f43f5e', lineWidth: 2, axisLabelVisible: true, title: 'STOP LOSS' }),
       series.createPriceLine({ price: levels.takeProfit, color: '#10b981', lineWidth: 2, axisLabelVisible: true, title: isSell ? 'TAKE PROFIT · BUY BACK' : 'TAKE PROFIT · SELL' }),
-      ...(levels.support ? [series.createPriceLine({ price: levels.support, color: '#22c55e', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: 'SUPPORT' })] : []),
-      ...(levels.resistance ? [series.createPriceLine({ price: levels.resistance, color: '#f97316', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: 'RESISTANCE' })] : []),
       ...(levels.support ? [series.createPriceLine({ price: levels.support, color: '#22c55e', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: 'SUPPORT' })] : []),
       ...(levels.resistance ? [series.createPriceLine({ price: levels.resistance, color: '#f97316', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: 'RESISTANCE' })] : []),
     ];
@@ -244,11 +232,9 @@ export default function CustomAlgorithmicChart({ symbol, timeframe, tabId, trade
         chart._signalPriceLines = levelsAreDirectional ? [
           series.createPriceLine({ price: levels.entry, color: isSell ? '#f43f5e' : '#3b82f6', lineWidth: 2, axisLabelVisible: true, title: isSell ? 'SELL ENTRY' : 'BUY ENTRY' }),
           series.createPriceLine({ price: levels.stopLoss, color: '#f43f5e', lineWidth: 2, axisLabelVisible: true, title: 'STOP LOSS' }),
-          series.createPriceLine({ price: levels.takeProfit, color: '#10b981', lineWidth: 2, axisLabelVisible: true, title: isSell ? 'TAKE PROFIT · BUY BACK' : 'TAKE PROFIT · SELL' }),
-          ...(levels.support ? [series.createPriceLine({ price: levels.support, color: '#22c55e', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: 'SUPPORT' })] : []),
-          ...(levels.resistance ? [series.createPriceLine({ price: levels.resistance, color: '#f97316', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: 'RESISTANCE' })] : []),
-          ...(levels.support ? [series.createPriceLine({ price: levels.support, color: '#22c55e', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: 'SUPPORT' })] : []),
-          ...(levels.resistance ? [series.createPriceLine({ price: levels.resistance, color: '#f97316', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: 'RESISTANCE' })] : []),
+           series.createPriceLine({ price: levels.takeProfit, color: '#10b981', lineWidth: 2, axisLabelVisible: true, title: isSell ? 'TAKE PROFIT · BUY BACK' : 'TAKE PROFIT · SELL' }),
+           ...(levels.support ? [series.createPriceLine({ price: levels.support, color: '#22c55e', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: 'SUPPORT' })] : []),
+           ...(levels.resistance ? [series.createPriceLine({ price: levels.resistance, color: '#f97316', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: 'RESISTANCE' })] : []),
         ] : [];
       } else {
         chart._signalPriceLines = [];

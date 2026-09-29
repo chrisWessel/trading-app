@@ -820,8 +820,15 @@ def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m") ->
     }
     min_sl_distance = pip * tf_min_sl_pips.get(timeframe, 30)
 
-    # Clamp: SL must be between min_sl_distance and 3.5x ATR from entry
-    risk_amount = round(max(min(max(atr * sl_mult, latest_price * 0.0003), atr * 3.5), min_sl_distance), precision)
+    # ── Risk: anchor SL to the recent support/resistance swing level.
+    # This keeps SL tight (on the swing) and TP at 1:1 RRR (close to entry, not far).
+    if signal_type == "BUY/LONG" and support < entry_price:
+        rr_base = entry_price - support
+    elif signal_type == "SELL/SHORT" and resistance > entry_price:
+        rr_base = resistance - entry_price
+    else:
+        rr_base = atr * sl_mult
+    risk_amount = round(max(min(max(rr_base, latest_price * 0.0003), atr * 3.5), min_sl_distance), precision)
 
     # ── 5 ENTRY ZONES: Zone 1 = current market price (immediate entry).
     # Remaining zones spread outward as better-priced scale-in levels.
@@ -837,7 +844,7 @@ def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m") ->
             round(entry_price - zone_step * 3, precision),  # Zone 4 – support zone
             round(entry_price - zone_step * 4, precision),  # Zone 5 – max scale-in
         ]
-        stop_loss = round(entry_price - risk_amount, precision)
+        stop_loss = round(support if support < entry_price else entry_price - risk_amount, precision)
 
     elif signal_type == "SELL/SHORT":
         entry_zones = [
@@ -847,7 +854,7 @@ def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m") ->
             round(entry_price + zone_step * 3, precision),  # Zone 4 – resistance zone
             round(entry_price + zone_step * 4, precision),  # Zone 5 – max scale-in
         ]
-        stop_loss = round(entry_price + risk_amount, precision)
+        stop_loss = round(resistance if resistance > entry_price else entry_price + risk_amount, precision)
 
     else:
         entry_zones = [
