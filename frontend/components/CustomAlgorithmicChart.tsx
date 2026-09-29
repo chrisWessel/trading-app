@@ -170,6 +170,17 @@ export default function CustomAlgorithmicChart({ symbol, timeframe, tabId, trade
         timeScale: {
           timeVisible: true,
           secondsVisible: false,
+          tickMarkFormatter: (time: any, tickMarkType: number) => {
+            const date = new Date(typeof time === 'number' ? time * 1000 : time);
+            const opts: any = { timeZone: 'Africa/Johannesburg' };
+            if (tickMarkType === 1) {
+              return date.toLocaleDateString('en-ZA', { ...opts, month: 'short', day: 'numeric' });
+            }
+            if (tickMarkType === 2 || tickMarkType === 3) {
+              return date.toLocaleTimeString('en-ZA', { ...opts, hour: '2-digit', minute: '2-digit', hour12: false });
+            }
+            return date.toLocaleDateString('en-ZA', { ...opts, year: 'numeric' });
+          },
         },
         rightPriceScale: { borderColor: '#1e293b' },
       });
