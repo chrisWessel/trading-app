@@ -3,7 +3,7 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { RefreshCw, Zap, ChevronDown, Clock, Radio, ArrowUpRight, ArrowDownRight, Shield, Target, AlertOctagon, Activity, ArrowRightLeft, TrendingUp } from 'lucide-react';
 import { API_BASE_URL } from '@/lib/apiConfig';
-import CustomAlgorithmicChart from './CustomAlgorithmicChart';
+
 
 export type ChartTabId = 'live_signals' | 'algo_market_structure';
 
@@ -102,9 +102,14 @@ const getTradingViewInterval = (tf: string): string => {
 };
 
 // ── TVWidgetTab Component for Tabs ──
-function TVWidgetTab({ symbol, timeframe, tabId, instructions, studies }: { symbol: string, timeframe: string, tabId: string, instructions?: React.ReactNode, studies?: string[] }) {
+function TVWidgetTab({ symbol, timeframe, tabId, instructions, studies, tradeLevels }: { symbol: string, timeframe: string, tabId: string, instructions?: React.ReactNode, studies?: string[], tradeLevels?: { signalType: 'BUY/LONG' | 'SELL/SHORT'; entry: number; stopLoss: number; takeProfit: number; support?: number; resistance?: number } | null }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const widgetIdRef = useRef<string>(`tv_signal_widget_${tabId}_${Math.floor(Math.random() * 1000000)}`);
+  const widgetRef = useRef<any>(null);
+  const chartApiRef = useRef<any>(null);
+  const priceLineIdsRef = useRef<any[]>([]);
+  const [chartReady, setChartReady] = useState(false);
+  const CHART_HEIGHT = 520;
 
   useEffect(() => {
     const scriptId = 'tradingview-widget-script';
@@ -122,7 +127,7 @@ function TVWidgetTab({ symbol, timeframe, tabId, instructions, studies }: { symb
       const container = containerRef.current;
       if (!cancelled && window.TradingView && container) {
         container.innerHTML = `<div id="${widgetIdRef.current}" style="width:100%;height:100%;"></div>`;
-        new window.TradingView.widget({
+        const w = new window.TradingView.widget({
           autosize: true,
           symbol: tvSymbol,
           interval: getTradingViewInterval(timeframe),
@@ -133,13 +138,24 @@ function TVWidgetTab({ symbol, timeframe, tabId, instructions, studies }: { symb
           toolbar_bg: '#0F172A',
           enable_publishing: false,
           allow_symbol_change: false,
-          hide_side_toolbar: false, // Turn ON drawing tools for these analysis tabs!
+          hide_side_toolbar: false,
           hide_top_toolbar: true,
           details: false,
           hotlist: false,
           calendar: false,
           studies: widgetStudies,
           container_id: widgetIdRef.current,
+        });
+        widgetRef.current = w;
+
+        w.on('chartReady', () => {
+          try {
+            const chart = w.chart();
+            if (chart && typeof chart.createPriceLine === 'function') {
+              chartApiRef.current = chart;
+              setChartReady(true);
+            }
+          } catch {}
         });
       }
     };
@@ -169,7 +185,80 @@ function TVWidgetTab({ symbol, timeframe, tabId, instructions, studies }: { symb
       cancelled = true;
       if (loadPoll) clearInterval(loadPoll);
     };
-  }, [symbol, timeframe, tabId]);
+  }, [symbol, timeframe, tabId, studies]);
+
+  useEffect(() => {
+    if (!chartReady || !tradeLevels || tradeLevels.entry <= 0) return;
+    const chart = chartApiRef.current;
+    if (!chart) return;
+
+    priceLineIdsRef.current.forEach(id => { try { chart.removePriceLine(id); } catch {} });
+    priceLineIdsRef.current = [];
+
+    const levels = tradeLevels;
+    const isSell = levels.signalType === 'SELL/SHORT';
+    const levelsAreDirectional = isSell
+      ? levels.stopLoss > levels.entry && levels.takeProfit < levels.entry
+      : levels.stopLoss < levels.entry && levels.takeProfit > levels.entry;
+    if (!levelsAreDirectional) return;
+
+    const tryCreate = (price: number, color: string, title: string) => {
+      try {
+        const id = chart.createPriceLine({ price, color, lineWidth: 2, lineStyle: 1, axisLabelVisible: true, title });
+        priceLineIdsRef.current.push(id);
+      } catch {}
+    };
+
+    tryCreate(levels.entry, isSell ? '#f43f5e' : '#3b82f6', isSell ? 'SELL ENTRY' : 'BUY ENTRY');
+    tryCreate(levels.stopLoss, '#f43f5e', 'STOP LOSS');
+    tryCreate(levels.takeProfit, '#10b981', isSell ? 'TAKE PROFIT · BUY BACK' : 'TAKE PROFIT · SELL');
+    if (levels.support && levels.support > 0) tryCreate(levels.support, '#22c55e', 'SUPPORT');
+    if (levels.resistance && levels.resistance > 0) tryCreate(levels.resistance, '#f97316', 'RESISTANCE');
+  }, [chartReady, tradeLevels]);
+
+  const renderHtmlOverlay = () => {
+    if (!tradeLevels || tradeLevels.entry <= 0 || chartReady) return null;
+
+    const prices = [tradeLevels.entry, tradeLevels.stopLoss, tradeLevels.takeProfit];
+    if (tradeLevels.support && tradeLevels.support > 0) prices.push(tradeLevels.support);
+    if (tradeLevels.resistance && tradeLevels.resistance > 0) prices.push(tradeLevels.resistance);
+    const valid = prices.filter(p => p > 0);
+    if (valid.length === 0) return null;
+
+    const minP = Math.min(...valid);
+    const maxP = Math.max(...valid);
+    const range = maxP - minP || 1;
+    const pad = range * 0.15;
+    const adjMin = minP - pad;
+    const adjMax = maxP + pad;
+    const adjRange = adjMax - adjMin;
+
+    const isSell = tradeLevels.signalType === 'SELL/SHORT';
+    const lines = [
+      { price: tradeLevels.entry, color: isSell ? '#f43f5e' : '#3b82f6', label: isSell ? 'SELL ENTRY' : 'BUY ENTRY' },
+      { price: tradeLevels.stopLoss, color: '#f43f5e', label: 'STOP LOSS' },
+      { price: tradeLevels.takeProfit, color: '#10b981', label: isSell ? 'TP BUY BACK' : 'TP SELL' },
+    ];
+    if (tradeLevels.support && tradeLevels.support > 0) lines.push({ price: tradeLevels.support, color: '#22c55e', label: 'SUPPORT' });
+    if (tradeLevels.resistance && tradeLevels.resistance > 0) lines.push({ price: tradeLevels.resistance, color: '#f97316', label: 'RESISTANCE' });
+
+    return (
+      <div className="absolute inset-0 pointer-events-none" style={{ zIndex: 10 }}>
+        {lines.map((line, i) => {
+          const y = ((adjMax - line.price) / adjRange) * CHART_HEIGHT;
+          return (
+            <div key={i} className="absolute left-0 right-0" style={{ top: `${y}px` }}>
+              <div className="absolute inset-x-0 h-px" style={{ backgroundColor: line.color, opacity: 0.7 }}></div>
+              <span className="absolute left-1 top-0 text-xs font-mono px-1.5 py-0.5 rounded"
+                style={{ backgroundColor: 'rgba(0,0,0,0.85)', color: line.color }}>
+                {line.label} {line.price.toFixed(2)}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
 
   return (
     <div className="flex flex-col gap-3">
@@ -180,6 +269,7 @@ function TVWidgetTab({ symbol, timeframe, tabId, instructions, studies }: { symb
       )}
       <div className="relative w-full h-[520px] rounded-lg overflow-hidden border border-slate-950">
         <div ref={containerRef} className="w-full h-full" />
+        {renderHtmlOverlay()}
       </div>
     </div>
   );
@@ -395,11 +485,12 @@ function AlgoStructureTab({ symbol, timeframe, algoTrend, fetchAlgoAnalysis, tra
         </div>
       )}
 
-      {algoTrend ? (
-        <CustomAlgorithmicChart symbol={symbol} timeframe={timeframe} tabId="algo_market_structure_reference" tradeLevels={tradeLevels} />
-      ) : (
-        <TVWidgetTab symbol={symbol} timeframe={timeframe} tabId="algo_market_structure_tv" />
-      )}
+      <TVWidgetTab
+        symbol={symbol}
+        timeframe={timeframe}
+        tabId="algo_market_structure_tv"
+        tradeLevels={tradeLevels}
+      />
       {!algoTrend && (symbol.toUpperCase().includes('XAU') || symbol.toUpperCase().includes('GOLD')) && (
         <div className="rounded-lg border border-amber-800/60 bg-slate-950 p-3 text-xs font-mono text-amber-300">
           TradingView pivots appear immediately. Connecting the free PAXG gold reference for matched HH/HL/LH/LL labels.
@@ -443,7 +534,6 @@ export default function TradingChart({
   const isBuySignal = signalType === 'BUY/LONG';
   const isGoldSymbol = symbol.toUpperCase().includes('XAU') || symbol.toUpperCase().includes('GOLD');
   const hasDirectionalSignal = isSellSignal || isBuySignal;
-  const hasTradeParams = tradeParams != null;
   const signalEntryPrice = Number(tradeParams?.entry ?? latestPrice);
   const rawStopLoss = Number(tradeParams?.stop_loss);
   const riskAmount = Number.isFinite(rawStopLoss) && rawStopLoss > 0
@@ -803,23 +893,19 @@ export default function TradingChart({
 
       {/* Tab Content Render */}
       {activeTab === 'live_signals' && (
-        hasTradeParams && signalEntryPrice > 0 ? (
-          <CustomAlgorithmicChart
-            symbol={symbol}
-            timeframe={timeframe}
-            tabId="live_signals_chart"
-            tradeLevels={signalEntryPrice > 0 && (sl > 0 || tp > 0) ? {
-              signalType: (signalType === 'SELL/SHORT' ? 'SELL/SHORT' : 'BUY/LONG'),
-              entry: signalEntryPrice,
-              stopLoss: sl,
-              takeProfit: tp,
-              support: supportLevel,
-              resistance: resistanceLevel,
-            } : null}
-          />
-        ) : (
-          <TVWidgetTab symbol={symbol} timeframe={timeframe} tabId="live_signals_tv" />
-        )
+        <TVWidgetTab
+          symbol={symbol}
+          timeframe={timeframe}
+          tabId="live_signals_tv"
+          tradeLevels={signalEntryPrice > 0 && (sl > 0 || tp > 0) ? {
+            signalType: (signalType === 'SELL/SHORT' ? 'SELL/SHORT' : 'BUY/LONG'),
+            entry: signalEntryPrice,
+            stopLoss: sl,
+            takeProfit: tp,
+            support: supportLevel,
+            resistance: resistanceLevel,
+          } : null}
+        />
       )}
       
       {activeTab === 'algo_market_structure' && (
