@@ -21,6 +21,7 @@ const QUICK_TIMEFRAMES = ['1s', '1m', '5m', '15m', '30m', '1h', '4h', '1d'];
 export default function TradingViewDirectChart({ symbol, timeframe, currentPrice, onTimeframeChange }: TradingViewDirectChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const widgetIdRef = useRef<string>(`tv_widget_${Math.floor(Math.random() * 1000000)}`);
+  const widgetRef = useRef<any>(null);
 
   const getTradingViewSymbol = (sym: string): string => {
     const s = sym.toUpperCase().replace(" ", "").replace("/", "").replace("_", "");
@@ -60,12 +61,14 @@ export default function TradingViewDirectChart({ symbol, timeframe, currentPrice
   useEffect(() => {
     const scriptId = 'tradingview-widget-script';
     let script = document.getElementById(scriptId) as HTMLScriptElement;
+    let cancelled = false;
 
     const initWidget = () => {
       const container = containerRef.current;
-      if (window.TradingView && container) {
+      if (cancelled || !window.TradingView || !container) return;
+      try {
         container.innerHTML = `<div id="${widgetIdRef.current}" style="width:100%;height:100%;"></div>`;
-        new window.TradingView.widget({
+        widgetRef.current = new window.TradingView.widget({
           autosize: true,
           symbol: tvSymbol,
           interval: getTradingViewInterval(timeframe),
@@ -82,9 +85,12 @@ export default function TradingViewDirectChart({ symbol, timeframe, currentPrice
           calendar: true,
           container_id: widgetIdRef.current,
         });
+      } catch {
+        // A failed widget init must not take down the page.
       }
     };
 
+    let timer: ReturnType<typeof setTimeout> | null = null;
     if (!script) {
       script = document.createElement('script');
       script.id = scriptId;
@@ -94,9 +100,16 @@ export default function TradingViewDirectChart({ symbol, timeframe, currentPrice
       document.head.appendChild(script);
     } else {
       // Small timeout ensures container DOM node is ready
-      const timer = setTimeout(initWidget, 50);
-      return () => clearTimeout(timer);
+      timer = setTimeout(initWidget, 50);
     }
+
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+      try { widgetRef.current?.remove?.(); } catch {}
+      widgetRef.current = null;
+      if (containerRef.current) containerRef.current.innerHTML = '';
+    };
   }, [symbol, timeframe, tvSymbol]);
 
   const isHighValue = (currentPrice || 0) > 10.0;

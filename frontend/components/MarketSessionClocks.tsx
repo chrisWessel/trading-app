@@ -131,6 +131,34 @@ function getHarareTimeStr(): string {
   }
 }
 
+interface ClockSnapshot {
+  currentUtcDecimal: number;
+  isWeekend: boolean;
+  utcTimeStr: string;
+  harareTimeStr: string;
+  cityTimes: Record<string, string>;
+}
+
+// Rendered on the server and on the first client render so the two trees match.
+// Reading the clock during render makes every tick a hydration mismatch, which
+// fails hydration in production builds.
+const NEUTRAL_CLOCK: ClockSnapshot = {
+  currentUtcDecimal: 0,
+  isWeekend: false,
+  utcTimeStr: '--:--:--',
+  harareTimeStr: '--:--:--',
+  cityTimes: {},
+};
+
+function readClockSnapshot(): ClockSnapshot {
+  const { currentUtcDecimal, isWeekend, utcTimeStr } = getUtcHoursMinutes();
+  const cityTimes: Record<string, string> = {};
+  SESSIONS.forEach((session) => {
+    cityTimes[session.id] = getLocalCityTimeStr(session.timezone);
+  });
+  return { currentUtcDecimal, isWeekend, utcTimeStr, harareTimeStr: getHarareTimeStr(), cityTimes };
+}
+
 function getCountdownText(currentUtcDecimal: number, openUtcHour: number, closeUtcHour: number, isOpen: boolean): string {
   let targetHour = isOpen ? closeUtcHour : openUtcHour;
   let diffHours = targetHour - currentUtcDecimal;
@@ -148,14 +176,17 @@ function getCountdownText(currentUtcDecimal: number, openUtcHour: number, closeU
 
 export default function MarketSessionClocks() {
   const [, setTick] = useState(0);
+  const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
+    setMounted(true);
     const interval = setInterval(() => setTick((t) => t + 1), 1000);
     return () => clearInterval(interval);
   }, []);
 
-  const { currentUtcDecimal, isWeekend, utcTimeStr } = getUtcHoursMinutes();
-  const harareTimeStr = getHarareTimeStr();
+  const { currentUtcDecimal, isWeekend, utcTimeStr, harareTimeStr, cityTimes } = mounted
+    ? readClockSnapshot()
+    : NEUTRAL_CLOCK;
 
   // London / NY Overlap: 12:00 UTC to 15:30 UTC (8:00 AM to 11:30 AM EST / 2:00 PM to 5:30 PM CAT)
   const isOverlapActive = !isWeekend && currentUtcDecimal >= 12 && currentUtcDecimal < 15.5;
@@ -200,7 +231,7 @@ export default function MarketSessionClocks() {
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
         {SESSIONS.map((session) => {
           const isOpen = !isWeekend && currentUtcDecimal >= session.openUtcHour && currentUtcDecimal < session.closeUtcHour;
-          const cityTimeStr = getLocalCityTimeStr(session.timezone);
+          const cityTimeStr = cityTimes[session.id] ?? '--:--:--';
           const countdown = getCountdownText(currentUtcDecimal, session.openUtcHour, session.closeUtcHour, isOpen);
 
           return (

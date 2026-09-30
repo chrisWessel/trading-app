@@ -115,6 +115,7 @@ function TVWidgetTab({ symbol, timeframe, tabId, instructions, studies, tradeLev
     const scriptId = 'tradingview-widget-script';
     let script = document.getElementById(scriptId) as HTMLScriptElement | null;
     let loadPoll: NodeJS.Timeout | null = null;
+    let readyPoll: NodeJS.Timeout | null = null;
     let cancelled = false;
 
     const tvSymbol = getTradingViewSymbol(symbol);
@@ -125,7 +126,8 @@ function TVWidgetTab({ symbol, timeframe, tabId, instructions, studies, tradeLev
 
     const initWidget = () => {
       const container = containerRef.current;
-      if (!cancelled && window.TradingView && container) {
+      if (cancelled || !window.TradingView || !container) return;
+      try {
         container.innerHTML = `<div id="${widgetIdRef.current}" style="width:100%;height:100%;"></div>`;
         const w = new window.TradingView.widget({
           autosize: true,
@@ -148,15 +150,46 @@ function TVWidgetTab({ symbol, timeframe, tabId, instructions, studies, tradeLev
         });
         widgetRef.current = w;
 
-        w.on('chartReady', () => {
+        const tryRegisterChartReady = () => {
           try {
-            const chart = w.chart();
-            if (chart && typeof chart.createPriceLine === 'function') {
-              chartApiRef.current = chart;
-              setChartReady(true);
+            if (typeof w.on === 'function') {
+              w.on('chartReady', () => {
+                try {
+                  const chart = w.chart();
+                  if (chart && typeof chart.createPriceLine === 'function') {
+                    chartApiRef.current = chart;
+                    setChartReady(true);
+                  }
+                } catch {}
+              });
+              return true;
             }
           } catch {}
-        });
+          return false;
+        };
+
+        if (!tryRegisterChartReady()) {
+          // Older/newer tv.js builds return an instance without the event API,
+          // so fall back to polling for the chart handle.
+          if (typeof w.chart !== 'function') return;
+          const pollStart = Date.now();
+          readyPoll = setInterval(() => {
+            if (cancelled) { if (readyPoll) clearInterval(readyPoll); return; }
+            try {
+              const chart = w.chart();
+              if (chart && typeof chart.createPriceLine === 'function') {
+                chartApiRef.current = chart;
+                setChartReady(true);
+                if (readyPoll) clearInterval(readyPoll);
+              } else if (Date.now() - pollStart > 10000) {
+                if (readyPoll) clearInterval(readyPoll);
+              }
+            } catch {}
+          }, 100);
+        }
+      } catch {
+        // A failed widget init must not take down the page.
+        if (readyPoll) clearInterval(readyPoll);
       }
     };
 
@@ -184,6 +217,13 @@ function TVWidgetTab({ symbol, timeframe, tabId, instructions, studies, tradeLev
     return () => {
       cancelled = true;
       if (loadPoll) clearInterval(loadPoll);
+      if (readyPoll) clearInterval(readyPoll);
+      setChartReady(false);
+      priceLineIdsRef.current = [];
+      chartApiRef.current = null;
+      try { widgetRef.current?.remove?.(); } catch {}
+      widgetRef.current = null;
+      if (containerRef.current) containerRef.current.innerHTML = '';
     };
   }, [symbol, timeframe, tabId, studies]);
 
