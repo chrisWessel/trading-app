@@ -29,6 +29,7 @@ from backend.logger import init_db, log_closed_trade, generate_pdf_monthly_repor
 from backend.engine import fetch_ohlcv, calculate_support_resistance, fetch_orderbook, analyze_signal_conditions, analyze_market_bias
 from backend.telegram_bot import send_telegram_signal
 from backend.ws_stream import ws_router
+from backend import ict_engine
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -235,7 +236,7 @@ def read_root():
         "oanda": backend.engine.get_oanda_status(),
         "gold_feed": backend.engine.get_gold_feed_status(),
         "telegram_configured": bool(os.getenv("TELEGRAM_BOT_TOKEN") and os.getenv("TELEGRAM_CHAT_ID")),
-        "endpoints": ["/api/candles", "/api/orderbook", "/api/signals/check", "/api/trade/close", "/api/trades/history", "/api/report/pdf", "/api/news", "/ws/candles/{symbol}"]
+        "endpoints": ["/api/candles", "/api/orderbook", "/api/signals/check", "/api/trade/close", "/api/trades/history", "/api/report/pdf", "/api/news", "/api/ict/analysis", "/ws/candles/{symbol}"]
     }
 
 @app.get("/api/candles")
@@ -465,3 +466,53 @@ def get_chart_data(symbol: str = Query("XAU/USD"), timeframe: str = Query("5m"),
             "color": trend_color
         }
     }
+
+# ── CANDACE ICT SCALPING ENGINE ───────────────────────────────────────────────
+# The strategy is execution-driven on the 1-minute, so this endpoint always
+# pulls 1m candles regardless of the timeframe the chart is displaying.
+
+ICT_CACHE_TTL_SECONDS = 5.0
+ICT_CACHE: Dict[str, Tuple[float, Dict[str, Any]]] = {}
+ICT_CACHE_LOCK = threading.Lock()
+ICT_1M_LIMIT = 1200          # ~20h, enough to cover an Asia session
+ICT_DAILY_LIMIT = 30
+
+
+@app.get("/api/ict/analysis")
+def get_ict_analysis(
+    symbol: str = Query("XAU/USD", description="Trading symbol"),
+    timeframe: str = Query("1m", description="Chart timeframe (informational only)")
+):
+    """Session status, liquidity, displacement, FVG/IFVG state and trade signal."""
+    cache_key = symbol.upper()
+    with ICT_CACHE_LOCK:
+        now = time.monotonic()
+        cached = ICT_CACHE.get(cache_key)
+        if cached and now - cached[0] < ICT_CACHE_TTL_SECONDS:
+            return cached[1]
+
+    df_1m = fetch_ohlcv(symbol=symbol, timeframe="1m", limit=ICT_1M_LIMIT)
+    candles_1m = ict_engine._candle_rows(df_1m) if df_1m is not None and not df_1m.empty else []
+    data_source = df_1m.attrs.get("data_source", "unknown") if df_1m is not None else "unknown"
+
+    daily_rows: List[Dict[str, Any]] = []
+    try:
+        df_daily = fetch_ohlcv(symbol=symbol, timeframe="1d", limit=ICT_DAILY_LIMIT)
+        if df_daily is not None and not df_daily.empty:
+            daily_rows = ict_engine._candle_rows(df_daily)
+    except Exception as exc:  # daily bias is an enhancement, not a blocker
+        print("ICT daily fetch notice:", exc)
+
+    result = ict_engine.analyze_ict(
+        symbol=symbol,
+        timeframe=timeframe,
+        candles_1m=candles_1m,
+        daily=daily_rows,
+        data_source=data_source,
+    )
+    result["candles_1m_returned"] = len(candles_1m)
+    result["daily_candles_returned"] = len(daily_rows)
+
+    with ICT_CACHE_LOCK:
+        ICT_CACHE[cache_key] = (time.monotonic(), result)
+    return result

@@ -1,11 +1,12 @@
 'use client';
 
-import React, { useEffect, useRef, useState, useCallback } from 'react';
+import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { RefreshCw, Zap, ChevronDown, Clock, Radio, ArrowUpRight, ArrowDownRight, Shield, Target, AlertOctagon, Activity, ArrowRightLeft, TrendingUp } from 'lucide-react';
 import { API_BASE_URL } from '@/lib/apiConfig';
+import ICTScalpPanel, { type IctLevels } from '@/components/ICTScalpPanel';
 
 
-export type ChartTabId = 'live_signals' | 'algo_market_structure';
+export type ChartTabId = 'live_signals' | 'algo_market_structure' | 'ict_scalp';
 
 interface TradingChartProps {
   symbol: string;
@@ -566,6 +567,33 @@ export default function TradingChart({
   const [tradeParams, setTradeParams] = useState<any>(null);
   const [marketDataSource, setMarketDataSource] = useState<string>('unknown');
   const [algoTrend, setAlgoTrend] = useState<{ status: string; pivots: any[]; dataSource: string } | null>(null);
+  const [ictLevels, setIctLevels] = useState<IctLevels | null>(null);
+
+  // Keep a stable object identity unless the values actually change, so the
+  // chart price-line effect does not re-run (and redraw) on every render.
+  const handleIctLevels = useCallback((next: IctLevels | null) => {
+    setIctLevels((prev) => {
+      if (prev === null && next === null) return prev;
+      if (
+        prev && next &&
+        prev.direction === next.direction &&
+        prev.entry === next.entry &&
+        prev.stop_loss === next.stop_loss &&
+        prev.take_profit === next.take_profit
+      ) return prev;
+      return next;
+    });
+  }, []);
+
+  const ictTradeLevels = useMemo(() => {
+    if (!ictLevels || !(ictLevels.entry > 0)) return null;
+    return {
+      signalType: (ictLevels.direction === 'SHORT' ? 'SELL/SHORT' : 'BUY/LONG') as 'SELL/SHORT' | 'BUY/LONG',
+      entry: ictLevels.entry,
+      stopLoss: ictLevels.stop_loss,
+      takeProfit: ictLevels.take_profit,
+    };
+  }, [ictLevels]);
 
   const isHighValueAsset = latestPrice > 10.0;
   const precision = isHighValueAsset ? 2 : 4;
@@ -807,6 +835,7 @@ export default function TradingChart({
         {[
           { id: 'live_signals', label: 'Live Signals & Lines' },
           { id: 'algo_market_structure', label: 'Algo Market Structure (Live Feed)' },
+          { id: 'ict_scalp', label: '⚡ ICT Scalp (AMD Sessions)' },
         ].map((tab) => (
           <button
             key={tab.id}
@@ -963,6 +992,18 @@ export default function TradingChart({
             resistance: resistanceLevel,
           } : null}
         />
+      )}
+
+      {activeTab === 'ict_scalp' && (
+        <div className="space-y-4">
+          <TVWidgetTab
+            symbol={symbol}
+            timeframe={timeframe}
+            tabId="ict_scalp_tv"
+            tradeLevels={ictTradeLevels}
+          />
+          <ICTScalpPanel symbol={symbol} timeframe={timeframe} onTradeLevels={handleIctLevels} />
+        </div>
       )}
     </div>
   );
