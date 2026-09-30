@@ -6,6 +6,7 @@ import {
   RefreshCw, Moon, Sunrise, Radio, CheckCircle2, XCircle, Activity,
 } from 'lucide-react';
 import { API_BASE_URL } from '@/lib/apiConfig';
+import type { SessionWindow, NextKillzone } from '@/components/SessionRibbon';
 
 // ─── Types (mirror backend/ict_engine.py) ─────────────────────────────────────
 
@@ -19,26 +20,6 @@ interface SessionInfo {
   guidance: string;
   et_time: string;
   harare_time: string;
-}
-
-interface NextKillzone {
-  label: string | null;
-  seconds_until: number | null;
-  countdown: string;
-  opens_et: string | null;
-  opens_harare: string | null;
-}
-
-interface SessionWindow {
-  name: string;
-  purpose: string;
-  is_killzone: boolean;
-  opens_et: string;
-  closes_et: string;
-  opens_harare: string;
-  closes_harare: string;
-  status: string;
-  countdown: string;
 }
 
 interface AsiaRange {
@@ -133,7 +114,7 @@ interface IctAnalysis {
 interface Props {
   symbol: string;
   timeframe: string;
-  onTradeLevels?: (levels: IctLevels | null) => void;
+  onPublish?: (payload: IctPublish) => void;
 }
 
 export interface IctLevels {
@@ -141,6 +122,29 @@ export interface IctLevels {
   entry: number;
   stop_loss: number;
   take_profit: number;
+}
+
+export interface IctChartLine {
+  price: number;
+  color: string;
+  title: string;
+  lineWidth?: 1 | 2 | 3 | 4;
+  lineStyle?: 0 | 1 | 2 | 3 | 4;
+}
+
+export interface IctSessionSnapshot {
+  windows: SessionWindow[];
+  nextKillzone: NextKillzone;
+  currentEt: string;
+  currentHarare: string;
+  inKillzone: boolean;
+  name: string;
+}
+
+export interface IctPublish {
+  levels: IctLevels | null;
+  lines: IctChartLine[];
+  session: IctSessionSnapshot;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -177,10 +181,91 @@ function Card({ title, icon, children, className = '' }: { title: string; icon?:
 
 // ─── Component ───────────────────────────────────────────────────────────────
 
-export default function ICTScalpPanel({ symbol, timeframe, onTradeLevels }: Props) {
+// Turn the analysis into the horizontal levels drawn on the chart. These are
+// the reference points you watch before an entry fires.
+function buildChartLines(a: IctAnalysis): IctChartLine[] {
+  const lines: IctChartLine[] = [];
+
+  if (a.asia_range) {
+    lines.push({ price: a.asia_range.high, color: '#f59e0b', title: 'ASIA HIGH', lineWidth: 2, lineStyle: 2 });
+    lines.push({ price: a.asia_range.low, color: '#f59e0b', title: 'ASIA LOW', lineWidth: 2, lineStyle: 2 });
+  }
+
+  if (a.sweep) {
+    lines.push({
+      price: a.sweep.level,
+      color: '#a855f7',
+      title: a.sweep.side === 'BUY_SIDE' ? 'SWEPT HIGHS' : 'SWEPT LOWS',
+      lineWidth: 1,
+      lineStyle: 3,
+    });
+  }
+
+  (a.ifvgs || []).slice(-3).forEach((g) => {
+    lines.push({
+      price: g.zone_bottom,
+      color: g.direction === 'LONG' ? '#34d399' : '#fb7185',
+      title: `IFVG ${g.zone_bottom}`,
+      lineWidth: 1,
+      lineStyle: 1,
+    });
+    lines.push({
+      price: g.zone_top,
+      color: g.direction === 'LONG' ? '#34d399' : '#fb7185',
+      title: `IFVG ${g.zone_top}`,
+      lineWidth: 1,
+      lineStyle: 1,
+    });
+  });
+
+  (a.fair_value_gaps || []).slice(-4).forEach((g) => {
+    lines.push({
+      price: g.bottom,
+      color: '#64748b',
+      title: `FVG ${g.direction === 'BULLISH' ? '↑' : '↓'}`,
+      lineWidth: 1,
+      lineStyle: 2,
+    });
+    lines.push({
+      price: g.top,
+      color: '#64748b',
+      title: `FVG ${g.direction === 'BULLISH' ? '↑' : '↓'}`,
+      lineWidth: 1,
+      lineStyle: 2,
+    });
+  });
+
+  (a.liquidity_levels || []).slice(-6).forEach((l) => {
+    lines.push({
+      price: l.price,
+      color: l.side === 'BUY_SIDE' ? '#38bdf8' : '#fb923c',
+      title: l.type === 'EQUAL_HIGHS' ? 'EQ HIGHS' : 'EQ LOWS',
+      lineWidth: 1,
+      lineStyle: 3,
+    });
+  });
+
+  if (a.htf) {
+    if (a.htf.previous_day_high) lines.push({ price: a.htf.previous_day_high, color: '#94a3b8', title: 'PDH', lineWidth: 1, lineStyle: 1 });
+    if (a.htf.previous_day_low) lines.push({ price: a.htf.previous_day_low, color: '#94a3b8', title: 'PDL', lineWidth: 1, lineStyle: 1 });
+  }
+
+  // De-duplicate by price so we never stack identical lines on the axis.
+  const seen = new Set<number>();
+  return lines.filter((l) => {
+    if (!Number.isFinite(l.price) || l.price <= 0) return false;
+    const key = Math.round(l.price * 1000);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+export default function ICTScalpPanel({ symbol, timeframe, onPublish }: Props) {
   const [data, setData] = useState<IctAnalysis | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [firedAt, setFiredAt] = useState<string | null>(null);
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
 
   const fetchAnalysis = useCallback(async () => {
@@ -194,8 +279,6 @@ export default function ICTScalpPanel({ symbol, timeframe, onTradeLevels }: Prop
         setData(json);
         setError(null);
 
-        // Publish the active signal so the parent can draw it on the chart.
-        // Only ENTRY_READY setups get lines, so a cancelled setup shows nothing.
         const sig = json.signal as IctSignal;
         const dir = sig?.direction;
         const publishable =
@@ -203,19 +286,37 @@ export default function ICTScalpPanel({ symbol, timeframe, onTradeLevels }: Prop
           (dir === 'LONG' || dir === 'SHORT') &&
           Number.isFinite(sig.entry) && Number.isFinite(sig.stop_loss) && Number.isFinite(sig.take_profit);
 
-        onTradeLevels?.(publishable ? {
-          direction: dir as IctLevels['direction'],
-          entry: sig.entry!,
-          stop_loss: sig.stop_loss!,
-          take_profit: sig.take_profit!,
-        } : null);
+        // Stamp the moment the setup first armed so the chart can show *when*
+        // to place the trade, not just that a trade exists.
+        setFiredAt((prev) => {
+          if (publishable) return prev ?? (json.generated_at_et || '');
+          return null;
+        });
+
+        onPublish?.({
+          levels: publishable ? {
+            direction: dir as IctLevels['direction'],
+            entry: sig.entry!,
+            stop_loss: sig.stop_loss!,
+            take_profit: sig.take_profit!,
+          } : null,
+          lines: buildChartLines(json),
+          session: {
+            windows: json.windows || [],
+            nextKillzone: json.next_killzone,
+            currentEt: json.session?.et_time || '00:00',
+            currentHarare: json.session?.harare_time || '00:00',
+            inKillzone: !!json.session?.in_killzone,
+            name: json.session?.name || 'OFF_HOURS',
+          },
+        });
       } else {
         setError(json?.message || 'Not enough history to evaluate the setup.');
       }
     } catch (e: any) {
       setError(e?.message || 'ICT engine unreachable.');
     }
-  }, [symbol, timeframe, onTradeLevels]);
+  }, [symbol, timeframe, onPublish]);
 
   useEffect(() => {
     setLoading(true);
@@ -306,6 +407,15 @@ export default function ICTScalpPanel({ symbol, timeframe, onTradeLevels }: Prop
             <span className="text-sm font-black text-white">{nextKz.countdown}</span>
             <span className="text-[11px] text-slate-500 ml-auto">
               {nextKz.opens_et} ET · {nextKz.opens_harare} CAT
+            </span>
+          </div>
+        )}
+
+        {ready && firedAt && (
+          <div className="mt-3 flex flex-wrap items-center gap-2 px-3 py-2 rounded-lg bg-emerald-950/60 border border-emerald-700/70">
+            <span className="text-sm font-black text-emerald-300">▶ ENTER NOW</span>
+            <span className="text-[11px] text-emerald-200/80">
+              Setup armed at <span className="font-black">{firedAt} ET</span> · execute on the 1-minute with a market order
             </span>
           </div>
         )}

@@ -3,7 +3,8 @@
 import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { RefreshCw, Zap, ChevronDown, Clock, Radio, ArrowUpRight, ArrowDownRight, Shield, Target, AlertOctagon, Activity, ArrowRightLeft, TrendingUp } from 'lucide-react';
 import { API_BASE_URL } from '@/lib/apiConfig';
-import ICTScalpPanel, { type IctLevels } from '@/components/ICTScalpPanel';
+import ICTScalpPanel, { type IctPublish } from '@/components/ICTScalpPanel';
+import SessionRibbon from '@/components/SessionRibbon';
 
 
 export type ChartTabId = 'live_signals' | 'algo_market_structure' | 'ict_scalp';
@@ -103,12 +104,47 @@ const getTradingViewInterval = (tf: string): string => {
 };
 
 // ── TVWidgetTab Component for Tabs ──
-function TVWidgetTab({ symbol, timeframe, tabId, instructions, studies, tradeLevels }: { symbol: string, timeframe: string, tabId: string, instructions?: React.ReactNode, studies?: string[], tradeLevels?: { signalType: 'BUY/LONG' | 'SELL/SHORT'; entry: number; stopLoss: number; takeProfit: number; support?: number; resistance?: number } | null }) {
+export interface ChartExtraLine {
+  price: number;
+  color: string;
+  title: string;
+  lineWidth?: 1 | 2 | 3 | 4;
+  lineStyle?: 0 | 1 | 2 | 3 | 4;
+}
+
+// Structural equality for a published ICT payload, so the parent only commits
+// to a new object when something a chart line depends on actually changed.
+function ictPublishEqual(a: IctPublish, b: IctPublish): boolean {
+  const la = a.levels;
+  const lb = b.levels;
+  if ((la === null) !== (lb === null)) return false;
+  if (la && lb && (
+    la.direction !== lb.direction ||
+    la.entry !== lb.entry ||
+    la.stop_loss !== lb.stop_loss ||
+    la.take_profit !== lb.take_profit
+  )) return false;
+
+  if (a.lines.length !== b.lines.length) return false;
+  for (let i = 0; i < a.lines.length; i++) {
+    if (a.lines[i].price !== b.lines[i].price || a.lines[i].title !== b.lines[i].title) return false;
+  }
+
+  return (
+    a.session.inKillzone === b.session.inKillzone &&
+    a.session.currentEt === b.session.currentEt &&
+    a.session.name === b.session.name &&
+    a.session.nextKillzone.countdown === b.session.nextKillzone.countdown
+  );
+}
+
+function TVWidgetTab({ symbol, timeframe, tabId, instructions, studies, tradeLevels, extraLines }: { symbol: string, timeframe: string, tabId: string, instructions?: React.ReactNode, studies?: string[], tradeLevels?: { signalType: 'BUY/LONG' | 'SELL/SHORT'; entry: number; stopLoss: number; takeProfit: number; support?: number; resistance?: number } | null, extraLines?: ChartExtraLine[] }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const widgetIdRef = useRef<string>(`tv_signal_widget_${tabId}_${Math.floor(Math.random() * 1000000)}`);
   const widgetRef = useRef<any>(null);
   const chartApiRef = useRef<any>(null);
   const priceLineIdsRef = useRef<any[]>([]);
+  const extraLineIdsRef = useRef<any[]>([]);
   const [chartReady, setChartReady] = useState(false);
   const CHART_HEIGHT = 520;
 
@@ -221,6 +257,7 @@ function TVWidgetTab({ symbol, timeframe, tabId, instructions, studies, tradeLev
       if (readyPoll) clearInterval(readyPoll);
       setChartReady(false);
       priceLineIdsRef.current = [];
+      extraLineIdsRef.current = [];
       chartApiRef.current = null;
       try { widgetRef.current?.remove?.(); } catch {}
       widgetRef.current = null;
@@ -256,6 +293,38 @@ function TVWidgetTab({ symbol, timeframe, tabId, instructions, studies, tradeLev
     if (levels.support && levels.support > 0) tryCreate(levels.support, '#22c55e', 'SUPPORT');
     if (levels.resistance && levels.resistance > 0) tryCreate(levels.resistance, '#f97316', 'RESISTANCE');
   }, [chartReady, tradeLevels]);
+
+  // Structural levels (Asia high/low, liquidity pools, FVG/IFVG zones) are
+  // drawn independently of the trade levels so they persist without a signal.
+  const extraKey = useMemo(
+    () => (extraLines || []).map(l => `${l.price}:${l.title}`).join('|'),
+    [extraLines]
+  );
+
+  useEffect(() => {
+    const chart = chartApiRef.current;
+    if (!chart) return;
+
+    extraLineIdsRef.current.forEach(id => { try { chart.removePriceLine(id); } catch {} });
+    extraLineIdsRef.current = [];
+
+    if (!extraLines || extraLines.length === 0) return;
+
+    extraLines.forEach(line => {
+      if (!Number.isFinite(line.price) || line.price <= 0) return;
+      try {
+        const id = chart.createPriceLine({
+          price: line.price,
+          color: line.color,
+          lineWidth: line.lineWidth ?? 1,
+          lineStyle: line.lineStyle ?? 2,
+          axisLabelVisible: true,
+          title: line.title,
+        });
+        extraLineIdsRef.current.push(id);
+      } catch {}
+    });
+  }, [chartReady, extraKey]);
 
   const renderHtmlOverlay = () => {
     if (!tradeLevels || tradeLevels.entry <= 0 || chartReady) return null;
@@ -567,33 +636,29 @@ export default function TradingChart({
   const [tradeParams, setTradeParams] = useState<any>(null);
   const [marketDataSource, setMarketDataSource] = useState<string>('unknown');
   const [algoTrend, setAlgoTrend] = useState<{ status: string; pivots: any[]; dataSource: string } | null>(null);
-  const [ictLevels, setIctLevels] = useState<IctLevels | null>(null);
+  const [ictData, setIctData] = useState<IctPublish | null>(null);
 
-  // Keep a stable object identity unless the values actually change, so the
-  // chart price-line effect does not re-run (and redraw) on every render.
-  const handleIctLevels = useCallback((next: IctLevels | null) => {
-    setIctLevels((prev) => {
-      if (prev === null && next === null) return prev;
-      if (
-        prev && next &&
-        prev.direction === next.direction &&
-        prev.entry === next.entry &&
-        prev.stop_loss === next.stop_loss &&
-        prev.take_profit === next.take_profit
-      ) return prev;
+  // Keep stable identities unless the values actually change, so the chart
+  // price-line effects do not re-run (and redraw) on every render.
+  const handleIctPublish = useCallback((next: IctPublish) => {
+    setIctData((prev) => {
+      if (prev && ictPublishEqual(prev, next)) return prev;
       return next;
     });
   }, []);
 
   const ictTradeLevels = useMemo(() => {
-    if (!ictLevels || !(ictLevels.entry > 0)) return null;
+    const lv = ictData?.levels;
+    if (!lv || !(lv.entry > 0)) return null;
     return {
-      signalType: (ictLevels.direction === 'SHORT' ? 'SELL/SHORT' : 'BUY/LONG') as 'SELL/SHORT' | 'BUY/LONG',
-      entry: ictLevels.entry,
-      stopLoss: ictLevels.stop_loss,
-      takeProfit: ictLevels.take_profit,
+      signalType: (lv.direction === 'SHORT' ? 'SELL/SHORT' : 'BUY/LONG') as 'SELL/SHORT' | 'BUY/LONG',
+      entry: lv.entry,
+      stopLoss: lv.stop_loss,
+      takeProfit: lv.take_profit,
     };
-  }, [ictLevels]);
+  }, [ictData]);
+
+  const ictChartLines = useMemo<ChartExtraLine[]>(() => ictData?.lines ?? [], [ictData]);
 
   const isHighValueAsset = latestPrice > 10.0;
   const precision = isHighValueAsset ? 2 : 4;
@@ -995,14 +1060,24 @@ export default function TradingChart({
       )}
 
       {activeTab === 'ict_scalp' && (
-        <div className="space-y-4">
+        <div className="space-y-3">
+          {ictData && (
+            <SessionRibbon
+              windows={ictData.session.windows}
+              nextKillzone={ictData.session.nextKillzone}
+              currentEt={ictData.session.currentEt}
+              currentHarare={ictData.session.currentHarare}
+              inKillzone={ictData.session.inKillzone}
+            />
+          )}
           <TVWidgetTab
             symbol={symbol}
             timeframe={timeframe}
             tabId="ict_scalp_tv"
             tradeLevels={ictTradeLevels}
+            extraLines={ictChartLines}
           />
-          <ICTScalpPanel symbol={symbol} timeframe={timeframe} onTradeLevels={handleIctLevels} />
+          <ICTScalpPanel symbol={symbol} timeframe={timeframe} onPublish={handleIctPublish} />
         </div>
       )}
     </div>
