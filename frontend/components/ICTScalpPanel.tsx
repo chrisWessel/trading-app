@@ -15,6 +15,7 @@ interface SessionInfo {
   name: string;
   phase: string;
   killzone: string | null;
+  sub_window: string | null;
   in_killzone: boolean;
   is_weekend: boolean;
   trading_allowed: boolean;
@@ -61,6 +62,87 @@ interface HtfInfo {
   previous_day_low: number | null;
 }
 
+// ── Session dynamics: trap filter, raid/MSS, NY scenarios ────────────────────
+
+interface AsiaTrend {
+  asia_trend: string;
+  close_position: number | null;
+  move_fraction: number;
+  closes_near_high: boolean;
+  closes_near_low: boolean;
+  midpoint_shift: number;
+}
+
+interface TrapFilter {
+  london_early_pump_trap: boolean;
+  london_early_dump_trap: boolean;
+  trap_bias: string | null;
+  inhibited_direction: string | null;
+  trap_active: boolean;
+  released?: boolean;
+  sequence_complete?: boolean;
+  note: string;
+}
+
+interface Raid {
+  level: number;
+  side: string;
+  raid_direction: string;
+  raid_index: number;
+  swept_at: number;
+  candles_ago: number;
+  wick_points: number;
+  reclaim_distance: number;
+}
+
+interface Mss {
+  confirmed: boolean;
+  direction: string | null;
+  broken_level: number | null;
+  broken_at: number | null;
+  candles_since_raid: number | null;
+  reason: string;
+}
+
+interface DisplacementZone {
+  kind: string;
+  zone_bottom: number;
+  zone_top: number;
+  formed_at: number;
+  direction: string;
+}
+
+interface LondonExpansion {
+  valid: boolean;
+  range_points: number;
+  atr_multiple: number;
+  direction: string;
+  open?: number;
+  close?: number;
+  high?: number;
+  low?: number;
+  midpoint?: number;
+}
+
+interface HtfDol {
+  available: boolean;
+  pdh: number | null;
+  pdl: number | null;
+  pdh_reached: boolean;
+  pdl_reached: boolean;
+  swept: boolean;
+  unreached_target: number | null;
+}
+
+interface NyScenario {
+  scenario: string | null;
+  eligible: boolean;
+  conditions: Record<string, boolean>;
+  unreached_htf_target: number | null;
+  london_direction: string;
+  note: string;
+}
+
 interface IctSignal {
   status: string;
   direction: string;
@@ -80,6 +162,13 @@ interface IctSignal {
   grade?: string;
   position_size?: string;
   htf_aligned?: boolean;
+  scenario?: string | null;
+  target_source?: string;
+  trap_blocked?: boolean;
+  stop_basis?: string;
+  displacement_zone?: DisplacementZone | null;
+  raid?: Raid | null;
+  mss?: Mss | null;
 }
 
 interface IctAnalysis {
@@ -101,6 +190,15 @@ interface IctAnalysis {
   current_price: number;
   atr: number;
   asia_range: AsiaRange | null;
+  asia_trend: AsiaTrend;
+  trap_filter: TrapFilter;
+  raid: Raid | null;
+  mss: Mss;
+  displacement_zone: DisplacementZone | null;
+  london_expansion: LondonExpansion;
+  htf_dol: HtfDol;
+  ny_scenario: NyScenario;
+  midnight_open_price: number | null;
   liquidity_levels: { price: number; type: string; side: string }[];
   fair_value_gaps: { direction: string; bottom: number; top: number }[];
   ifvgs: { signal: string; direction: string; zone_bottom: number; zone_top: number }[];
@@ -160,9 +258,13 @@ const CONFLUENCE_LABELS: Record<string, string> = {
 
 const STATE_LABELS: Record<string, string> = {
   IDLE: 'IDLE — no active setup',
+  WAIT_FOR_RAID: 'WAIT FOR RAID — watching the Asia boundary',
   SWEEP_DETECTED: 'SWEEP DETECTED',
+  MSS_PENDING: 'MSS PENDING — raid done, awaiting structure break',
   DISPLACEMENT_CONFIRMED: 'DISPLACEMENT CONFIRMED',
   IFVG_TRIGGER: 'IFVG TRIGGER',
+  NY_CONTINUATION_EVAL: 'NY SCENARIO 1 — continuation',
+  NY_REVERSAL_EVAL: 'NY SCENARIO 2 — reversal',
   ENTERED: 'ENTERED',
   MANAGING: 'MANAGING',
   CLOSED: 'CLOSED',
@@ -190,6 +292,57 @@ function buildChartLines(a: IctAnalysis): IctChartLine[] {
   if (a.asia_range) {
     lines.push({ price: a.asia_range.high, color: '#f59e0b', title: 'ASIA HIGH', lineWidth: 2, lineStyle: 2 });
     lines.push({ price: a.asia_range.low, color: '#f59e0b', title: 'ASIA LOW', lineWidth: 2, lineStyle: 2 });
+  }
+
+  // The raid boundary and the structure it broke are the two levels the London
+  // model is actually resolved against.
+  if (a.raid) {
+    lines.push({
+      price: a.raid.level,
+      color: '#fb923c',
+      title: a.raid.side === 'BUY_SIDE' ? 'ASIA HIGH RAIDED' : 'ASIA LOW RAIDED',
+      lineWidth: 2,
+      lineStyle: 3,
+    });
+  }
+
+  if (a.mss && a.mss.broken_level !== null) {
+    lines.push({
+      price: a.mss.broken_level,
+      color: a.mss.confirmed ? '#22d3ee' : '#64748b',
+      title: a.mss.confirmed ? 'MSS BROKEN' : 'MSS LEVEL',
+      lineWidth: a.mss.confirmed ? 2 : 1,
+      lineStyle: 4,
+    });
+  }
+
+  if (a.displacement_zone) {
+    const z = a.displacement_zone;
+    lines.push({
+      price: z.zone_bottom,
+      color: z.direction === 'LONG' ? '#34d399' : '#fb7185',
+      title: `${z.kind} ENTRY`,
+      lineWidth: 2,
+      lineStyle: 0,
+    });
+    lines.push({
+      price: z.zone_top,
+      color: z.direction === 'LONG' ? '#34d399' : '#fb7185',
+      title: `${z.kind} ENTRY`,
+      lineWidth: 2,
+      lineStyle: 0,
+    });
+  }
+
+  // The unreached HTF draw on liquidity is Scenario 1's target.
+  if (a.ny_scenario && a.ny_scenario.unreached_htf_target) {
+    lines.push({
+      price: a.ny_scenario.unreached_htf_target,
+      color: '#38bdf8',
+      title: 'HTF DOL TARGET',
+      lineWidth: 2,
+      lineStyle: 2,
+    });
   }
 
   if (a.sweep) {
@@ -353,7 +506,11 @@ export default function ICTScalpPanel({ symbol, timeframe, onPublish }: Props) {
     );
   }
 
-  const { session, next_killzone: nextKz, windows, anchors, signal, htf, displacement, sweep, asia_range: asia, ifvgs } = data;
+  const {
+    session, next_killzone: nextKz, windows, anchors, signal, htf, displacement, sweep,
+    asia_range: asia, ifvgs, asia_trend: trend, trap_filter: trap, raid, mss,
+    displacement_zone: dispZone, london_expansion: londonExp, htf_dol: dol, ny_scenario: nyScn,
+  } = data;
   const isLive = session.in_killzone;
   const isLong = signal.direction === 'LONG';
   const ready = signal.status === 'ENTRY_READY';
@@ -469,6 +626,7 @@ export default function ICTScalpPanel({ symbol, timeframe, onPublish }: Props) {
               <div className="text-lg font-black tracking-tight">
                 {signal.status === 'ENTRY_READY' && `${signal.direction} — ENTRY READY`}
                 {signal.status === 'ENTRY_CANCELLED' && `${signal.direction} — ENTRY CANCELLED`}
+                {signal.status === 'INHIBITED_TRAP' && `${signal.direction} — BLOCKED BY TRAP FILTER`}
                 {signal.status === 'WAIT' && 'NO TRADE — WAIT'}
               </div>
               <div className="text-[11px] opacity-90">
@@ -476,6 +634,12 @@ export default function ICTScalpPanel({ symbol, timeframe, onPublish }: Props) {
                   ? `Grade ${signal.grade} · ${signal.confluence_score}/5 confluences · ${signal.position_size} size${signal.htf_aligned ? ' · HTF aligned' : ''}`
                   : signal.reason}
               </div>
+              {signal.scenario && signal.status !== 'WAIT' && (
+                <div className="text-[10px] font-bold text-sky-300 mt-0.5">
+                  {signal.scenario === 'SCENARIO_1' ? 'NY SCENARIO 1 — CONTINUATION' : 'NY SCENARIO 2 — REVERSAL'}
+                  {signal.target_source === 'SCENARIO_TARGET' ? ' · target = structural DOL' : ''}
+                </div>
+              )}
             </div>
           </div>
           {signal.status !== 'WAIT' && signal.confluence_score !== undefined && (
@@ -560,6 +724,92 @@ export default function ICTScalpPanel({ symbol, timeframe, onPublish }: Props) {
           ) : (
             <div className="text-xs text-slate-500">Asia range not yet available (need 19:00–02:00 ET history).</div>
           )}
+        </Card>
+
+        <Card title="Asia Trap Filter" icon={<Ban className="w-3.5 h-3.5 text-rose-400" />}>
+          <div className="space-y-2 text-xs">
+            <div className="flex justify-between items-center">
+              <span className="text-slate-400">ASIA_TREND</span>
+              <span className={`font-black ${trend.asia_trend === 'BULLISH' ? 'text-emerald-300' : trend.asia_trend === 'BEARISH' ? 'text-rose-300' : 'text-slate-300'}`}>
+                {trend.asia_trend}
+              </span>
+            </div>
+            <div className="flex flex-wrap gap-1.5 text-[10px] font-bold">
+              <span className={`px-1.5 py-0.5 rounded ${trap.london_early_pump_trap ? 'bg-amber-950 text-amber-300' : 'bg-slate-800 text-slate-500'}`}>
+                PUMP TRAP {trap.london_early_pump_trap ? '✓' : '✗'}
+              </span>
+              <span className={`px-1.5 py-0.5 rounded ${trap.london_early_dump_trap ? 'bg-amber-950 text-amber-300' : 'bg-slate-800 text-slate-500'}`}>
+                DUMP TRAP {trap.london_early_dump_trap ? '✓' : '✗'}
+              </span>
+              {trap.trap_active && (
+                <span className={`px-1.5 py-0.5 rounded ${trap.released ? 'bg-emerald-950 text-emerald-300' : 'bg-rose-950 text-rose-300'}`}>
+                  {trap.released ? 'RELEASED — RAID + MSS ✓' : `BLOCKS ${trap.inhibited_direction}`}
+                </span>
+              )}
+            </div>
+            <div className="text-[11px] text-slate-400">{trap.note}</div>
+          </div>
+        </Card>
+
+        <Card title="London Raid → MSS → FVG" icon={<Crosshair className="w-3.5 h-3.5 text-orange-400" />}>
+          <div className="space-y-1.5 text-xs">
+            <div className="flex justify-between items-center">
+              <span className="text-slate-400">1 · Raid</span>
+              {raid ? (
+                <span className="text-orange-300 font-black">
+                  {raid.side === 'BUY_SIDE' ? 'ASIA HIGH' : 'ASIA LOW'} {raid.level} · wick {raid.wick_points}
+                </span>
+              ) : (
+                <span className="text-slate-500 font-bold">waiting</span>
+              )}
+            </div>
+            <div className="flex justify-between items-center">
+              <span className="text-slate-400">2 · MSS</span>
+              <span className={mss.confirmed ? 'text-cyan-300 font-black' : 'text-slate-500 font-bold'}>
+                {mss.confirmed ? `broken ${mss.broken_level}` : 'pending'}
+              </span>
+            </div>
+            <div className="flex justify-between items-center">
+              <span className="text-slate-400">3 · Displacement gap</span>
+              {dispZone ? (
+                <span className="font-black text-slate-200">
+                  {dispZone.kind} {dispZone.zone_bottom}–{dispZone.zone_top}
+                </span>
+              ) : (
+                <span className="text-slate-500 font-bold">none yet</span>
+              )}
+            </div>
+            <div className="text-[11px] text-slate-400">{mss.reason}</div>
+          </div>
+        </Card>
+
+        <Card title="New York Scenario" icon={<Activity className="w-3.5 h-3.5 text-sky-400" />}>
+          <div className="space-y-2 text-xs">
+            <div className="flex justify-between items-center">
+              <span className="text-slate-400">Window</span>
+              <span className="text-slate-200 font-black">
+                {session.sub_window ? session.sub_window : '—'}
+              </span>
+            </div>
+            <div className="flex justify-between items-center">
+              <span className="text-slate-400">Scenario</span>
+              <span className={`font-black ${nyScn.scenario === 'SCENARIO_1' ? 'text-emerald-300' : nyScn.scenario === 'SCENARIO_2' ? 'text-rose-300' : 'text-slate-400'}`}>
+                {nyScn.scenario === 'SCENARIO_1' ? '1 — CONTINUATION' : nyScn.scenario === 'SCENARIO_2' ? '2 — REVERSAL' : 'NONE'}
+              </span>
+            </div>
+            <div className="flex flex-wrap gap-1.5 text-[10px] font-bold">
+              <span className={`px-1.5 py-0.5 rounded ${nyScn.eligible ? 'bg-emerald-950 text-emerald-300' : 'bg-slate-800 text-slate-500'}`}>
+                ARMED {nyScn.eligible ? '✓' : '✗'}
+              </span>
+              <span className={`px-1.5 py-0.5 rounded ${londonExp.valid ? 'bg-emerald-950 text-emerald-300' : 'bg-slate-800 text-slate-500'}`}>
+                LONDON EXPANSION {londonExp.atr_multiple.toFixed(1)}x ATR
+              </span>
+              <span className={`px-1.5 py-0.5 rounded ${dol.swept || dol.pdh_reached || dol.pdl_reached ? 'bg-rose-950 text-rose-300' : 'bg-slate-800 text-slate-500'}`}>
+                HTF DOL {dol.swept || dol.pdh_reached || dol.pdl_reached ? 'TAKEN' : 'OPEN'}
+              </span>
+            </div>
+            <div className="text-[11px] text-slate-400">{nyScn.note}</div>
+          </div>
         </Card>
 
         <Card title="Displacement & Sweep" icon={<Zap className="w-3.5 h-3.5 text-amber-400" />}>
