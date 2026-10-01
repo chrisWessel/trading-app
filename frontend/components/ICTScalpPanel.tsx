@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import { API_BASE_URL } from '@/lib/apiConfig';
 import type { SessionWindow, NextKillzone } from '@/components/SessionRibbon';
+import ICTStrategyGuide from '@/components/ICTStrategyGuide';
 
 // ─── Types (mirror backend/ict_engine.py) ─────────────────────────────────────
 
@@ -665,6 +666,8 @@ export default function ICTScalpPanel({ symbol, timeframe, onPublish }: Props) {
       <div className="text-[10px] text-slate-600 text-center">
         {data.data_source} · analysed {data.generated_at_et} · refreshes every 15s · signals are analytical, not financial advice
       </div>
+
+      <ICTStrategyGuide analysis={data} />
     </div>
   );
 }
