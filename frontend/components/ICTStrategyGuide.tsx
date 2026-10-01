@@ -163,11 +163,11 @@ function SweepDiagram() {
 
 function AmdDiagram() {
   return (
-    <Frame height={132}>
+    <Frame height={150}>
       {/* Asia accumulation */}
       <line x1="24" y1="112" x2="126" y2="112" stroke="#6366f1" strokeWidth={2} />
       <line x1="24" y1="60" x2="126" y2="60" stroke="#6366f1" strokeWidth={1} strokeDasharray="4 3" opacity={0.6} />
-      <Label x="75" y="126" text="ASIA 19:00–02:00" color="#a5b4fc" size={8} />
+      <Label x="75" y="128" text="ASIA 19:00–02:00" color="#a5b4fc" size={8} />
       <Label x="75" y="52" text="range forms" color="#818cf8" size={7.5} />
       <Label x="75" y="34" text="ACCUMULATION" color="#c7d2fe" size={9} />
 
@@ -175,18 +175,18 @@ function AmdDiagram() {
       <line x1="126" y1="112" x2="126" y2="40" stroke="#f43f5e" strokeWidth={2.5} />
       <circle cx="126" cy="40" r="4" fill="#f43f5e" />
       <Label x="160" y="36" text="sweep the Asia high" color="#fda4af" size={8} anchor="start" />
-      <Label x="176" y="126" text="LONDON 02:00–05:00" color="#6ee7b7" size={8} />
-      <Label x="176" y="100" text="MANIPULATION" color="#34d399" size={9} />
+      <Label x="176" y="128" text="LONDON 02:00–05:00" color="#6ee7b7" size={8} />
+      <Label x="176" y="104" text="MANIPULATION" color="#34d399" size={9} />
 
       {/* distribution */}
       <line x1="176" y1="112" x2="248" y2="112" stroke="#22c55e" strokeWidth={2.5} />
-      <Label x="212" y="92" text="deliver away" color="#86efac" size={8} />
-      <Label x="212" y="126" text="DISTRIBUTION" color="#22c55e" size={9} />
+      <Label x="212" y="72" text="deliver away" color="#86efac" size={8} />
+      <Label x="212" y="88" text="DISTRIBUTION" color="#22c55e" size={9} />
 
       {/* NY */}
       <line x1="248" y1="112" x2="300" y2="112" stroke="#fb7185" strokeWidth={2.5} />
-      <Label x="274" y="80" text="NEW YORK 09:00–10:00" color="#fda4af" size={7.5} anchor="end" />
-      <Label x="274" y="92" text="RTH gap" color="#fda4af" size={7.5} anchor="end" />
+      <Label x="274" y="60" text="NEW YORK 09:00–10:00" color="#fda4af" size={7.5} anchor="end" />
+      <Label x="274" y="104" text="RTH gap" color="#fda4af" size={7.5} anchor="end" />
     </Frame>
   );
 }
