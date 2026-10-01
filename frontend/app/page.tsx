@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useRef } from 'react';
+import Image from 'next/image';
 import { API_BASE_URL } from '@/lib/apiConfig';
 import TradingChart from '@/components/TradingChart';
 import type { ChartTabId } from '@/components/TradingChart';
@@ -14,7 +15,7 @@ import AuditReportSection from '@/components/AuditReportSection';
 import MarketSessionClocks from '@/components/MarketSessionClocks';
 import PositionSizingGuide from '@/components/PositionSizingGuide';
 import TrendCandlePanel from '@/components/TrendCandlePanel';
-import { Activity, ShieldCheck, Cpu, Radio, Coins, Search, Globe, Eye, Monitor, Terminal, Calculator, Sparkles } from 'lucide-react';
+import { Activity, ShieldCheck, Cpu, Radio, Coins, Search, Globe, Eye, Monitor, Calculator, Sparkles } from 'lucide-react';
 
 interface AssetOption {
   symbol: string;
@@ -201,9 +202,19 @@ export default function DashboardPage() {
       {/* Header Bar */}
       <header className="flex flex-wrap items-center justify-between gap-4 bg-slate-900/90 border border-slate-800 p-4 rounded-xl shadow-2xl backdrop-blur-md">
         <div className="flex items-center gap-3">
-          <div className="bg-gradient-to-tr from-blue-600 to-indigo-600 p-2.5 rounded-xl shadow-lg shadow-blue-900/40">
-            <Terminal className="w-6 h-6 text-white" />
-          </div>
+          {/* Brand lockup is a 3.33:1 raster, so it is sized by height to keep
+              the proportions and the header row height stable. Served unoptimized:
+              it is one static 38 KB asset, so the resize pipeline would add a
+              sharp dependency without changing what is delivered. */}
+          <Image
+            src="/logo.jpg"
+            alt="WesSignal Trading"
+            width={1200}
+            height={360}
+            className="h-11 w-auto rounded-lg"
+            priority
+            unoptimized
+          />
           <div>
             <h1 className="text-xl font-extrabold tracking-tight text-white flex items-center gap-2">
               <span>WesSignal Terminal</span>

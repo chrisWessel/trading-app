@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <!--
+    Square favicon for the browser tab.
+
+    The brand lockup (logo.jpg) is 3.33:1, so at a 16px tab the "WESSIGNAL
+    TRADING" wordmark is illegible. This icon uses the same mark geometry as
+    the brand artwork - the four signal bars, the gradient rising line and the
+    arrowhead - scaled and centred on a square slate card.
+
+    The bars are lifted from #1E293B to #334155: the original slate-800 on
+    slate-900 contrast disappears entirely at favicon size.
+  -->
+  <defs>
+    <linearGradient id="signalGrad" x1="0%" y1="100%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#3B82F6" />
+      <stop offset="100%" stop-color="#10B981" />
+    </linearGradient>
+  </defs>
+
+  <rect width="128" height="128" rx="28" fill="#0F172A" />
+
+  <g transform="translate(1,10) scale(1.2)">
+    <rect x="15" y="45" width="8" height="35" rx="4" fill="#334155" />
+    <rect x="35" y="25" width="8" height="55" rx="4" fill="#334155" />
+    <rect x="55" y="10" width="8" height="70" rx="4" fill="#334155" />
+    <rect x="75" y="30" width="8" height="50" rx="4" fill="#334155" />
+
+    <path d="M 10 30 L 30 80 L 50 40 L 70 70 L 95 15"
+          fill="none"
+          stroke="url(#signalGrad)"
+          stroke-width="7"
+          stroke-linecap="round"
+          stroke-linejoin="round" />
+
+    <path d="M 80 15 L 95 15 L 95 30"
+          fill="none"
+          stroke="#10B981"
+          stroke-width="7"
+          stroke-linecap="round"
+          stroke-linejoin="round" />
+  </g>
+</svg>
