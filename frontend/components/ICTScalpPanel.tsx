@@ -4,7 +4,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Timer, Target, Shield, Layers, Zap, Gauge, Crosshair, Ban,
   RefreshCw, Moon, Sunrise, Radio, CheckCircle2, XCircle, Activity,
-  Copy, Check, RotateCcw, FileCheck,
+  Copy, Check, RotateCcw, FileCheck, HelpCircle, Info, ChevronDown, ChevronRight,
 } from 'lucide-react';
 import { API_BASE_URL } from '@/lib/apiConfig';
 import type { SessionWindow, NextKillzone } from '@/components/SessionRibbon';
@@ -578,6 +578,7 @@ export default function ICTScalpPanel({ symbol, timeframe, onPublish }: Props) {
   const [auditResult, setAuditResult] = useState<AuditReport | null>(() => runDeterministicAudit(SAMPLE_RAW_LOG));
   const [copiedAudit, setCopiedAudit] = useState(false);
   const [auditing, setAuditing] = useState(false);
+  const [showExplanation, setShowExplanation] = useState(true);
 
   const fetchAnalysis = useCallback(async () => {
     try {
@@ -812,9 +813,16 @@ export default function ICTScalpPanel({ symbol, timeframe, onPublish }: Props) {
               <div className="text-sm font-bold text-white">{w.opens_et} – {w.closes_et}</div>
               <div className="text-[11px] text-slate-400">{w.opens_harare} – {w.closes_harare} CAT</div>
               {w.risk_cap !== undefined && (
-                <div className="mt-1 text-[10px] text-amber-300 font-bold flex items-center justify-between">
-                  <span className="text-slate-400">Max Risk Cap:</span>
-                  <span className="font-mono bg-amber-950/60 border border-amber-800/60 px-1.5 py-0.5 rounded">{w.risk_cap.toFixed(2)} pts</span>
+                <div className="mt-1 space-y-1">
+                  <div className="text-[10px] text-amber-300 font-bold flex items-center justify-between">
+                    <span className="text-slate-400">Max Risk Cap:</span>
+                    <span className="font-mono bg-amber-950/60 border border-amber-800/60 px-1.5 py-0.5 rounded text-amber-300">{w.risk_cap.toFixed(2)} pts</span>
+                  </div>
+                  <div className="text-[9.5px] text-slate-400 leading-tight">
+                    {w.name === 'ASIA' && '⚡ Low ATR consolidation: moves > 0.50 pts against entry invalidate range premise.'}
+                    {w.name === 'LONDON' && '⚡ Medium ATR Judas raid: 0.80 pts protects behind displacement swing.'}
+                    {w.name === 'NEW YORK' && '⚡ High ATR cash market: 1.10 pts buffer needed for institutional RTH momentum.'}
+                  </div>
                 </div>
               )}
               <div className="mt-1 text-[10px] text-slate-500">{w.purpose}</div>
@@ -1172,6 +1180,111 @@ export default function ICTScalpPanel({ symbol, timeframe, onPublish }: Props) {
               Min R:R: 2.00:1
             </span>
           </div>
+        </div>
+
+        {/* Real Explanation Educational Breakdown */}
+        <div className="rounded-xl border border-indigo-900/50 bg-indigo-950/20 p-3 space-y-3">
+          <button
+            type="button"
+            onClick={() => setShowExplanation((prev) => !prev)}
+            className="w-full flex items-center justify-between text-left group"
+          >
+            <div className="flex items-center gap-2">
+              <HelpCircle className="w-4 h-4 text-indigo-400 group-hover:text-indigo-300 transition" />
+              <span className="text-xs font-black text-indigo-200 group-hover:text-white transition uppercase tracking-wider">
+                Understanding the Rules &amp; Mathematics (Plain English Guide)
+              </span>
+            </div>
+            <div className="flex items-center gap-1 text-[11px] font-bold text-indigo-400">
+              <span>{showExplanation ? 'Hide Guide' : 'Show Guide'}</span>
+              {showExplanation ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+            </div>
+          </button>
+
+          {showExplanation && (
+            <div className="space-y-3 pt-2 border-t border-indigo-900/50 text-xs">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5">
+                {/* Asia Card */}
+                <div className="bg-slate-950/80 border border-indigo-800/50 rounded-lg p-3 space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <span className="font-black text-indigo-300 text-xs flex items-center gap-1.5">
+                      <Moon className="w-3.5 h-3.5" /> Asia: 0.50 pts Max Risk
+                    </span>
+                    <span className="text-[10px] bg-indigo-950 text-indigo-300 border border-indigo-800 px-1.5 py-0.5 rounded font-mono font-bold">
+                      Accumulation
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-slate-300 leading-relaxed">
+                    <strong>Why so tight?</strong> Asia (19:00–02:00 ET) is a low-volatility, low-volume consolidation session. The market merely manufactures boundaries. If a scalp drifts more than <strong>0.50 points</strong> against entry, the consolidation premise has failed. A 0.50 pt stop protects you from dying by a thousand cuts in overnight chop.
+                  </p>
+                </div>
+
+                {/* London Card */}
+                <div className="bg-slate-950/80 border border-emerald-800/50 rounded-lg p-3 space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <span className="font-black text-emerald-300 text-xs flex items-center gap-1.5">
+                      <Sunrise className="w-3.5 h-3.5" /> London: 0.80 pts Max Risk
+                    </span>
+                    <span className="text-[10px] bg-emerald-950 text-emerald-300 border border-emerald-800 px-1.5 py-0.5 rounded font-mono font-bold">
+                      Manipulation
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-slate-300 leading-relaxed">
+                    <strong>Why 0.80 points?</strong> London (02:00–05:00 ET) injects European institutional volume via the <em>Judas Swing</em> (raiding Asia highs/lows). Displacement candles leave wider wicks. Stops sit safely behind the displacement swing or raid extreme without getting clipped by normal spread, requiring an expanded <strong>0.80 pt</strong> buffer.
+                  </p>
+                </div>
+
+                {/* New York Card */}
+                <div className="bg-slate-950/80 border border-sky-800/50 rounded-lg p-3 space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <span className="font-black text-sky-300 text-xs flex items-center gap-1.5">
+                      <Zap className="w-3.5 h-3.5" /> New York: 1.10 pts Max Risk
+                    </span>
+                    <span className="text-[10px] bg-sky-950 text-sky-300 border border-sky-800 px-1.5 py-0.5 rounded font-mono font-bold">
+                      Distribution
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-slate-300 leading-relaxed">
+                    <strong>Why 1.10 points?</strong> The 09:30 ET Regular Trading Hours (RTH) open brings massive US cash market order flow. Candle volatility (ATR) doubles. A 0.50 or 0.80 stop in NY would get triggered by normal 1-minute wicks alone. <strong>1.10 points</strong> gives institutional room to breathe while enforcing a strict circuit breaker against runaway loss.
+                  </p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5 pt-1">
+                {/* Structural Invalidation */}
+                <div className="bg-slate-950/80 border border-slate-800 rounded-lg p-3 space-y-1.5">
+                  <div className="font-black text-rose-300 text-xs flex items-center gap-1.5">
+                    <Shield className="w-3.5 h-3.5 text-rose-400" /> Invalidation: Why Limits Cancel Trades
+                  </div>
+                  <p className="text-[11px] text-slate-300 leading-relaxed">
+                    In ICT, stops are placed strictly behind <strong>market structure</strong> (order blocks or displacement extremes) — never at arbitrary distances. If placing a stop behind structure demands <strong>1.11 pts</strong> in NY (cap: 1.10 pts), the setup is over-expanded. Moving the stop arbitrarily in front of structure guarantees getting wicked out. Thus, the only mathematically sound decision is: <strong className="text-rose-300">CANCELLED - RISK LIMIT EXCEEDED</strong>.
+                  </p>
+                </div>
+
+                {/* Direction Formulas & Target Correction */}
+                <div className="bg-slate-950/80 border border-slate-800 rounded-lg p-3 space-y-1.5">
+                  <div className="font-black text-cyan-300 text-xs flex items-center gap-1.5">
+                    <Target className="w-3.5 h-3.5 text-cyan-400" /> Direction Formulas &amp; Typo Correction
+                  </div>
+                  <p className="text-[11px] text-slate-300 leading-relaxed">
+                    <strong>LONG:</strong> Target must be &gt; Entry; Stop &lt; Entry.<br />
+                    <strong>SHORT:</strong> Target must be &lt; Entry; Stop &gt; Entry.<br />
+                    <strong>Typo Auto-Correction:</strong> If a raw log records a LONG at 4184.42 with an inverted target of 4175.36 (reward 9.06 pts), the auditor catches the inverted direction and recalculates: $4184.42 + 9.06 = 4193.48$ on the proper profit side.
+                  </p>
+                </div>
+
+                {/* Minimum 2.00:1 R:R Edge */}
+                <div className="bg-slate-950/80 border border-slate-800 rounded-lg p-3 space-y-1.5">
+                  <div className="font-black text-amber-300 text-xs flex items-center gap-1.5">
+                    <Gauge className="w-3.5 h-3.5 text-amber-400" /> Minimum 2.00 : 1 R:R Mathematical Edge
+                  </div>
+                  <p className="text-[11px] text-slate-300 leading-relaxed">
+                    Why 2:1 is mandatory: At 2:1 R:R, you break even with just a <strong>33.3% win rate</strong>. At 50% win rate across 10 trades risking $100, you net <strong>+$500 profit</strong> ($1,000 gains − $500 losses). On fast 1-minute scalping setups, trades under 2:1 R:R are slowly eroded by spreads and slippage.
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Input Textarea & Controls */}

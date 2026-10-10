@@ -486,20 +486,56 @@ export default function ICTStrategyGuide({ analysis }: Props) {
           <p>
             The stop is structural, not arbitrary: <strong>behind the order block</strong> — the last opposing candle before the displacement. If price trades through it, your premise is invalid and you should be out.
           </p>
-          <div className="bg-slate-900 border border-slate-800 rounded-md p-2 my-1">
-            <Rule label="Asia stop cap" value="0.50 points max risk" />
-            <Rule label="London stop cap" value="0.80 points max risk" />
-            <Rule label="New York stop cap" value="1.10 points max risk" />
+          <div className="bg-slate-900 border border-slate-800 rounded-md p-2.5 my-2 space-y-1">
+            <Rule label="Asia stop cap" value="0.50 points max risk (Consolidation session)" />
+            <Rule label="London stop cap" value="0.80 points max risk (Judas raid session)" />
+            <Rule label="New York stop cap" value="1.10 points max risk (RTH cash expansion)" />
             <Rule label="Direction Formulas" value="LONG: Target > Entry, Stop < Entry | SHORT: Target < Entry, Stop > Entry" />
-            <Rule label="Minimum R:R" value="2.00 : 1 minimum required" />
+            <Rule label="Minimum R:R" value="2.00 : 1 minimum required (positive expectancy at 34%+ win rate)" />
             <Rule label="Target Correction" value="Inverted targets auto-corrected to proper side of entry" />
             <Rule label="Invalidation" value="CANCELLED - RISK LIMIT EXCEEDED if Risk > Session Cap" />
             <Rule label="Management" value="trail to break-even at 1.5R or a minor pool sweep" />
           </div>
-          <p>
-            The session risk caps are strictly enforced: <strong>Asia = 0.50 points</strong>, <strong>London = 0.80 points</strong>, and <strong>New York = 1.10 points</strong>. If calculated risk (|Entry - Stop Loss|) exceeds the session cap, the trade is marked <Key tone="bear">CANCELLED - RISK LIMIT EXCEEDED</Key>.
-          </p>
-          <p>
+
+          <div className="space-y-2 mt-3 text-[11px] text-slate-300 leading-relaxed">
+            <p>
+              <strong>Why Session Risk Caps Differ Across Sessions:</strong>
+            </p>
+            <ul className="list-disc pl-4 space-y-1.5 text-slate-400">
+              <li>
+                <strong className="text-indigo-300">Asia (0.50 pts):</strong> Asia (19:00–02:00 ET) is the <em>Accumulation phase</em>. Institutional desks are offline, so true price range and volatility (ATR) are narrow. If a setup moves more than 0.50 points against entry, the consolidation boundary has failed. A tight 0.50 pt cap prevents bleeding capital in overnight chop.
+              </li>
+              <li>
+                <strong className="text-emerald-300">London (0.80 pts):</strong> London (02:00–05:00 ET) introduces the <em>Manipulation phase (Judas Swing)</em>. Rapid stop runs above/below Asia generate wider candle wicks. A stop must sit safely behind the displacement origin without getting clipped by normal spread, requiring an expanded 0.80 pt allowance.
+              </li>
+              <li>
+                <strong className="text-sky-300">New York (1.10 pts):</strong> New York (09:00–12:00 ET) brings the 09:30 RTH open with massive institutional US cash volume and macroeconomic catalysts. Intraday volatility doubles. A 0.50 or 0.80 pt stop in NY would get stopped out by normal 1-minute noise alone. 1.10 points provides institutional breathing room while maintaining a hard circuit breaker.
+              </li>
+            </ul>
+
+            <p className="pt-1">
+              <strong>Why &quot;CANCELLED - RISK LIMIT EXCEEDED&quot; Protects Capital:</strong>
+            </p>
+            <p className="text-slate-400">
+              In ICT methodology, stop losses are <em>structural</em> (tucked behind real order blocks or raid extremes), never arbitrary numbers. If market structure requires <strong>1.11 pts</strong> of stop distance in New York against a 1.10 pt cap, the market is overextended. Pulling the stop closer guarantees getting wicked out, while widening the stop violates risk parameters. The system deterministically cancels the trade rather than forcing a suboptimal entry.
+            </p>
+
+            <p className="pt-1">
+              <strong>Direction Formulas &amp; Typo Auto-Correction:</strong>
+            </p>
+            <p className="text-slate-400">
+              A <strong>LONG</strong> trade seeks profit above entry (Target = Entry + Reward, Stop &lt; Entry). A <strong>SHORT</strong> trade seeks profit below entry (Target = Entry − Reward, Stop &gt; Entry). If a raw log has a typo (e.g., logging a LONG with target below entry), the engine calculates the implied reward and automatically mirrors the target onto the correct profit side.
+            </p>
+
+            <p className="pt-1">
+              <strong>The 2.00 : 1 Minimum R:R Math:</strong>
+            </p>
+            <p className="text-slate-400">
+              With a 2:1 reward-to-risk ratio, you only need to win <strong>34%</strong> of trades to break even. At a modest 50% win rate, 10 trades risking $100 generate +$500 in net profit. Demanding at least 2:1 R:R ensures spreads, slippage, and execution fees never eat your edge.
+            </p>
+          </div>
+
+          <p className="mt-2">
             Position size follows confluence. Five factors aligned (daily FVG, 1H FVG, sweep, displacement, IFVG) is an <Key tone="bull">A+</Key> and takes increased size; fewer factors means standard size or no trade.
           </p>
         </Step>
