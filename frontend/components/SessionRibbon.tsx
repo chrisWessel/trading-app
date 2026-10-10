@@ -9,6 +9,7 @@ export interface SessionWindow {
   name: string;
   purpose: string;
   is_killzone: boolean;
+  risk_cap?: number;
   opens_et: string;
   closes_et: string;
   opens_harare: string;

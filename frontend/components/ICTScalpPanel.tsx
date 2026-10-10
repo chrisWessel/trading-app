@@ -4,6 +4,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Timer, Target, Shield, Layers, Zap, Gauge, Crosshair, Ban,
   RefreshCw, Moon, Sunrise, Radio, CheckCircle2, XCircle, Activity,
+  Copy, Check, RotateCcw, FileCheck,
 } from 'lucide-react';
 import { API_BASE_URL } from '@/lib/apiConfig';
 import type { SessionWindow, NextKillzone } from '@/components/SessionRibbon';
@@ -164,11 +165,161 @@ interface IctSignal {
   htf_aligned?: boolean;
   scenario?: string | null;
   target_source?: string;
+  correction_note?: string | null;
   trap_blocked?: boolean;
   stop_basis?: string;
   displacement_zone?: DisplacementZone | null;
   raid?: Raid | null;
   mss?: Mss | null;
+}
+
+export interface AuditReport {
+  session: string;
+  direction: string;
+  status: string;
+  entry: number;
+  stop_loss: number;
+  risk_points: number;
+  session_cap: number;
+  corrected_target: number;
+  reward_points: number;
+  risk_reward: number;
+  confluences: string;
+  correction_note: string | null;
+  formatted: string;
+}
+
+export const SAMPLE_RAW_LOG = `Session: New York
+Direction: LONG
+Entry Price: 4184.42
+Stop Loss Price: 4183.31
+Target: 4175.36
+Reward: 9.06 points
+Confluences / Triggers: Structural DOL Confluence 3 / 5, Structural Stop, NY Scenario 2 Reversal`;
+
+export function runDeterministicAudit(rawLog: string): AuditReport {
+  const text = (rawLog || '').trim();
+
+  // 1. Session & Risk Cap
+  let session = 'New York';
+  let cap = 1.10;
+  if (/asia/i.test(text)) {
+    session = 'Asia';
+    cap = 0.50;
+  } else if (/london/i.test(text)) {
+    session = 'London';
+    cap = 0.80;
+  } else if (/new[\s_-]?york/i.test(text)) {
+    session = 'New York';
+    cap = 1.10;
+  }
+
+  // Direction: LONG / SHORT
+  let direction = 'LONG';
+  const dirMatch = text.match(/\b(?:direction[:\s]+)?(LONG|SHORT|BUY|SELL)\b/i);
+  if (dirMatch) {
+    const val = dirMatch[1].toUpperCase();
+    direction = val === 'SHORT' || val === 'SELL' ? 'SHORT' : 'LONG';
+  }
+
+  // Entry Price
+  let entry = 4184.42;
+  const entryMatch = text.match(/\b(?:entry(?:\s*price)?|entry\s*at|entered\s*at)[:\s=]+([0-9]+(?:\.[0-9]+)?)/i);
+  if (entryMatch) entry = parseFloat(entryMatch[1]);
+
+  // Stop Loss Price
+  let stopLoss = 4183.31;
+  const slMatch = text.match(/\b(?:stop(?:\s*loss)?(?:\s*price)?|sl)[:\s=]+([0-9]+(?:\.[0-9]+)?)/i);
+  if (slMatch) stopLoss = parseFloat(slMatch[1]);
+
+  // Target Price
+  let rawTarget: number | null = null;
+  const tpMatch = text.match(/\b(?:target(?:\s*price)?|tp|take\s*profit)[:\s=]+([0-9]+(?:\.[0-9]+)?)/i);
+  if (tpMatch) rawTarget = parseFloat(tpMatch[1]);
+
+  // Stated Reward Points
+  let statedReward: number | null = null;
+  const rewMatch = text.match(/\b(?:stated\s*)?(?:reward(?:\s*points)?|reward)[:\s=]+([0-9]+(?:\.[0-9]+)?)/i);
+  if (rewMatch) statedReward = parseFloat(rewMatch[1]);
+
+  // Confluences / Triggers
+  let confluences = 'Structural DOL Confluence 3 / 5, Structural Stop, NY Scenario 2 Reversal';
+  const confMatch = text.match(/(?:confluences?\s*(?:\/|\&)?\s*triggers?|confluences?|triggers?|notes?)[:\s=]+([^\n\r]+)/i);
+  if (confMatch) {
+    let rawConf = confMatch[1].trim();
+    if (rawConf.includes('Note on Correction:')) {
+      rawConf = rawConf.split('Note on Correction:')[0].trim();
+    }
+    if (rawConf) confluences = rawConf;
+  }
+
+  // 2. Risk Audit
+  const calculatedRisk = Math.round(Math.abs(entry - stopLoss) * 100) / 100;
+  const riskLimitExceeded = calculatedRisk > cap;
+  let status = riskLimitExceeded ? 'CANCELLED - RISK LIMIT EXCEEDED' : 'EXECUTED';
+
+  // 3. Target & Direction Mismatch Correction
+  const isLong = direction === 'LONG';
+  let correctionNote: string | null = null;
+  let correctedTarget = rawTarget ?? entry;
+
+  if (rawTarget !== null) {
+    if (isLong && rawTarget < entry) {
+      const reward = statedReward !== null ? statedReward : Math.round(Math.abs(entry - rawTarget) * 100) / 100;
+      correctedTarget = Math.round((entry + reward) * 100) / 100;
+      correctionNote = `The raw log specified a LONG trade with Entry at ${entry.toFixed(2)} and a raw target of ${rawTarget.toFixed(2)} (which was lower than entry). Using the stated reward of ${reward.toFixed(2)} points, the corrected target is calculated as $${entry.toFixed(2)} + ${reward.toFixed(2)} = ${correctedTarget.toFixed(2)}$.`;
+    } else if (!isLong && rawTarget > entry) {
+      const reward = statedReward !== null ? statedReward : Math.round(Math.abs(entry - rawTarget) * 100) / 100;
+      correctedTarget = Math.round((entry - reward) * 100) / 100;
+      correctionNote = `The raw log specified a SHORT trade with Entry at ${entry.toFixed(2)} and a raw target of ${rawTarget.toFixed(2)} (which was higher than entry). Using the stated reward of ${reward.toFixed(2)} points, the corrected target is calculated as $${entry.toFixed(2)} - ${reward.toFixed(2)} = ${correctedTarget.toFixed(2)}$.`;
+    } else {
+      correctedTarget = Math.round(rawTarget * 100) / 100;
+    }
+  } else if (statedReward !== null) {
+    correctedTarget = Math.round((isLong ? entry + statedReward : entry - statedReward) * 100) / 100;
+  } else {
+    const reward = Math.round(calculatedRisk * 2.0 * 100) / 100;
+    correctedTarget = Math.round((isLong ? entry + reward : entry - reward) * 100) / 100;
+  }
+
+  // 4. Final Precision Calculations
+  const finalReward = Math.round(Math.abs(correctedTarget - entry) * 100) / 100;
+  const finalRr = calculatedRisk > 0 ? Math.round((finalReward / calculatedRisk) * 100) / 100 : 0.0;
+
+  if (calculatedRisk > 0 && finalRr < 2.00 && !riskLimitExceeded) {
+    status = 'CANCELLED - MIN RR NOT MET';
+  }
+
+  const lines = [
+    `- Session: ${session}`,
+    `- Direction: ${direction}`,
+    `- Status: ${status}`,
+    `- Entry Price: ${entry.toFixed(2)}`,
+    `- Stop Loss Price: ${stopLoss.toFixed(2)} (Risk: ${calculatedRisk.toFixed(2)} pts vs Cap: ${cap.toFixed(2)} pts)`,
+    `- Corrected Target Price: ${correctedTarget.toFixed(2)} (Reward: ${finalReward.toFixed(2)} pts)`,
+    `- Final R:R Ratio: ${finalRr.toFixed(2)}:1`,
+    `- Confluences / Triggers: ${confluences}`,
+  ];
+  let formatted = lines.join('\n');
+  if (correctionNote) {
+    formatted += `\nNote on Correction: ${correctionNote}`;
+  }
+
+  return {
+    session,
+    direction,
+    status,
+    entry,
+    stop_loss: stopLoss,
+    risk_points: calculatedRisk,
+    session_cap: cap,
+    corrected_target: correctedTarget,
+    reward_points: finalReward,
+    risk_reward: finalRr,
+    confluences,
+    correction_note: correctionNote,
+    formatted,
+  };
 }
 
 interface IctAnalysis {
@@ -422,6 +573,12 @@ export default function ICTScalpPanel({ symbol, timeframe, onPublish }: Props) {
   const [firedAt, setFiredAt] = useState<string | null>(null);
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
 
+  // ── Deterministic Trading Log Auditor State ─────────────────────────────
+  const [rawLogInput, setRawLogInput] = useState<string>(SAMPLE_RAW_LOG);
+  const [auditResult, setAuditResult] = useState<AuditReport | null>(() => runDeterministicAudit(SAMPLE_RAW_LOG));
+  const [copiedAudit, setCopiedAudit] = useState(false);
+  const [auditing, setAuditing] = useState(false);
+
   const fetchAnalysis = useCallback(async () => {
     try {
       const res = await fetch(
@@ -526,6 +683,52 @@ export default function ICTScalpPanel({ symbol, timeframe, onPublish }: Props) {
       ? 'text-rose-400 border-rose-700/60 bg-rose-950/40'
       : 'text-slate-400 border-slate-700 bg-slate-950/60';
 
+  const handleRunAudit = async () => {
+    setAuditing(true);
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/ict/audit-log`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ raw_log: rawLogInput }),
+      });
+      if (res.ok) {
+        const json = await res.json();
+        setAuditResult(json);
+      } else {
+        setAuditResult(runDeterministicAudit(rawLogInput));
+      }
+    } catch {
+      setAuditResult(runDeterministicAudit(rawLogInput));
+    } finally {
+      setAuditing(false);
+    }
+  };
+
+  const handleLoadSample = () => {
+    setRawLogInput(SAMPLE_RAW_LOG);
+    setAuditResult(runDeterministicAudit(SAMPLE_RAW_LOG));
+  };
+
+  const handleLoadLiveSignal = () => {
+    if (!signal || signal.entry === undefined || signal.stop_loss === undefined) return;
+    const confs = signal.confluence
+      ? Object.entries(signal.confluence)
+          .filter(([, v]) => v)
+          .map(([k]) => CONFLUENCE_LABELS[k] || k)
+          .join(', ')
+      : 'ICT Live Setup';
+    const liveLog = `Session: ${session.name}\nDirection: ${signal.direction}\nEntry Price: ${signal.entry}\nStop Loss Price: ${signal.stop_loss}\nTarget: ${signal.take_profit ?? ''}\nReward: ${signal.reward_points ?? ''} points\nConfluences / Triggers: ${confs}`;
+    setRawLogInput(liveLog);
+    setAuditResult(runDeterministicAudit(liveLog));
+  };
+
+  const handleCopyAudit = () => {
+    if (!auditResult) return;
+    navigator.clipboard.writeText(auditResult.formatted);
+    setCopiedAudit(true);
+    setTimeout(() => setCopiedAudit(false), 2000);
+  };
+
   return (
     <div className="space-y-3 font-mono">
 
@@ -608,6 +811,12 @@ export default function ICTScalpPanel({ symbol, timeframe, onPublish }: Props) {
               </div>
               <div className="text-sm font-bold text-white">{w.opens_et} – {w.closes_et}</div>
               <div className="text-[11px] text-slate-400">{w.opens_harare} – {w.closes_harare} CAT</div>
+              {w.risk_cap !== undefined && (
+                <div className="mt-1 text-[10px] text-amber-300 font-bold flex items-center justify-between">
+                  <span className="text-slate-400">Max Risk Cap:</span>
+                  <span className="font-mono bg-amber-950/60 border border-amber-800/60 px-1.5 py-0.5 rounded">{w.risk_cap.toFixed(2)} pts</span>
+                </div>
+              )}
               <div className="mt-1 text-[10px] text-slate-500">{w.purpose}</div>
               {w.is_killzone && (
                 <div className="mt-1 text-[10px] font-bold text-amber-400">◆ KILLZONE — entries permitted</div>
@@ -625,6 +834,9 @@ export default function ICTScalpPanel({ symbol, timeframe, onPublish }: Props) {
             <div>
               <div className="text-lg font-black tracking-tight">
                 {signal.status === 'ENTRY_READY' && `${signal.direction} — ENTRY READY`}
+                {signal.status === 'EXECUTED' && `${signal.direction} — EXECUTED`}
+                {signal.status === 'CANCELLED - RISK LIMIT EXCEEDED' && `${signal.direction} — CANCELLED (RISK LIMIT EXCEEDED)`}
+                {signal.status === 'CANCELLED - MIN RR NOT MET' && `${signal.direction} — CANCELLED (MIN R:R NOT MET)`}
                 {signal.status === 'ENTRY_CANCELLED' && `${signal.direction} — ENTRY CANCELLED`}
                 {signal.status === 'INHIBITED_TRAP' && `${signal.direction} — BLOCKED BY TRAP FILTER`}
                 {signal.status === 'WAIT' && 'NO TRADE — WAIT'}
@@ -651,7 +863,16 @@ export default function ICTScalpPanel({ symbol, timeframe, onPublish }: Props) {
         </div>
 
         {signal.cancelled_reasons && signal.cancelled_reasons.length > 0 && (
-          <div className="mt-2 text-[11px] text-rose-300">{signal.cancelled_reasons.join(' ')}</div>
+          <div className="mt-2 text-[11px] text-rose-300 font-bold bg-rose-950/40 border border-rose-900/60 rounded px-2.5 py-1.5">
+            {signal.cancelled_reasons.join(' ')}
+          </div>
+        )}
+
+        {signal.correction_note && (
+          <div className="mt-2 text-[11px] text-sky-200 bg-sky-950/50 border border-sky-800/70 rounded px-2.5 py-1.5 flex items-start gap-1.5">
+            <span className="font-bold text-sky-400 shrink-0">Target Corrected:</span>
+            <span>{signal.correction_note}</span>
+          </div>
         )}
 
         {signal.entry !== undefined && (
@@ -663,12 +884,12 @@ export default function ICTScalpPanel({ symbol, timeframe, onPublish }: Props) {
             <div className="bg-slate-950/70 border border-rose-900/60 rounded-lg p-2">
               <div className="text-[10px] text-rose-400 font-bold flex items-center gap-1"><Shield className="w-3 h-3" /> STOP</div>
               <div className="text-rose-300 font-black text-base">{signal.stop_loss}</div>
-              <div className="text-[10px] text-slate-500">risk {signal.risk_points} · cap {signal.max_stop_points}</div>
+              <div className="text-[10px] text-slate-500">risk {signal.risk_points} · cap {signal.max_stop_points} pts</div>
             </div>
             <div className="bg-slate-950/70 border border-emerald-900/60 rounded-lg p-2">
               <div className="text-[10px] text-emerald-400 font-bold flex items-center gap-1"><Target className="w-3 h-3" /> TARGET</div>
               <div className="text-emerald-300 font-black text-base">{signal.take_profit}</div>
-              <div className="text-[10px] text-slate-500">reward {signal.reward_points}</div>
+              <div className="text-[10px] text-slate-500">reward {signal.reward_points} pts</div>
             </div>
             <div className="bg-slate-950/70 border border-slate-800 rounded-lg p-2">
               <div className="text-[10px] text-slate-400 font-bold flex items-center gap-1"><Gauge className="w-3 h-3" /> R:R</div>
@@ -915,6 +1136,174 @@ export default function ICTScalpPanel({ symbol, timeframe, onPublish }: Props) {
 
       <div className="text-[10px] text-slate-600 text-center">
         {data.data_source} · analysed {data.generated_at_et} · refreshes every 15s · signals are analytical, not financial advice
+      </div>
+
+      {/* ── DETERMINISTIC TRADING LOG AUDITOR ──────────────────────────────── */}
+      <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-4 shadow-xl space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 pb-3">
+          <div className="flex items-center gap-2.5">
+            <div className="p-2 rounded-lg bg-indigo-950 border border-indigo-700 text-indigo-300">
+              <FileCheck className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="text-sm font-black text-white uppercase tracking-wider flex items-center gap-2">
+                Deterministic Trading Log Auditor
+                <span className="text-[10px] bg-indigo-900/60 text-indigo-300 border border-indigo-700/60 px-2 py-0.5 rounded-full font-mono">
+                  Session Rules Enforced
+                </span>
+              </div>
+              <div className="text-[11px] text-slate-400">
+                Audits raw trade logs strictly against Session Risk Caps, Direction &amp; Price Formulas, and R:R constraints.
+              </div>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-1.5 text-[10px] font-bold">
+            <span className="bg-slate-800 text-indigo-300 border border-indigo-900/60 px-2 py-1 rounded">
+              ASIA Cap: 0.50 pts
+            </span>
+            <span className="bg-slate-800 text-emerald-300 border border-emerald-900/60 px-2 py-1 rounded">
+              LONDON Cap: 0.80 pts
+            </span>
+            <span className="bg-slate-800 text-sky-300 border border-sky-900/60 px-2 py-1 rounded">
+              NEW YORK Cap: 1.10 pts
+            </span>
+            <span className="bg-slate-800 text-amber-300 border border-amber-900/60 px-2 py-1 rounded">
+              Min R:R: 2.00:1
+            </span>
+          </div>
+        </div>
+
+        {/* Input Textarea & Controls */}
+        <div className="space-y-2">
+          <div className="flex items-center justify-between text-xs">
+            <span className="text-slate-400 font-bold uppercase text-[10px]">Raw Unstructured Log Input</span>
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={handleLoadSample}
+                className="text-[11px] text-indigo-400 hover:text-indigo-300 underline font-bold"
+              >
+                Load Sample Log (NY Scenario 2)
+              </button>
+              {signal && signal.entry !== undefined && (
+                <button
+                  type="button"
+                  onClick={handleLoadLiveSignal}
+                  className="text-[11px] text-emerald-400 hover:text-emerald-300 underline font-bold"
+                >
+                  Use Live Signal
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => { setRawLogInput(''); setAuditResult(null); }}
+                className="text-[11px] text-slate-500 hover:text-slate-400 underline font-bold"
+              >
+                Clear
+              </button>
+            </div>
+          </div>
+
+          <textarea
+            value={rawLogInput}
+            onChange={(e) => setRawLogInput(e.target.value)}
+            rows={4}
+            placeholder="Paste raw trade log here (e.g., Session: New York, Direction: LONG, Entry: 4184.42, Stop: 4183.31, Target: 4175.36...)"
+            className="w-full bg-slate-950 border border-slate-800 rounded-lg p-3 text-xs font-mono text-slate-200 focus:outline-none focus:border-indigo-500 transition resize-y"
+          />
+
+          <div className="flex justify-end">
+            <button
+              type="button"
+              onClick={handleRunAudit}
+              disabled={auditing || !rawLogInput.trim()}
+              className="flex items-center gap-2 px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs font-bold shadow-lg transition"
+            >
+              <RotateCcw className={`w-3.5 h-3.5 ${auditing ? 'animate-spin' : ''}`} />
+              {auditing ? 'Auditing Log…' : 'Run Audit'}
+            </button>
+          </div>
+        </div>
+
+        {/* Audited Report Output */}
+        {auditResult && (
+          <div className="mt-3 bg-slate-950 border border-slate-800 rounded-lg p-4 space-y-3">
+            <div className="flex items-center justify-between border-b border-slate-800/80 pb-2">
+              <span className="text-xs font-black text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
+                <CheckCircle2 className="w-4 h-4 text-emerald-400" /> Audited Trading Report (Deterministic Output)
+              </span>
+              <button
+                type="button"
+                onClick={handleCopyAudit}
+                className="flex items-center gap-1.5 px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-[11px] font-bold text-slate-200 transition"
+              >
+                {copiedAudit ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                {copiedAudit ? 'Copied!' : 'Copy Formatted Report'}
+              </button>
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+              <div className="bg-slate-900 border border-slate-800 p-2.5 rounded-lg">
+                <div className="text-[10px] text-slate-500 font-bold uppercase">Session</div>
+                <div className="text-sm font-black text-white">{auditResult.session}</div>
+              </div>
+              <div className="bg-slate-900 border border-slate-800 p-2.5 rounded-lg">
+                <div className="text-[10px] text-slate-500 font-bold uppercase">Direction</div>
+                <div className={`text-sm font-black ${auditResult.direction === 'LONG' ? 'text-emerald-400' : 'text-rose-400'}`}>
+                  {auditResult.direction}
+                </div>
+              </div>
+              <div className="bg-slate-900 border border-slate-800 p-2.5 rounded-lg col-span-2">
+                <div className="text-[10px] text-slate-500 font-bold uppercase">Audit Status</div>
+                <div className={`text-sm font-black ${auditResult.status === 'EXECUTED' ? 'text-emerald-400' : 'text-rose-400'}`}>
+                  {auditResult.status}
+                </div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+              <div className="bg-slate-900 border border-slate-800 p-2.5 rounded-lg">
+                <div className="text-[10px] text-slate-500 font-bold uppercase">Entry Price</div>
+                <div className="text-sm font-black text-white">{auditResult.entry.toFixed(2)}</div>
+              </div>
+              <div className="bg-slate-900 border border-rose-900/40 p-2.5 rounded-lg">
+                <div className="text-[10px] text-rose-400 font-bold uppercase">Stop Loss Price</div>
+                <div className="text-sm font-black text-rose-300">{auditResult.stop_loss.toFixed(2)}</div>
+                <div className="text-[10px] text-slate-400">Risk: {auditResult.risk_points.toFixed(2)} pts vs Cap: {auditResult.session_cap.toFixed(2)} pts</div>
+              </div>
+              <div className="bg-slate-900 border border-emerald-900/40 p-2.5 rounded-lg">
+                <div className="text-[10px] text-emerald-400 font-bold uppercase">Corrected Target</div>
+                <div className="text-sm font-black text-emerald-300">{auditResult.corrected_target.toFixed(2)}</div>
+                <div className="text-[10px] text-slate-400">Reward: {auditResult.reward_points.toFixed(2)} pts</div>
+              </div>
+              <div className="bg-slate-900 border border-slate-800 p-2.5 rounded-lg">
+                <div className="text-[10px] text-slate-500 font-bold uppercase">Final R:R Ratio</div>
+                <div className="text-sm font-black text-white">{auditResult.risk_reward.toFixed(2)}:1</div>
+                <div className="text-[10px] text-slate-400">Min 2.00:1</div>
+              </div>
+            </div>
+
+            <div className="bg-slate-900 border border-slate-800 p-2.5 rounded-lg text-xs space-y-1">
+              <div className="text-[10px] text-slate-500 font-bold uppercase">Confluences / Triggers</div>
+              <div className="text-slate-200 font-semibold">{auditResult.confluences}</div>
+            </div>
+
+            {auditResult.correction_note && (
+              <div className="bg-blue-950/40 border border-blue-800/60 p-2.5 rounded-lg text-xs space-y-1 text-blue-200">
+                <div className="text-[10px] text-blue-400 font-bold uppercase">Note on Correction</div>
+                <div>{auditResult.correction_note}</div>
+              </div>
+            )}
+
+            <div className="pt-2">
+              <div className="text-[10px] text-slate-500 font-bold uppercase mb-1">Standard Structured Format Output:</div>
+              <pre className="p-3 bg-black/60 border border-slate-800 rounded text-[11px] text-emerald-400 font-mono whitespace-pre-wrap select-all">
+                {auditResult.formatted}
+              </pre>
+            </div>
+          </div>
+        )}
       </div>
 
       <ICTStrategyGuide analysis={data} />

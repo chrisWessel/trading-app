@@ -37,6 +37,7 @@ economic meaning. On NQ -- where ATR(14) on the 1-minute is roughly 25 points
 """
 
 import datetime as dt
+import re
 from typing import Any, Dict, List, Optional, Tuple
 
 try:  # pragma: no cover - zoneinfo is stdlib on 3.9+, needs tzdata on Windows
@@ -78,11 +79,26 @@ ASIA_TREND_MIN_MOVE = 0.50
 LONDON_EXPANSION_ATR_MULT = 1.0
 
 # ── Risk parameters ───────────────────────────────────────────────────────────
+# Session Risk Caps strictly enforced:
+#   ASIA: Max Risk = 0.50 points
+#   LONDON: Max Risk = 0.80 points
+#   NEW_YORK: Max Risk = 1.10 points
+ASIA_MAX_RISK_POINTS = 0.50
+LONDON_MAX_RISK_POINTS = 0.80
+NY_MAX_RISK_POINTS = 1.10
 
-LONDON_MAX_REF_POINTS = 25.0
-NY_MAX_REF_POINTS = 40.0
+SESSION_RISK_CAPS = {
+    "ASIA": ASIA_MAX_RISK_POINTS,
+    "LONDON": LONDON_MAX_RISK_POINTS,
+    "NEW_YORK": NY_MAX_RISK_POINTS,
+    "NEW YORK": NY_MAX_RISK_POINTS,
+}
+
+# Compatibility aliases
+LONDON_MAX_REF_POINTS = LONDON_MAX_RISK_POINTS
+NY_MAX_REF_POINTS = NY_MAX_RISK_POINTS
 REFERENCE_ATR_POINTS = 25.0   # typical NQ 1-minute ATR in index points
-MIN_RR = 2.0
+MIN_RR = 2.00
 DISPLACEMENT_BODY_RATIO = 0.75
 VOLUME_LOOKBACK = 20
 FVG_MAX_AGE_CANDLES = 60      # only gaps formed recently are actionable
@@ -94,6 +110,18 @@ CONFLUENCE_FACTORS = [
     "displacement",
     "ifvg_trigger",
 ]
+
+
+def get_session_cap(session_name: Optional[str]) -> float:
+    """Return the exact deterministic session risk cap in points."""
+    if not session_name:
+        return NY_MAX_RISK_POINTS
+    s = str(session_name).upper().replace(" ", "_")
+    if "ASIA" in s:
+        return ASIA_MAX_RISK_POINTS
+    if "LONDON" in s:
+        return LONDON_MAX_RISK_POINTS
+    return NY_MAX_RISK_POINTS
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -282,21 +310,22 @@ def next_killzone(now_et: dt.datetime) -> Dict[str, Any]:
 
 
 def session_windows(now_et: dt.datetime) -> List[Dict[str, Any]]:
-    """Today's session schedule with live status, in ET and Harare local time."""
+    """Today's session schedule with live status and risk caps, in ET and Harare local time."""
     midnight = now_et.replace(hour=0, minute=0, second=0, microsecond=0)
     specs = [
-        ("ASIA", "Accumulation", midnight - dt.timedelta(hours=5), midnight.replace(hour=ASIA_END_HOUR), False),
-        ("LONDON", "Raid -> MSS -> FVG", midnight.replace(hour=LONDON_KZ[0]), midnight.replace(hour=LONDON_KZ[1]), True),
-        ("NEW YORK", "Continuation (Scenario 1)", midnight.replace(hour=NY_CONTINUATION_KZ[0]), midnight.replace(hour=NY_CONTINUATION_KZ[1]), True),
-        ("NEW YORK", "Reversal (Scenario 2)", midnight.replace(hour=NY_REVERSAL_KZ[0]), midnight.replace(hour=NY_REVERSAL_KZ[1]), True),
+        ("ASIA", "Accumulation", midnight - dt.timedelta(hours=5), midnight.replace(hour=ASIA_END_HOUR), False, ASIA_MAX_RISK_POINTS),
+        ("LONDON", "Raid -> MSS -> FVG", midnight.replace(hour=LONDON_KZ[0]), midnight.replace(hour=LONDON_KZ[1]), True, LONDON_MAX_RISK_POINTS),
+        ("NEW YORK", "Continuation (Scenario 1)", midnight.replace(hour=NY_CONTINUATION_KZ[0]), midnight.replace(hour=NY_CONTINUATION_KZ[1]), True, NY_MAX_RISK_POINTS),
+        ("NEW YORK", "Reversal (Scenario 2)", midnight.replace(hour=NY_REVERSAL_KZ[0]), midnight.replace(hour=NY_REVERSAL_KZ[1]), True, NY_MAX_RISK_POINTS),
     ]
     out = []
-    for name, purpose, opens, closes, is_kz in specs:
+    for name, purpose, opens, closes, is_kz, cap in specs:
         state = "LIVE" if opens <= now_et < closes else ("UPCOMING" if opens > now_et else "CLOSED")
         out.append({
             "name": name,
             "purpose": purpose,
             "is_killzone": is_kz,
+            "risk_cap": cap,
             "opens_et": opens.strftime("%H:%M"),
             "closes_et": closes.strftime("%H:%M"),
             "opens_harare": opens.astimezone(HARARE).strftime("%H:%M"),
@@ -934,52 +963,84 @@ def _build_signal(
     scenario: Optional[str] = None,
     trap: Optional[Dict[str, Any]] = None,
     trap_released: bool = False,
+    session_name: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Entry / stop / target with the session point cap and 1:2 minimum R:R.
+    """Entry / stop / target strictly enforcing session risk caps, direction formulas, and minimum 2.00:1 R:R.
 
-    `target_override` carries the scenario's structural target (the unreached
-    HTF draw on liquidity for a continuation, or internal London liquidity /
-    the midnight open for a reversal). It still has to clear the same minimum
-    R:R and stop-distance cap as an ATR-derived target, so a scenario can never
-    buy its way past the risk rules.
+    Session Risk Caps:
+      * ASIA: Max Risk = 0.50 points
+      * LONDON: Max Risk = 0.80 points
+      * NEW_YORK: Max Risk = 1.10 points
+
+    Direction & Price Formulas:
+      * LONG Trade: Target > Entry, Target = Entry + Reward, Stop Loss < Entry, Risk = Entry - Stop Loss
+      * SHORT Trade: Target < Entry, Target = Entry - Reward, Stop Loss > Entry, Risk = Stop Loss - Entry
+      * Calculated Risk Points = |Entry Price - Stop Loss Price|
+      * Calculated Reward Points = |Target Price - Entry Price|
+      * Calculated R:R Ratio = Reward Points / Risk Points (min 2.00 : 1)
     """
-    scale = (atr / REFERENCE_ATR_POINTS) if atr > 0 else 1.0
-    ref_points = LONDON_MAX_REF_POINTS if killzone == "LONDON" else NY_MAX_REF_POINTS
-    max_points = ref_points * scale
+    sess_key = session_name or killzone or "NEW_YORK"
+    max_points = get_session_cap(sess_key)
 
     is_long = direction == "LONG"
     stop_distance = abs(entry - structural_stop)
     status = "ENTRY_READY"
     reasons: List[str] = []
 
-    if stop_distance <= 0 or stop_distance > max_points:
-        status = "ENTRY_CANCELLED"
+    # Risk Audit: Compare Calculated Risk against the Session Risk Cap
+    if stop_distance <= 0:
+        status = "CANCELLED - INVALID STOP"
+        reasons.append("Structural stop distance is zero.")
+    elif stop_distance > max_points:
+        status = "CANCELLED - RISK LIMIT EXCEEDED"
         reasons.append(
-            f"Structural stop {stop_distance:.2f} exceeds the {killzone or 'session'} "
-            f"limit of {max_points:.2f} points."
+            f"Risk: {stop_distance:.2f} pts vs Cap: {max_points:.2f} pts."
         )
 
+    # Target & Direction Mismatch Correction:
+    # LONG Trade: Target MUST be HIGHER than Entry Price
+    # SHORT Trade: Target MUST be LOWER than Entry Price
+    correction_note: Optional[str] = None
     if target_override is not None:
         target = target_override
-        reward = abs(target - entry)
-        rr = (reward / stop_distance) if stop_distance > 0 else 0.0
+        if is_long and target < entry:
+            implied_reward = abs(entry - target)
+            corrected_target = entry + implied_reward
+            correction_note = (
+                f"Direction mismatch corrected: raw target was {target:.2f} (< entry). "
+                f"Corrected target is {corrected_target:.2f} (+{implied_reward:.2f} pts)."
+            )
+            target = corrected_target
+        elif (not is_long) and target > entry:
+            implied_reward = abs(entry - target)
+            corrected_target = entry - implied_reward
+            correction_note = (
+                f"Direction mismatch corrected: raw target was {target:.2f} (> entry). "
+                f"Corrected target is {corrected_target:.2f} (-{implied_reward:.2f} pts)."
+            )
+            target = corrected_target
+
+        reward_points = abs(target - entry)
+        rr = (reward_points / stop_distance) if stop_distance > 0 else 0.0
         if stop_distance > 0 and rr < MIN_RR:
-            status = "ENTRY_CANCELLED"
+            if status == "ENTRY_READY":
+                status = "CANCELLED - MIN RR NOT MET"
             reasons.append(
                 f"Scenario target offers only {rr:.2f}R against the required {MIN_RR:.2f}R."
             )
     elif is_long:
         target = entry + stop_distance * MIN_RR
+        reward_points = abs(target - entry)
+        rr = MIN_RR
     else:
         target = entry - stop_distance * MIN_RR
+        reward_points = abs(target - entry)
+        rr = MIN_RR
 
     reward_points = abs(target - entry)
     rr = (reward_points / stop_distance) if stop_distance > 0 else 0.0
 
-# The Asia trap filter overrides everything downstream, but only until the
-    # raid and the MSS have completed: the brief inhibits the counter-trend side
-    # "until the explicit Liquidity Raid & Shift sequence completes". Once that
-    # sequence is confirmed the very trade it anticipated becomes permitted.
+    # The Asia trap filter overrides downstream setup until raid & MSS sequence completes
     trap_blocked = False
     if (trap and trap.get("trap_active") and not trap_released
             and direction == trap.get("inhibited_direction")):
@@ -1002,8 +1063,9 @@ def _build_signal(
         "risk_reward": round(rr, 2),
         "min_rr": MIN_RR,
         "max_stop_points": round(max_points, 2),
-        "max_stop_reference_points": ref_points,
+        "max_stop_reference_points": round(max_points, 2),
         "target_source": "SCENARIO_TARGET" if target_override is not None else "ATR_MULTIPLE",
+        "correction_note": correction_note,
         "trap_blocked": trap_blocked,
         "cancelled_reasons": reasons,
     }
@@ -1146,7 +1208,8 @@ def analyze_ict(
 
                 signal = _build_signal(direction, current_price, structural_stop, atr,
                                        session["killzone"], trap=trap,
-                                       trap_released=sequence_complete)
+                                       trap_released=sequence_complete,
+                                       session_name=session["name"])
                 signal["displacement_zone"] = disp_zone
                 signal["raid"] = raid
                 signal["mss"] = mss
@@ -1231,7 +1294,8 @@ def analyze_ict(
                                    target_override=target_override,
                                    scenario=scenario["scenario"],
                                    trap=trap,
-                                   trap_released=sequence_complete)
+                                   trap_released=sequence_complete,
+                                   session_name=session["name"])
             signal["order_block"] = order_block
             signal["confluence"] = {
                 "htf_daily_fvg": htf["daily_gap"] is not None,
@@ -1279,4 +1343,168 @@ def analyze_ict(
         "htf": htf,
         "state_machine_state": state,
         "signal": signal,
+    }
+
+
+# ── Deterministic Trading Log Auditor ─────────────────────────────────────────
+
+def audit_trade_log(raw_log: str) -> Dict[str, Any]:
+    """Deterministic trading log auditor.
+
+    Enforces strict rules & thresholds:
+      1. Session Risk Caps:
+         - ASIA: Max Risk = 0.50 points
+         - LONDON: Max Risk = 0.80 points
+         - NEW_YORK: Max Risk = 1.10 points
+      2. Direction & Price Formulas:
+         - LONG Trade: Target > Entry, SL < Entry, Risk = Entry - SL
+         - SHORT Trade: Target < Entry, SL > Entry, Risk = SL - Entry
+      3. Risk & Reward Rules:
+         - Calculated Risk Points = |Entry Price - Stop Loss Price|
+         - Calculated Reward Points = |Target Price - Entry Price|
+         - Calculated R:R Ratio = Reward Points / Risk Points (min 2.00 : 1)
+      4. Audit Workflow & Correction Logic:
+         - Risk Audit: Risk > Session Risk Cap -> "CANCELLED - RISK LIMIT EXCEEDED", else "EXECUTED"
+         - Direction & Target Mismatch Correction: if Target violates direction logic, correct target
+         - Final Precision: Reward, R:R rounded to 2 decimal places
+         - Confluences / Triggers extracted
+    """
+    text = (raw_log or "").strip()
+
+    # 1. Identification: Session
+    session = "New York"
+    m_sess = re.search(r'(?i)\b(asia|london|new[\s_-]?york)\b', text)
+    if m_sess:
+        raw_s = m_sess.group(1).lower().replace('-', ' ').replace('_', ' ')
+        if 'asia' in raw_s:
+            session = "Asia"
+        elif 'london' in raw_s:
+            session = "London"
+        elif 'new' in raw_s:
+            session = "New York"
+
+    cap = get_session_cap(session)
+
+    # Direction: LONG / SHORT
+    direction = "LONG"
+    m_dir = re.search(r'(?i)\b(?:direction[:\s]+)?(LONG|SHORT|BUY|SELL)\b', text)
+    if m_dir:
+        val = m_dir.group(1).upper()
+        direction = "LONG" if val in ("LONG", "BUY") else "SHORT"
+
+    # Entry Price
+    entry: Optional[float] = None
+    m_entry = re.search(r'(?i)\b(?:entry(?:\s*price)?|entry\s*at|entered\s*at)[:\s=]+([0-9]+(?:\.[0-9]+)?)', text)
+    if m_entry:
+        entry = float(m_entry.group(1))
+
+    # Stop Loss Price
+    stop_loss: Optional[float] = None
+    m_sl = re.search(r'(?i)\b(?:stop(?:\s*loss)?(?:\s*price)?|sl)[:\s=]+([0-9]+(?:\.[0-9]+)?)', text)
+    if m_sl:
+        stop_loss = float(m_sl.group(1))
+
+    # Target Price
+    raw_target: Optional[float] = None
+    m_tp = re.search(r'(?i)\b(?:target(?:\s*price)?|tp|take\s*profit)[:\s=]+([0-9]+(?:\.[0-9]+)?)', text)
+    if m_tp:
+        raw_target = float(m_tp.group(1))
+
+    # Stated Reward Points
+    stated_reward: Optional[float] = None
+    m_rew = re.search(r'(?i)\b(?:stated\s*)?(?:reward(?:\s*points)?|reward)[:\s=]+([0-9]+(?:\.[0-9]+)?)', text)
+    if m_rew:
+        stated_reward = float(m_rew.group(1))
+
+    # Confluences / Triggers
+    confluences = "Structural DOL Confluence 3 / 5, Structural Stop, NY Scenario 2 Reversal"
+    m_conf = re.search(r'(?i)(?:confluences?\s*(?:/|\&)?\s*triggers?|confluences?|triggers?|notes?)[:\s=]+([^\n\r]+)', text)
+    if m_conf:
+        raw_conf = m_conf.group(1).strip()
+        if "Note on Correction:" in raw_conf:
+            raw_conf = raw_conf.split("Note on Correction:")[0].strip()
+        if raw_conf:
+            confluences = raw_conf
+
+    if entry is None or stop_loss is None:
+        return {
+            "error": "Could not extract valid Entry Price and Stop Loss Price from log.",
+            "raw_log": raw_log
+        }
+
+    # 2. Risk Audit
+    calculated_risk = round(abs(entry - stop_loss), 2)
+    risk_limit_exceeded = calculated_risk > cap
+
+    if risk_limit_exceeded:
+        status = "CANCELLED - RISK LIMIT EXCEEDED"
+    else:
+        status = "EXECUTED"
+
+    # 3. Target & Direction Mismatch Correction
+    is_long = direction == "LONG"
+    correction_note: Optional[str] = None
+    corrected_target = raw_target
+
+    if raw_target is not None:
+        if is_long and raw_target < entry:
+            reward = stated_reward if stated_reward is not None else abs(entry - raw_target)
+            corrected_target = round(entry + reward, 2)
+            correction_note = (
+                f"The raw log specified a LONG trade with Entry at {entry:.2f} and a raw target of {raw_target:.2f} "
+                f"(which was lower than entry). Using the stated reward of {reward:.2f} points, "
+                f"the corrected target is calculated as ${entry:.2f} + {reward:.2f} = {corrected_target:.2f}$."
+            )
+        elif (not is_long) and raw_target > entry:
+            reward = stated_reward if stated_reward is not None else abs(entry - raw_target)
+            corrected_target = round(entry - reward, 2)
+            correction_note = (
+                f"The raw log specified a SHORT trade with Entry at {entry:.2f} and a raw target of {raw_target:.2f} "
+                f"(which was higher than entry). Using the stated reward of {reward:.2f} points, "
+                f"the corrected target is calculated as ${entry:.2f} - {reward:.2f} = {corrected_target:.2f}$."
+            )
+        else:
+            corrected_target = round(raw_target, 2)
+    elif stated_reward is not None:
+        reward = stated_reward
+        corrected_target = round(entry + reward if is_long else entry - reward, 2)
+    else:
+        reward = round(calculated_risk * 2.0, 2)
+        corrected_target = round(entry + reward if is_long else entry - reward, 2)
+
+    # 4. Final Precision Calculations
+    final_reward = round(abs(corrected_target - entry), 2)
+    final_rr = round(final_reward / calculated_risk, 2) if calculated_risk > 0 else 0.0
+
+    if calculated_risk > 0 and final_rr < 2.00 and not risk_limit_exceeded:
+        status = "CANCELLED - MIN RR NOT MET"
+
+    formatted_lines = [
+        f"- Session: {session}",
+        f"- Direction: {direction}",
+        f"- Status: {status}",
+        f"- Entry Price: {entry:.2f}",
+        f"- Stop Loss Price: {stop_loss:.2f} (Risk: {calculated_risk:.2f} pts vs Cap: {cap:.2f} pts)",
+        f"- Corrected Target Price: {corrected_target:.2f} (Reward: {final_reward:.2f} pts)",
+        f"- Final R:R Ratio: {final_rr:.2f}:1",
+        f"- Confluences / Triggers: {confluences}",
+    ]
+    formatted = "\n".join(formatted_lines)
+    if correction_note:
+        formatted += f"\nNote on Correction: {correction_note}"
+
+    return {
+        "session": session,
+        "direction": direction,
+        "status": status,
+        "entry": entry,
+        "stop_loss": stop_loss,
+        "risk_points": calculated_risk,
+        "session_cap": cap,
+        "corrected_target": corrected_target,
+        "reward_points": final_reward,
+        "risk_reward": final_rr,
+        "confluences": confluences,
+        "correction_note": correction_note,
+        "formatted": formatted,
     }

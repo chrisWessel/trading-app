@@ -516,3 +516,17 @@ def get_ict_analysis(
     with ICT_CACHE_LOCK:
         ICT_CACHE[cache_key] = (time.monotonic(), result)
     return result
+
+
+class ICTAuditRequest(BaseModel):
+    raw_log: str = Field(..., description="Raw unstructured or structured trade log text")
+
+
+@app.post("/api/ict/audit-log")
+def audit_ict_log(req: ICTAuditRequest):
+    """Audit a raw trade log deterministically against session risk caps, formulas, and confluences."""
+    result = ict_engine.audit_trade_log(req.raw_log)
+    if "error" in result:
+        raise HTTPException(status_code=400, detail=result["error"])
+    return result
+

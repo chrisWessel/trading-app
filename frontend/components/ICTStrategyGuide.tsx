@@ -487,15 +487,17 @@ export default function ICTStrategyGuide({ analysis }: Props) {
             The stop is structural, not arbitrary: <strong>behind the order block</strong> — the last opposing candle before the displacement. If price trades through it, your premise is invalid and you should be out.
           </p>
           <div className="bg-slate-900 border border-slate-800 rounded-md p-2 my-1">
-            <Rule label="London stop cap" value="25 reference points" />
-            <Rule label="New York stop cap" value="40 reference points" />
-            <Rule label="Minimum R:R" value="1:2, no exceptions" />
-            <Rule label="Target" value="nearest 1H FVG or opposing liquidity" />
-            <Rule label="Invalidation" value="ENTRY_CANCELLED if the stop exceeds the cap" />
+            <Rule label="Asia stop cap" value="0.50 points max risk" />
+            <Rule label="London stop cap" value="0.80 points max risk" />
+            <Rule label="New York stop cap" value="1.10 points max risk" />
+            <Rule label="Direction Formulas" value="LONG: Target > Entry, Stop < Entry | SHORT: Target < Entry, Stop > Entry" />
+            <Rule label="Minimum R:R" value="2.00 : 1 minimum required" />
+            <Rule label="Target Correction" value="Inverted targets auto-corrected to proper side of entry" />
+            <Rule label="Invalidation" value="CANCELLED - RISK LIMIT EXCEEDED if Risk > Session Cap" />
             <Rule label="Management" value="trail to break-even at 1.5R or a minor pool sweep" />
           </div>
           <p>
-            The caps are quoted in NQ index points and <strong>scaled by ATR</strong> in this build, so they keep their economic meaning on gold, FX and crypto. On NQ, where a 1-minute ATR is about 25, the caps land on exactly 25 and 40.
+            The session risk caps are strictly enforced: <strong>Asia = 0.50 points</strong>, <strong>London = 0.80 points</strong>, and <strong>New York = 1.10 points</strong>. If calculated risk (|Entry - Stop Loss|) exceeds the session cap, the trade is marked <Key tone="bear">CANCELLED - RISK LIMIT EXCEEDED</Key>.
           </p>
           <p>
             Position size follows confluence. Five factors aligned (daily FVG, 1H FVG, sweep, displacement, IFVG) is an <Key tone="bull">A+</Key> and takes increased size; fewer factors means standard size or no trade.
