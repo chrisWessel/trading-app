@@ -6,7 +6,7 @@ import {
   TrendingDown, TrendingUp, AlertTriangle, ArrowRight, CheckCircle2,
   XCircle, ExternalLink, RefreshCw, Filter, Sparkles, HelpCircle,
   ChevronDown, ChevronRight, Eye, Play, BarChart2, Radio, Info, Layers,
-  ChevronUp, Zap, Check, Bell
+  ChevronUp, Zap, Check, Bell, Globe
 } from 'lucide-react';
 import { API_BASE_URL } from '@/lib/apiConfig';
 
@@ -47,13 +47,23 @@ export interface EconomicEvent {
   impact_weight: number;
   date_iso: string;
   date_str: string;
+  date_cat?: string;
   date_iso_day?: string;
   time_str: string;
+  time_et?: string;
+  time_cat?: string;
+  time_gmt?: string;
+  time_stacked?: string;
+  is_gold_mover?: boolean;
+  is_crypto_mover?: boolean;
+  impacted_assets?: string[];
   forecast: string;
   previous: string;
   actual: string;
   actual_sentiment: 'better' | 'worse' | 'neutral';
   market_impact_forecast?: string;
+  gold_impact_notes?: string;
+  crypto_impact_notes?: string;
   diff_minutes: number;
   status: 'UPCOMING' | 'RELEASING_SOON' | 'RELEASING_NOW' | 'RECENT' | 'PAST';
   countdown: string;
@@ -115,6 +125,9 @@ interface NewsTradingPanelProps {
   onAutoFillTrade?: (tradeParams: any) => void;
 }
 
+type TimeZoneOption = 'STACKED' | 'CAT' | 'ET' | 'GMT';
+type AssetCategoryFilter = 'GOLD' | 'ALL' | 'CRYPTO' | 'FOREX';
+
 export default function NewsTradingPanel({
   symbol,
   timeframe,
@@ -129,10 +142,38 @@ export default function NewsTradingPanel({
   const [selectedDate, setSelectedDate] = useState<string>('ALL');
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
   const [impactFilter, setImpactFilter] = useState<'ALL' | 'HIGH_ONLY' | 'MED_HIGH'>('HIGH_ONLY');
-  const [currencyFilter, setCurrencyFilter] = useState<'AUTO' | 'USD' | 'EUR' | 'GBP' | 'ALL'>('AUTO');
+
+  // Detect default asset category filter based on the active symbol
+  const isGoldAsset = useMemo(() => {
+    const s = symbol.toUpperCase();
+    return s.includes('XAU') || s.includes('GOLD');
+  }, [symbol]);
+
+  const isCryptoAsset = useMemo(() => {
+    const s = symbol.toUpperCase();
+    return s.includes('BTC') || s.includes('ETH') || s.includes('SOL') || s.includes('REXT');
+  }, [symbol]);
+
+  const [assetFilter, setAssetFilter] = useState<AssetCategoryFilter>(() => {
+    if (isGoldAsset) return 'GOLD';
+    if (isCryptoAsset) return 'CRYPTO';
+    return 'ALL';
+  });
+
+  // Time zone filter: Default to STACKED (CAT + ET) as requested
+  const [timeZoneMode, setTimeZoneMode] = useState<TimeZoneOption>('STACKED');
   const [calendarTab, setCalendarTab] = useState<'feed' | 'webview'>('feed');
   const [showEducation, setShowEducation] = useState<boolean>(false);
   const [lastRefreshed, setLastRefreshed] = useState<string>('');
+
+  // Update assetFilter automatically if user switches active symbol to/from Gold
+  useEffect(() => {
+    if (isGoldAsset) {
+      setAssetFilter('GOLD');
+    } else if (isCryptoAsset) {
+      setAssetFilter('CRYPTO');
+    }
+  }, [isGoldAsset, isCryptoAsset]);
 
   const fetchAnalysis = useCallback(async () => {
     try {
@@ -188,45 +229,36 @@ export default function NewsTradingPanel({
     };
   }, [fetchAnalysis, fetchCalendar]);
 
-  // Currency matching
-  const activeCurrencies = useMemo(() => {
-    const s = symbol.toUpperCase();
-    if (s.includes('XAU') || s.includes('GOLD') || s.includes('BTC') || s.includes('ETH') || s.includes('SOL') || s.includes('REXT')) {
-      return ['USD'];
-    }
-    if (s.includes('EURUSD')) return ['EUR', 'USD'];
-    if (s.includes('GBPUSD')) return ['GBP', 'USD'];
-    if (s.includes('USDJPY')) return ['USD', 'JPY'];
-    if (s.includes('AUDUSD')) return ['AUD', 'USD'];
-    if (s.includes('USDCAD')) return ['USD', 'CAD'];
-    if (s.includes('USDCHF')) return ['USD', 'CHF'];
-    return ['USD'];
-  }, [symbol]);
-
-  // Filtered calendar events based on date, impact, and currency
+  // Filtered calendar events based on Asset Class, Date, and Impact
   const filteredEvents = useMemo(() => {
     return calendarEvents.filter((ev) => {
-      // Date filter
+      // 1. Asset Class Filter
+      if (assetFilter === 'GOLD') {
+        const isGoldMover = ev.is_gold_mover || ev.country === 'USD' || ev.title.toLowerCase().includes('gold');
+        if (!isGoldMover) return false;
+      } else if (assetFilter === 'CRYPTO') {
+        const isCryptoMover = ev.is_crypto_mover || (ev.country === 'USD' && ['cpi', 'rate', 'fomc', 'nfp', 'payroll', 'gdp'].some(k => ev.title.toLowerCase().includes(k)));
+        if (!isCryptoMover) return false;
+      } else if (assetFilter === 'FOREX') {
+        // Exclude generic crypto if needed, show all foreign exchange currencies
+        const isFx = ['EUR', 'GBP', 'USD', 'JPY', 'AUD', 'CAD', 'CHF', 'NZD'].includes(ev.country);
+        if (!isFx) return false;
+      }
+
+      // 2. Date Filter
       if (selectedDate === 'UPCOMING_ONLY') {
         if (ev.diff_minutes < -15) return false;
       } else if (selectedDate !== 'ALL') {
-        if (ev.date_str !== selectedDate && ev.date_iso_day !== selectedDate) return false;
+        if (ev.date_str !== selectedDate && ev.date_iso_day !== selectedDate && ev.date_cat !== selectedDate) return false;
       }
 
-      // Impact filter
+      // 3. Impact Filter
       if (impactFilter === 'HIGH_ONLY' && ev.impact !== 'High') return false;
       if (impactFilter === 'MED_HIGH' && ev.impact !== 'High' && ev.impact !== 'Medium') return false;
 
-      // Currency filter
-      if (currencyFilter === 'AUTO') {
-        return activeCurrencies.includes(ev.country);
-      }
-      if (currencyFilter !== 'ALL' && ev.country !== currencyFilter) {
-        return false;
-      }
       return true;
     });
-  }, [calendarEvents, selectedDate, impactFilter, currencyFilter, activeCurrencies]);
+  }, [calendarEvents, assetFilter, selectedDate, impactFilter]);
 
   // Nearest upcoming high-impact event
   const nextHighImpact = useMemo(() => {
@@ -239,8 +271,13 @@ export default function NewsTradingPanel({
       const found = calendarEvents.find((e) => e.id === selectedEventId);
       if (found) return found;
     }
+    // If Gold mode is active, prioritize next Gold mover
+    if (assetFilter === 'GOLD') {
+      const goldNext = calendarEvents.find((e) => e.is_gold_mover && e.impact === 'High' && e.diff_minutes >= -5);
+      if (goldNext) return goldNext;
+    }
     return nextHighImpact || calendarEvents.find((e) => e.diff_minutes >= -15) || calendarEvents[0] || null;
-  }, [selectedEventId, calendarEvents, nextHighImpact]);
+  }, [selectedEventId, calendarEvents, assetFilter, nextHighImpact]);
 
   const setup = data?.setup;
   const projection = data?.projection;
@@ -259,6 +296,50 @@ export default function NewsTradingPanel({
       setupName: `News Fair Price Reversion (${setup.direction})`,
       rationale: `JJ Simon News Strategy: Fair Price at ${setup.fair_price}, Counter-Wick at ${setup.counter_wick_ratio}%, 1.5R Target`,
     });
+  };
+
+  // Helper to format event times based on active timezone selection
+  const renderTimeCell = (ev: EconomicEvent) => {
+    const cat = ev.time_cat || `${ev.time_str.replace(' ET', '')} CAT`;
+    const et = ev.time_et || ev.time_str;
+    const gmt = ev.time_gmt || `${ev.time_str.replace(' ET', '')} GMT`;
+
+    if (timeZoneMode === 'CAT') {
+      return (
+        <div className="flex flex-col">
+          <span className="font-bold text-amber-300 text-xs">{cat}</span>
+          <span className="text-[10px] text-slate-500 font-mono">CAT (Harare)</span>
+        </div>
+      );
+    }
+    if (timeZoneMode === 'ET') {
+      return (
+        <div className="flex flex-col">
+          <span className="font-bold text-blue-300 text-xs">{et}</span>
+          <span className="text-[10px] text-slate-500 font-mono">ET (New York)</span>
+        </div>
+      );
+    }
+    if (timeZoneMode === 'GMT') {
+      return (
+        <div className="flex flex-col">
+          <span className="font-bold text-slate-200 text-xs">{gmt}</span>
+          <span className="text-[10px] text-slate-500 font-mono">GMT / UTC</span>
+        </div>
+      );
+    }
+
+    // Default: STACKED (CAT on top in Amber, ET below in Slate)
+    return (
+      <div className="flex flex-col leading-tight">
+        <span className="font-bold text-amber-300 text-xs">
+          {cat}
+        </span>
+        <span className="text-[10px] text-slate-400 font-mono">
+          {et}
+        </span>
+      </div>
+    );
   };
 
   return (
@@ -287,6 +368,16 @@ export default function NewsTradingPanel({
                 <span className="text-xs uppercase tracking-wider font-bold text-slate-400">
                   JJ SIMON FAIR PRICE NEWS STRATEGY
                 </span>
+                {isGoldAsset && (
+                  <span className="px-2 py-0.5 text-[10px] font-black rounded bg-amber-500/20 text-amber-300 border border-amber-500/40">
+                    🥇 GOLD (XAU/USD) MODE
+                  </span>
+                )}
+                {isCryptoAsset && (
+                  <span className="px-2 py-0.5 text-[10px] font-black rounded bg-cyan-500/20 text-cyan-300 border border-cyan-500/40">
+                    ⚡ CRYPTO MODE
+                  </span>
+                )}
                 <span className={`px-2 py-0.5 text-[10px] font-bold rounded-full ${
                   isEntryReady
                     ? 'bg-emerald-500 text-slate-950 font-black animate-pulse'
@@ -508,7 +599,7 @@ export default function NewsTradingPanel({
             <div>
               <div className="flex items-center gap-2">
                 <h3 className="text-sm font-bold text-white tracking-wide">
-                  FOREX FACTORY ECONOMIC CALENDAR (WITH LIVE ACTUALS & SENTIMENT)
+                  ECONOMIC CATALYST CALENDAR & ACTUAL RELEASES
                 </h3>
                 <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-red-500/20 text-red-300 border border-red-500/30 flex items-center gap-1">
                   <span className="w-1.5 h-1.5 rounded-full bg-red-400 animate-pulse" />
@@ -516,13 +607,65 @@ export default function NewsTradingPanel({
                 </span>
               </div>
               <p className="text-[11px] text-slate-400">
-                View real-time high-impact releases, actual prints, forecasts, and upcoming dates
+                Gold & Metals • Crypto • Forex Releases with CAT & ET Timezones and Live Actual Prints
               </p>
             </div>
           </div>
 
-          {/* View Mode Toggle: Interactive Table vs Institutional Calendar Frame */}
-          <div className="flex items-center gap-2">
+          {/* Timezone Switcher & View Mode Toggle */}
+          <div className="flex flex-wrap items-center gap-2">
+            {/* TIMEZONE SELECTOR */}
+            <div className="flex items-center gap-1 bg-slate-900 p-1 rounded-lg border border-slate-800 text-xs font-mono">
+              <span className="text-slate-400 px-1 text-[11px] flex items-center gap-1">
+                <Clock className="w-3 h-3 text-amber-400" /> TZ:
+              </span>
+              <button
+                onClick={() => setTimeZoneMode('STACKED')}
+                title="Display both Central Africa Time (CAT) and New York Time (ET) stacked"
+                className={`px-2 py-1 rounded text-[11px] font-bold transition ${
+                  timeZoneMode === 'STACKED'
+                    ? 'bg-amber-500 text-slate-950 shadow'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                🥞 Stacked (CAT + ET)
+              </button>
+              <button
+                onClick={() => setTimeZoneMode('CAT')}
+                title="Central Africa Time (Harare / Johannesburg UTC+2)"
+                className={`px-2 py-1 rounded text-[11px] font-bold transition ${
+                  timeZoneMode === 'CAT'
+                    ? 'bg-amber-500 text-slate-950 shadow'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                🇿🇼 CAT
+              </button>
+              <button
+                onClick={() => setTimeZoneMode('ET')}
+                title="Eastern Time (New York / Wall Street)"
+                className={`px-2 py-1 rounded text-[11px] font-bold transition ${
+                  timeZoneMode === 'ET'
+                    ? 'bg-blue-600 text-white shadow'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                🇺🇸 ET
+              </button>
+              <button
+                onClick={() => setTimeZoneMode('GMT')}
+                title="Greenwich Mean Time (UTC)"
+                className={`px-2 py-1 rounded text-[11px] font-bold transition ${
+                  timeZoneMode === 'GMT'
+                    ? 'bg-blue-600 text-white shadow'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                🌐 GMT
+              </button>
+            </div>
+
+            {/* View Mode Toggle */}
             <div className="flex bg-slate-900 p-0.5 rounded-lg border border-slate-800 text-xs">
               <button
                 onClick={() => setCalendarTab('feed')}
@@ -532,7 +675,7 @@ export default function NewsTradingPanel({
                     : 'text-slate-400 hover:text-white'
                 }`}
               >
-                📊 Interactive Calendar & Actuals
+                📊 Interactive Feed
               </button>
               <button
                 onClick={() => setCalendarTab('webview')}
@@ -543,7 +686,7 @@ export default function NewsTradingPanel({
                 }`}
               >
                 <Eye className="w-3.5 h-3.5" />
-                Institutional Widget Frame
+                Institutional Widget
               </button>
             </div>
 
@@ -558,15 +701,30 @@ export default function NewsTradingPanel({
           </div>
         </div>
 
-        {/* Next Major Catalyst Alert Ribbon */}
+        {/* Next Major Catalyst Alert Ribbon with Dual CAT & ET Times */}
         {nextHighImpact && (
-          <div className="bg-gradient-to-r from-red-950/60 via-slate-900 to-red-950/60 px-4 py-2 border-b border-red-900/40 flex items-center justify-between text-xs">
-            <div className="flex items-center gap-2">
+          <div className="bg-gradient-to-r from-red-950/60 via-slate-900 to-red-950/60 px-4 py-2 border-b border-red-900/40 flex flex-wrap items-center justify-between gap-2 text-xs">
+            <div className="flex items-center gap-2 flex-wrap">
               <span className="p-1 bg-red-500/20 rounded text-red-400 font-bold text-[10px]">
                 🚨 NEXT HIGH-IMPACT RELEASE
               </span>
               <span className="font-bold text-white font-mono">{nextHighImpact.country} {nextHighImpact.title}</span>
-              <span className="text-slate-400 font-mono">({nextHighImpact.time_str})</span>
+              <span className="text-amber-300 font-mono font-bold text-xs">
+                ({nextHighImpact.time_cat || nextHighImpact.time_str})
+              </span>
+              <span className="text-slate-400 font-mono text-xs">
+                · {nextHighImpact.time_et}
+              </span>
+              {nextHighImpact.is_gold_mover && (
+                <span className="px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 font-bold text-[10px] border border-amber-500/30">
+                  🥇 GOLD MOVER
+                </span>
+              )}
+              {nextHighImpact.is_crypto_mover && (
+                <span className="px-1.5 py-0.5 rounded bg-cyan-500/20 text-cyan-300 font-bold text-[10px] border border-cyan-500/30">
+                  ⚡ CRYPTO MOVER
+                </span>
+              )}
             </div>
             <div className="flex items-center gap-2">
               <span className="text-slate-400">Countdown:</span>
@@ -581,7 +739,7 @@ export default function NewsTradingPanel({
         {inspectedEvent && (
           <div className="mx-4 mt-4 p-4 rounded-xl bg-slate-950 border border-slate-800 shadow-inner">
             <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-slate-800">
-              <div className="flex items-center gap-2.5">
+              <div className="flex items-center gap-2.5 flex-wrap">
                 <span className={`px-2.5 py-1 rounded-md text-xs font-black uppercase tracking-wide ${
                   inspectedEvent.impact === 'High'
                     ? 'bg-red-500/20 text-red-400 border border-red-500/40'
@@ -594,10 +752,22 @@ export default function NewsTradingPanel({
                 <h4 className="text-sm font-bold text-white">
                   {inspectedEvent.title}
                 </h4>
+
+                {inspectedEvent.is_gold_mover && (
+                  <span className="px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 text-[10px] font-black">
+                    🥇 GOLD (XAU/USD) CATALYST
+                  </span>
+                )}
+                {inspectedEvent.is_crypto_mover && (
+                  <span className="px-2 py-0.5 rounded bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 text-[10px] font-black">
+                    ⚡ CRYPTO DRIVER
+                  </span>
+                )}
               </div>
 
               <div className="flex items-center gap-2 text-xs font-mono">
-                <span className="text-slate-400">{inspectedEvent.date_str} @ {inspectedEvent.time_str}</span>
+                <span className="text-amber-300 font-bold">{inspectedEvent.time_cat || inspectedEvent.time_str}</span>
+                <span className="text-slate-400">({inspectedEvent.time_et})</span>
                 <span className={`px-2 py-0.5 rounded text-[11px] font-bold ${
                   inspectedEvent.status === 'RELEASING_NOW'
                     ? 'bg-red-600 text-white animate-pulse'
@@ -661,19 +831,47 @@ export default function NewsTradingPanel({
               </div>
             </div>
 
-            {/* Expected Market Repricing Forecast & Strategy Notes */}
-            <div className="p-3 bg-blue-950/30 rounded-lg border border-blue-900/40 text-xs text-slate-300 space-y-1.5 font-sans">
-              <div className="flex items-center gap-1.5 text-blue-300 font-bold">
-                <Zap className="w-3.5 h-3.5 text-blue-400" />
-                <span>Market Repricing Forecast & Expected Asset Sensitivity:</span>
+            {/* Dedicated Gold & Metals Action Playbook */}
+            {inspectedEvent.is_gold_mover && (
+              <div className="p-3 mb-2 bg-amber-950/30 rounded-lg border border-amber-600/40 text-xs text-slate-200 space-y-1.5 font-sans">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5 text-amber-400 font-bold text-xs uppercase tracking-wide">
+                    <Flame className="w-4 h-4 text-amber-400" />
+                    <span>🥇 GOLD (XAU/USD) CATALYST PLAYBOOK & PRICE ACTION REPRICING</span>
+                  </div>
+                  <span className="px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 font-mono font-bold text-[10px] border border-amber-500/30">
+                    Expected Range: 15.0 - 35.0 Points ($15 - $35/oz)
+                  </span>
+                </div>
+                <p className="text-[11px] text-amber-100/90 leading-relaxed">
+                  {inspectedEvent.gold_impact_notes || 'All USD high-impact events directly impact Gold. High inflation or strong payroll prints strengthen Dollar yields, pushing Gold downwards. Softer prints spark rapid dovish rallies.'}
+                </p>
+                <div className="text-[10px] text-amber-400/80 pt-1 border-t border-amber-800/40 flex items-center justify-between">
+                  <span>JJ Simon Fair Price Rule: Mark candle at {inspectedEvent.time_cat || inspectedEvent.time_str} close $\to$ Fade after liquidity spike with counter-wick &le; 20%</span>
+                  <span className="text-white font-bold">Target: 1.5R + Fair Price Magnet</span>
+                </div>
               </div>
-              <p className="text-[11px] text-slate-300 leading-relaxed">
-                {inspectedEvent.market_impact_forecast || 'Macro catalyst expected to generate high volatility and spread expansion at release minute.'}
-              </p>
-              <div className="text-[10px] text-slate-400 pt-1 border-t border-blue-900/40 flex items-center justify-between">
-                <span>JJ Simon Rule: Anchor pre-news Fair Price candle $\to$ Fade after liquidity spike with counter-wick &le; 20%</span>
-                <span className="text-amber-400 font-bold">Click any row below to inspect its forecast details</span>
+            )}
+
+            {/* Dedicated Crypto Liquidity Impact Box */}
+            {inspectedEvent.is_crypto_mover && (
+              <div className="p-3 mb-2 bg-cyan-950/30 rounded-lg border border-cyan-600/40 text-xs text-slate-200 space-y-1 font-sans">
+                <div className="flex items-center gap-1.5 text-cyan-400 font-bold text-xs uppercase tracking-wide">
+                  <Sparkles className="w-4 h-4 text-cyan-400" />
+                  <span>⚡ CRYPTO (BTC / ETH) MACRO LIQUIDITY IMPACT</span>
+                </div>
+                <p className="text-[11px] text-cyan-100/90 leading-relaxed">
+                  {inspectedEvent.crypto_impact_notes || 'Bitcoin tracks global USD liquidity. Dovish releases fuel capital inflows; hawkish prints trigger fast long liquidations.'}
+                </p>
               </div>
+            )}
+
+            {/* General Macro Sensitivity Note */}
+            <div className="p-2.5 bg-blue-950/30 rounded-lg border border-blue-900/40 text-xs text-slate-300 font-sans flex items-center justify-between">
+              <span className="text-[11px] text-slate-300">
+                {inspectedEvent.market_impact_forecast || 'Macro catalyst expected to generate high orderbook volatility.'}
+              </span>
+              <span className="text-amber-400 font-bold text-[10px]">Click any row below to inspect its playbook</span>
             </div>
           </div>
         )}
@@ -681,8 +879,55 @@ export default function NewsTradingPanel({
         {/* Tab 1: Interactive Clean Feed */}
         {calendarTab === 'feed' && (
           <div className="p-4 space-y-3">
-            {/* Filter Bar with Date Dropdown, Impact, and Currency */}
+            {/* Filter Bar with Asset Class Selector, Date Dropdown, and Impact */}
             <div className="flex flex-wrap items-center justify-between gap-3 pb-2 border-b border-slate-800 text-xs">
+              {/* ASSET CLASS SELECTOR (GOLD, CRYPTO, FOREX, ALL) */}
+              <div className="flex items-center gap-1.5">
+                <span className="text-slate-400 font-mono text-[11px] flex items-center gap-1 font-bold">
+                  Asset Class:
+                </span>
+                <button
+                  onClick={() => setAssetFilter('GOLD')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-black transition flex items-center gap-1.5 ${
+                    assetFilter === 'GOLD'
+                      ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-950/50'
+                      : 'bg-slate-950 text-slate-300 hover:bg-slate-800 border border-slate-800'
+                  }`}
+                >
+                  <span>🥇 Gold & Metals (XAU/USD)</span>
+                </button>
+                <button
+                  onClick={() => setAssetFilter('CRYPTO')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-black transition flex items-center gap-1.5 ${
+                    assetFilter === 'CRYPTO'
+                      ? 'bg-cyan-500 text-slate-950 shadow-md shadow-cyan-950/50'
+                      : 'bg-slate-950 text-slate-300 hover:bg-slate-800 border border-slate-800'
+                  }`}
+                >
+                  <span>⚡ Crypto (BTC/ETH)</span>
+                </button>
+                <button
+                  onClick={() => setAssetFilter('FOREX')}
+                  className={`px-2.5 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1 ${
+                    assetFilter === 'FOREX'
+                      ? 'bg-blue-600 text-white shadow'
+                      : 'bg-slate-950 text-slate-400 hover:bg-slate-800 border border-slate-800'
+                  }`}
+                >
+                  <span>💱 Forex Majors</span>
+                </button>
+                <button
+                  onClick={() => setAssetFilter('ALL')}
+                  className={`px-2 py-1.5 rounded-lg text-xs font-bold transition ${
+                    assetFilter === 'ALL'
+                      ? 'bg-slate-700 text-white shadow'
+                      : 'bg-slate-950 text-slate-400 hover:bg-slate-800 border border-slate-800'
+                  }`}
+                >
+                  All Releases
+                </button>
+              </div>
+
               {/* Date Dropdown */}
               <div className="flex items-center gap-2">
                 <span className="text-slate-400 font-mono text-[11px] flex items-center gap-1">
@@ -739,50 +984,17 @@ export default function NewsTradingPanel({
                   All
                 </button>
               </div>
-
-              {/* Currency Filter */}
-              <div className="flex items-center gap-1.5">
-                <span className="text-slate-400 font-mono text-[11px]">Cur:</span>
-                <button
-                  onClick={() => setCurrencyFilter('AUTO')}
-                  className={`px-2 py-1 rounded text-[11px] font-bold ${
-                    currencyFilter === 'AUTO'
-                      ? 'bg-blue-600 text-white'
-                      : 'bg-slate-950 text-slate-400 hover:bg-slate-800 border border-slate-800'
-                  }`}
-                >
-                  Auto ({activeCurrencies.join(', ')})
-                </button>
-                <button
-                  onClick={() => setCurrencyFilter('USD')}
-                  className={`px-2 py-1 rounded text-[11px] font-bold ${
-                    currencyFilter === 'USD'
-                      ? 'bg-blue-600 text-white'
-                      : 'bg-slate-950 text-slate-400 hover:bg-slate-800 border border-slate-800'
-                  }`}
-                >
-                  USD
-                </button>
-                <button
-                  onClick={() => setCurrencyFilter('ALL')}
-                  className={`px-2 py-1 rounded text-[11px] font-bold ${
-                    currencyFilter === 'ALL'
-                      ? 'bg-blue-600 text-white'
-                      : 'bg-slate-950 text-slate-400 hover:bg-slate-800 border border-slate-800'
-                  }`}
-                >
-                  All FX
-                </button>
-              </div>
             </div>
 
-            {/* Economic Events Table with Actuals */}
-            <div className="overflow-x-auto rounded-lg border border-slate-800 max-h-[420px] overflow-y-auto">
+            {/* Economic Events Table with Actuals and Multiple Timezones */}
+            <div className="overflow-x-auto rounded-lg border border-slate-800 max-h-[440px] overflow-y-auto">
               <table className="w-full text-left text-xs font-mono">
                 <thead className="bg-slate-950 sticky top-0 border-b border-slate-800 text-[10px] text-slate-400 uppercase z-10">
                   <tr>
-                    <th className="py-2.5 px-3">Date / Time (ET)</th>
-                    <th className="py-2.5 px-3">Cur</th>
+                    <th className="py-2.5 px-3">
+                      {timeZoneMode === 'STACKED' ? 'Time (CAT / ET)' : timeZoneMode === 'CAT' ? 'Time (CAT)' : timeZoneMode === 'ET' ? 'Time (ET)' : 'Time (GMT)'}
+                    </th>
+                    <th className="py-2.5 px-3">Impacted Assets & Cur</th>
                     <th className="py-2.5 px-3">Impact</th>
                     <th className="py-2.5 px-3">Event Title</th>
                     <th className="py-2.5 px-3 text-right">Actual</th>
@@ -795,7 +1007,7 @@ export default function NewsTradingPanel({
                   {filteredEvents.length === 0 ? (
                     <tr>
                       <td colSpan={8} className="py-8 text-center text-slate-500 font-sans">
-                        No economic releases matching the active filter.
+                        No economic releases matching the active filter ({assetFilter} · {impactFilter}).
                       </td>
                     </tr>
                   ) : (
@@ -807,19 +1019,38 @@ export default function NewsTradingPanel({
                           onClick={() => setSelectedEventId(ev.id)}
                           className={`cursor-pointer transition ${
                             isSelected
-                              ? 'bg-blue-950/60 border-l-4 border-l-blue-500'
+                              ? 'bg-blue-950/60 border-l-4 border-l-amber-500'
                               : ev.status === 'RELEASING_NOW'
                                 ? 'bg-red-950/40 hover:bg-red-900/40'
                                 : 'hover:bg-slate-800/60'
                           }`}
                         >
-                          <td className="py-2.5 px-3 text-slate-300 whitespace-nowrap">
-                            <span className="text-[10px] text-slate-500 block">{ev.date_str}</span>
-                            <span className="font-bold">{ev.time_str}</span>
+                          {/* TIME COLUMN (FORMATTED PER TIMEZONE MODE) */}
+                          <td className="py-2.5 px-3 whitespace-nowrap">
+                            <span className="text-[10px] text-slate-500 block">{ev.date_cat || ev.date_str}</span>
+                            {renderTimeCell(ev)}
                           </td>
-                          <td className="py-2.5 px-3 font-bold text-white whitespace-nowrap">
-                            {ev.country}
+
+                          {/* IMPACTED ASSETS & CURRENCY COLUMN */}
+                          <td className="py-2.5 px-3 whitespace-nowrap">
+                            <div className="flex flex-col gap-1 items-start">
+                              <span className="font-bold text-white text-xs">{ev.country}</span>
+                              <div className="flex items-center gap-1 flex-wrap">
+                                {ev.is_gold_mover && (
+                                  <span className="px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 font-bold text-[9px] border border-amber-500/40">
+                                    🥇 GOLD
+                                  </span>
+                                )}
+                                {ev.is_crypto_mover && (
+                                  <span className="px-1.5 py-0.2 rounded bg-cyan-500/20 text-cyan-300 font-bold text-[9px] border border-cyan-500/40">
+                                    ⚡ CRYPTO
+                                  </span>
+                                )}
+                              </div>
+                            </div>
                           </td>
+
+                          {/* IMPACT BADGE */}
                           <td className="py-2.5 px-3 whitespace-nowrap">
                             <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold ${
                               ev.impact === 'High'
@@ -838,11 +1069,14 @@ export default function NewsTradingPanel({
                               {ev.impact}
                             </span>
                           </td>
+
+                          {/* EVENT TITLE */}
                           <td className="py-2.5 px-3 text-white font-sans font-medium text-xs max-w-[260px] truncate">
-                            <span className={isSelected ? 'text-blue-300 font-bold' : ''}>
+                            <span className={isSelected ? 'text-amber-300 font-bold' : ''}>
                               {ev.title}
                             </span>
                           </td>
+
                           {/* ACTUAL COLUMN */}
                           <td className="py-2.5 px-3 text-right whitespace-nowrap">
                             {ev.actual !== '—' ? (
@@ -887,7 +1121,7 @@ export default function NewsTradingPanel({
             </div>
 
             <div className="flex items-center justify-between text-[10px] text-slate-500 pt-1">
-              <span>Source: Forex Factory Live Data Feed (NFS / Fair Economy Media & Live HTML Actuals)</span>
+              <span>Source: Forex Factory Live Data Feed (NFS & Live HTML Actuals) • Formatted in Central Africa Time (CAT) & New York Time (ET)</span>
               <span>Updated: {lastRefreshed || 'Just now'}</span>
             </div>
           </div>

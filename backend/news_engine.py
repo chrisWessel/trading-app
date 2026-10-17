@@ -36,9 +36,11 @@ import requests
 try:
     from zoneinfo import ZoneInfo
     ET = ZoneInfo("America/New_York")
+    HARARE = ZoneInfo("Africa/Harare")  # Central Africa Time (CAT, UTC+2)
     UTC = ZoneInfo("UTC")
 except Exception:
     ET = dt.timezone(dt.timedelta(hours=-5))
+    HARARE = dt.timezone(dt.timedelta(hours=2))
     UTC = dt.timezone.utc
 
 # ── Forex Factory Feed Configuration ──────────────────────────────────────────
@@ -249,27 +251,64 @@ def fetch_forex_factory_calendar(force_refresh: bool = False) -> List[Dict[str, 
             impact_color = "yellow"
             impact_weight = 1
 
-        # Format date & time in ET
+        # Format date & time across timezones: ET, CAT (Harare), and GMT (UTC)
         event_et = event_dt.astimezone(ET) if hasattr(event_dt, "astimezone") else event_dt
-        time_str = event_et.strftime("%H:%M ET")
+        event_cat = event_dt.astimezone(HARARE) if hasattr(event_dt, "astimezone") else event_dt
+        event_gmt = event_dt.astimezone(UTC) if hasattr(event_dt, "astimezone") else event_dt
+
+        time_et = event_et.strftime("%H:%M ET")
+        time_cat = event_cat.strftime("%H:%M CAT")
+        time_gmt = event_gmt.strftime("%H:%M GMT")
+        time_str = time_et  # legacy compatibility
         date_str = event_et.strftime("%a, %b %d")
+        date_cat = event_cat.strftime("%a, %b %d")
         date_iso_day = event_et.strftime("%Y-%m-%d")
 
-        # Market impact forecast
-        market_impact_forecast = ""
+        # Market impact forecast & Asset identification
         t_low = title.lower()
+        is_gold_mover = (country == "USD") or ("gold" in t_low)
+        is_crypto_mover = (country == "USD") and any(w in t_low for w in ["rate", "fomc", "cpi", "nfp", "payroll", "gdp", "pmi"])
+
+        impacted_assets: List[str] = []
+        if country == "USD":
+            impacted_assets = ["🥇 XAU/USD (Gold)", "⚡ BTC / Crypto", "💵 USD"]
+        elif country == "EUR":
+            impacted_assets = ["💶 EUR/USD", "EUR Pairs"]
+        elif country == "GBP":
+            impacted_assets = ["💷 GBP/USD", "GBP Pairs"]
+        elif country == "JPY":
+            impacted_assets = ["💴 USD/JPY", "🥇 Gold (Risk-Off)"]
+        else:
+            impacted_assets = [f"{country} Pairs"]
+
+        market_impact_forecast = ""
+        gold_impact_notes = ""
+        crypto_impact_notes = ""
+
         if "cpi" in t_low or "inflation" in t_low or "ppi" in t_low:
             market_impact_forecast = f"Inflation Gauge: Higher actual typically strengthens {country} and creates a sharp downward drop on Gold & risk assets."
+            gold_impact_notes = "High Inflation (Beat) = Bearish Gold ($15-$30 drop) as rate cut expectations drop. Lower Inflation (Miss) = Bullish Gold ($20-$40 rally) on yields plunge."
+            crypto_impact_notes = "Cooling inflation fuels liquidity into Bitcoin & Crypto; hotter inflation causes risk-off stop runs."
         elif "employment" in t_low or "nfp" in t_low or "payroll" in t_low or "claims" in t_low:
             market_impact_forecast = f"Labor Market Driver: Stronger numbers support {country} yields; lower numbers trigger rapid dovish rallies."
+            gold_impact_notes = "Strong Payrolls/Labor = Bearish Gold (DXY surge). Weak Labor/High Claims = Bullish Gold (Dovish pivot rally)."
+            crypto_impact_notes = "High unemployment claims weaken Dollar and spark upside momentum in BTC/ETH."
         elif "rate" in t_low or "fomc" in t_low or "ecb" in t_low or "monetary" in t_low:
             market_impact_forecast = f"Central Bank Policy: Hawkish outcomes rally {country}; rate cuts or dovish guidance fuel risk asset and Gold surges."
+            gold_impact_notes = "Fed Rate Decision / FOMC: Highest-impact Gold mover of all. Spikes can extend $30-$50 before fading to Fair Price."
+            crypto_impact_notes = "Fed Rate cuts trigger macro crypto bull expansions; rate hikes contract crypto valuations."
         elif "retail" in t_low or "sales" in t_low:
             market_impact_forecast = f"Consumer Demand: Higher numbers show resilient spending, reinforcing {country} strength."
+            gold_impact_notes = "Strong consumer retail spending mildly strengthens Dollar and puts pressure on Gold ($10-$20 range)."
+            crypto_impact_notes = "Consumer health signals economic growth, giving secondary support to crypto liquidity."
         elif "gdp" in t_low or "pmi" in t_low:
             market_impact_forecast = f"Economic Growth Benchmark: Prints above forecast validate expansion and drive institutional volume."
+            gold_impact_notes = "Strong GDP/PMI reduces safe-haven demand for Gold; contraction prints spark swift Gold buying."
+            crypto_impact_notes = "Expansionary PMI (> 50.0) creates favorable risk appetite for digital assets."
         else:
             market_impact_forecast = f"Macro Volatility Catalyst: High orderbook fluctuation expected. Watch pre-news Fair Price level."
+            if is_gold_mover:
+                gold_impact_notes = "USD Macro Event: Gold inversely tracks initial Dollar reaction. Wait for Fair Price mean reversion."
 
         enriched.append({
             "id": f"ff_{country}_{idx}_{int(event_dt.timestamp())}",
@@ -280,13 +319,23 @@ def fetch_forex_factory_calendar(force_refresh: bool = False) -> List[Dict[str, 
             "impact_weight": impact_weight,
             "date_iso": event_dt.isoformat(),
             "date_str": date_str,
+            "date_cat": date_cat,
             "date_iso_day": date_iso_day,
             "time_str": time_str,
+            "time_et": time_et,
+            "time_cat": time_cat,
+            "time_gmt": time_gmt,
+            "time_stacked": f"{time_cat} · {time_et}",
+            "is_gold_mover": is_gold_mover,
+            "is_crypto_mover": is_crypto_mover,
+            "impacted_assets": impacted_assets,
             "forecast": forecast or "—",
             "previous": previous or "—",
             "actual": actual or "—",
             "actual_sentiment": actual_sentiment,
             "market_impact_forecast": market_impact_forecast,
+            "gold_impact_notes": gold_impact_notes,
+            "crypto_impact_notes": crypto_impact_notes,
             "diff_minutes": diff_minutes,
             "status": status,
             "countdown": countdown,
