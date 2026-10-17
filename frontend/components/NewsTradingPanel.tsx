@@ -1,0 +1,802 @@
+'use client';
+
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import {
+  Calendar, Flame, ShieldAlert, Compass, Target, Shield, Clock,
+  TrendingDown, TrendingUp, AlertTriangle, ArrowRight, CheckCircle2,
+  XCircle, ExternalLink, RefreshCw, Filter, Sparkles, HelpCircle,
+  ChevronDown, ChevronRight, Eye, Play, BarChart2, Radio, Info, Layers
+} from 'lucide-react';
+import { API_BASE_URL } from '@/lib/apiConfig';
+
+export interface NewsStrategyPublish {
+  setup: {
+    type: string;
+    direction: string;
+    phase: string;
+    confidence: number;
+    entry_price: number;
+    stop_loss: number;
+    take_profit_1_5r: number;
+    take_profit_fair: number;
+    fair_price: number;
+    risk_points: number;
+    reward_points_1_5r: number;
+    rr_ratio_1_5r: number;
+    counter_wick_ratio: number;
+    counter_wick_valid: boolean;
+    counter_wick_notes: string;
+    atr14: number;
+  } | null;
+  chartLines: Array<{
+    price: number;
+    color: string;
+    title: string;
+    lineWidth?: 1 | 2 | 3 | 4;
+    lineStyle?: 0 | 1 | 2 | 3 | 4;
+  }>;
+}
+
+interface EconomicEvent {
+  id: string;
+  title: string;
+  country: string;
+  impact: 'High' | 'Medium' | 'Low' | 'Holiday';
+  impact_color: 'red' | 'orange' | 'yellow' | 'gray';
+  impact_weight: number;
+  date_iso: string;
+  date_str: string;
+  time_str: string;
+  forecast: string;
+  previous: string;
+  diff_minutes: number;
+  status: 'UPCOMING' | 'RELEASING_SOON' | 'RELEASING_NOW' | 'RECENT' | 'PAST';
+  countdown: string;
+  is_red_folder: boolean;
+}
+
+interface MarkedCandle {
+  tag: 'FAIR_PRICE' | 'NEWS_SPIKE' | 'ENTRY_TRIGGER';
+  badge: string;
+  price: number;
+  time: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  counter_wick_ratio?: number;
+  counter_wick_valid?: boolean;
+  role: string;
+}
+
+interface ProjectionStep {
+  step: number;
+  title: string;
+  desc: string;
+}
+
+interface NewsAnalysisResponse {
+  status: string;
+  symbol: string;
+  timeframe: string;
+  data_source: string;
+  current_price: number;
+  active_news_event: EconomicEvent | null;
+  upcoming_events: EconomicEvent[];
+  all_relevant_events: EconomicEvent[];
+  setup: NewsStrategyPublish['setup'];
+  projection: {
+    summary: string;
+    steps: ProjectionStep[];
+    target_price: number;
+    ultimate_target: number;
+  } | null;
+  marked_candles: MarkedCandle[];
+  chart_lines: NewsStrategyPublish['chartLines'];
+}
+
+interface NewsTradingPanelProps {
+  symbol: string;
+  timeframe: string;
+  onPublish?: (data: NewsStrategyPublish) => void;
+  onAutoFillTrade?: (tradeParams: any) => void;
+}
+
+export default function NewsTradingPanel({
+  symbol,
+  timeframe,
+  onPublish,
+  onAutoFillTrade,
+}: NewsTradingPanelProps) {
+  const [data, setData] = useState<NewsAnalysisResponse | null>(null);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [calendarEvents, setCalendarEvents] = useState<EconomicEvent[]>([]);
+  const [calLoading, setCalLoading] = useState<boolean>(true);
+  const [impactFilter, setImpactFilter] = useState<'ALL' | 'HIGH_ONLY' | 'MED_HIGH'>('HIGH_ONLY');
+  const [currencyFilter, setCurrencyFilter] = useState<'AUTO' | 'USD' | 'EUR' | 'GBP' | 'ALL'>('AUTO');
+  const [calendarTab, setCalendarTab] = useState<'feed' | 'webview'>('feed');
+  const [showEducation, setShowEducation] = useState<boolean>(false);
+  const [lastRefreshed, setLastRefreshed] = useState<string>('');
+
+  const fetchAnalysis = useCallback(async () => {
+    try {
+      const res = await fetch(
+        `${API_BASE_URL}/api/news/analysis?symbol=${encodeURIComponent(symbol)}&timeframe=${encodeURIComponent(timeframe)}`,
+        { cache: 'no-store' }
+      );
+      if (res.ok) {
+        const json: NewsAnalysisResponse = await res.json();
+        setData(json);
+        if (onPublish) {
+          onPublish({
+            setup: json.setup,
+            chartLines: json.chart_lines || [],
+          });
+        }
+      }
+    } catch (e) {
+      console.error('Error fetching news analysis:', e);
+    } finally {
+      setLoading(false);
+    }
+  }, [symbol, timeframe, onPublish]);
+
+  const fetchCalendar = useCallback(async () => {
+    setCalLoading(true);
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/news/calendar`, { cache: 'no-store' });
+      if (res.ok) {
+        const json = await res.json();
+        setCalendarEvents(json.events || []);
+      }
+    } catch (e) {
+      console.error('Error fetching calendar:', e);
+    } finally {
+      setCalLoading(false);
+      const d = new Date();
+      setLastRefreshed(`${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}:${d.getSeconds().toString().padStart(2, '0')}`);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchAnalysis();
+    fetchCalendar();
+    const interval = setInterval(fetchAnalysis, 8000);
+    const calInterval = setInterval(fetchCalendar, 60000);
+    return () => {
+      clearInterval(interval);
+      clearInterval(calInterval);
+    };
+  }, [fetchAnalysis, fetchCalendar]);
+
+  // Currency matching
+  const activeCurrencies = useMemo(() => {
+    const s = symbol.toUpperCase();
+    if (s.includes('XAU') || s.includes('GOLD') || s.includes('BTC') || s.includes('ETH') || s.includes('SOL') || s.includes('REXT')) {
+      return ['USD'];
+    }
+    if (s.includes('EURUSD')) return ['EUR', 'USD'];
+    if (s.includes('GBPUSD')) return ['GBP', 'USD'];
+    if (s.includes('USDJPY')) return ['USD', 'JPY'];
+    if (s.includes('AUDUSD')) return ['AUD', 'USD'];
+    if (s.includes('USDCAD')) return ['USD', 'CAD'];
+    if (s.includes('USDCHF')) return ['USD', 'CHF'];
+    return ['USD'];
+  }, [symbol]);
+
+  // Filtered calendar events
+  const filteredEvents = useMemo(() => {
+    return calendarEvents.filter((ev) => {
+      // Impact filter
+      if (impactFilter === 'HIGH_ONLY' && ev.impact !== 'High') return false;
+      if (impactFilter === 'MED_HIGH' && ev.impact !== 'High' && ev.impact !== 'Medium') return false;
+
+      // Currency filter
+      if (currencyFilter === 'AUTO') {
+        return activeCurrencies.includes(ev.country);
+      }
+      if (currencyFilter !== 'ALL' && ev.country !== currencyFilter) {
+        return false;
+      }
+      return true;
+    });
+  }, [calendarEvents, impactFilter, currencyFilter, activeCurrencies]);
+
+  // Nearest upcoming high-impact event
+  const nextHighImpact = useMemo(() => {
+    return calendarEvents.find((e) => e.impact === 'High' && e.diff_minutes >= -5);
+  }, [calendarEvents]);
+
+  const setup = data?.setup;
+  const projection = data?.projection;
+  const isLong = setup?.direction === 'BUY/LONG';
+  const isShort = setup?.direction === 'SELL/SHORT';
+  const isEntryReady = setup?.phase === 'ENTRY_READY';
+
+  const handleCopyLevelsToPaperTrade = () => {
+    if (!setup || !onAutoFillTrade) return;
+    onAutoFillTrade({
+      symbol,
+      signalType: isShort ? 'SELL/SHORT' : 'BUY/LONG',
+      entryPrice: setup.entry_price,
+      stopLoss: setup.stop_loss,
+      takeProfit: setup.take_profit_1_5r,
+      setupName: `News Fair Price Reversion (${setup.direction})`,
+      rationale: `JJ Simon News Strategy: Fair Price at ${setup.fair_price}, Counter-Wick at ${setup.counter_wick_ratio}%, 1.5R Target`,
+    });
+  };
+
+  return (
+    <div className="flex flex-col gap-4 text-slate-100">
+      {/* ── TOP BANNER: Real-Time News Strategy Action Card ── */}
+      <div className={`p-4 rounded-xl border transition-all ${
+        isEntryReady
+          ? isLong
+            ? 'bg-gradient-to-r from-emerald-950/80 via-slate-900 to-emerald-950/80 border-emerald-500/50 shadow-lg shadow-emerald-950/40'
+            : 'bg-gradient-to-r from-rose-950/80 via-slate-900 to-rose-950/80 border-rose-500/50 shadow-lg shadow-rose-950/40'
+          : setup?.direction === 'WAIT'
+            ? 'bg-slate-900/90 border-slate-800'
+            : 'bg-amber-950/40 border-amber-500/40'
+      }`}>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <div className={`p-2.5 rounded-lg ${
+              isEntryReady
+                ? isLong ? 'bg-emerald-500/20 text-emerald-400' : 'bg-rose-500/20 text-rose-400'
+                : 'bg-amber-500/20 text-amber-400'
+            }`}>
+              {isLong ? <TrendingUp className="w-6 h-6" /> : isShort ? <TrendingDown className="w-6 h-6" /> : <Clock className="w-6 h-6" />}
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs uppercase tracking-wider font-bold text-slate-400">
+                  JJ SIMON FAIR PRICE NEWS STRATEGY
+                </span>
+                <span className={`px-2 py-0.5 text-[10px] font-bold rounded-full ${
+                  isEntryReady
+                    ? 'bg-emerald-500 text-slate-950 font-black animate-pulse'
+                    : 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                }`}>
+                  {setup?.phase.replace(/_/g, ' ') || 'ANALYZING'}
+                </span>
+              </div>
+              <h2 className="text-lg font-black tracking-tight text-white flex items-center gap-2">
+                {isEntryReady
+                  ? `${setup?.direction === 'BUY/LONG' ? '🟢 BUY / LONG' : '🔴 SELL / SHORT'} ENTRY CONFIRMED`
+                  : setup?.direction === 'WAIT'
+                    ? 'STANDBY: TRADING AT FAIR PRICE EQUILIBRIUM'
+                    : 'IMPULSE ACTIVE: AWAITING EXHAUSTION DISPLACEMENT'}
+                <span className="text-xs font-normal text-slate-400">
+                  ({setup?.confidence || 0}% Win-Probability Metric)
+                </span>
+              </h2>
+            </div>
+          </div>
+
+          {/* Action Button: Auto-fill Trade */}
+          {setup && setup.direction !== 'WAIT' && (
+            <button
+              onClick={handleCopyLevelsToPaperTrade}
+              className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg font-bold text-xs shadow-md shadow-blue-900/40 transition active:scale-95"
+            >
+              <Play className="w-4 h-4 fill-white" />
+              Pre-fill in Paper Desk
+            </button>
+          )}
+        </div>
+
+        {/* Trade Execution Metrics Row */}
+        {setup && (
+          <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5 mt-3 pt-3 border-t border-slate-800 text-xs font-mono">
+            {/* Entry Price */}
+            <div className="bg-slate-950/70 p-2.5 rounded-lg border border-slate-800">
+              <span className="text-[10px] text-slate-400 block font-sans">RECOMMENDED ENTRY</span>
+              <span className="text-sm font-bold text-blue-400">
+                ${setup.entry_price > 0 ? setup.entry_price.toFixed(2) : '---'}
+              </span>
+            </div>
+
+            {/* Stop Loss with ATR */}
+            <div className="bg-slate-950/70 p-2.5 rounded-lg border border-rose-900/40">
+              <span className="text-[10px] text-rose-400 block font-sans">STOP LOSS (ATR BUFFER)</span>
+              <span className="text-sm font-bold text-rose-300">
+                ${setup.stop_loss > 0 ? setup.stop_loss.toFixed(2) : '---'}
+              </span>
+              <span className="text-[9px] text-slate-500 block">Risk: {setup.risk_points.toFixed(2)} pts</span>
+            </div>
+
+            {/* 1.5R Take Profit */}
+            <div className="bg-slate-950/70 p-2.5 rounded-lg border border-emerald-900/40">
+              <span className="text-[10px] text-emerald-400 block font-sans">TARGET 1 (1.5R PROJECTION)</span>
+              <span className="text-sm font-bold text-emerald-300">
+                ${setup.take_profit_1_5r > 0 ? setup.take_profit_1_5r.toFixed(2) : '---'}
+              </span>
+              <span className="text-[9px] text-emerald-500/80 block">Reward: {setup.reward_points_1_5r.toFixed(2)} pts (1:{setup.rr_ratio_1_5r})</span>
+            </div>
+
+            {/* Pre-News Fair Price Magnet */}
+            <div className="bg-slate-950/70 p-2.5 rounded-lg border border-amber-900/40">
+              <span className="text-[10px] text-amber-400 block font-sans">PRE-NEWS FAIR PRICE</span>
+              <span className="text-sm font-bold text-amber-300">
+                ${setup.fair_price > 0 ? setup.fair_price.toFixed(2) : '---'}
+              </span>
+              <span className="text-[9px] text-amber-500/80 block">Institutional Equilibrium</span>
+            </div>
+
+            {/* Counter-Wick 20% Rule Meter */}
+            <div className={`p-2.5 rounded-lg border ${
+              setup.counter_wick_valid
+                ? 'bg-slate-950/70 border-emerald-600/50'
+                : 'bg-rose-950/30 border-rose-600/50'
+            }`}>
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] text-slate-400 font-sans">COUNTER-WICK RULE</span>
+                <span className={`text-[10px] font-black ${setup.counter_wick_valid ? 'text-emerald-400' : 'text-rose-400'}`}>
+                  {setup.counter_wick_ratio}% {setup.counter_wick_valid ? '✓ PASS' : '✗ FAIL'}
+                </span>
+              </div>
+              <div className="w-full bg-slate-800 h-1.5 rounded-full mt-1.5 overflow-hidden">
+                <div
+                  className={`h-full rounded-full ${setup.counter_wick_valid ? 'bg-emerald-500' : 'bg-rose-500'}`}
+                  style={{ width: `${Math.min(setup.counter_wick_ratio, 100)}%` }}
+                />
+              </div>
+              <span className="text-[9px] text-slate-500 block mt-1">Must be &le; 20% of range</span>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* ── 2-COLUMN SECTION: MARKET PROJECTION & MARKED CANDLES ── */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        {/* Market Direction & Path Projection */}
+        <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 flex flex-col justify-between">
+          <div>
+            <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+              <div className="flex items-center gap-2">
+                <Compass className="w-4 h-4 text-blue-400" />
+                <h3 className="text-xs font-bold text-slate-200 uppercase tracking-wide">
+                  Projected Market Direction & Trajectory
+                </h3>
+              </div>
+              <span className="text-[10px] font-mono text-slate-400">
+                Expected Path
+              </span>
+            </div>
+
+            <div className="my-3 p-3 bg-slate-950 rounded-lg border border-slate-800">
+              <div className="flex items-center gap-2">
+                <Target className="w-4 h-4 text-emerald-400 shrink-0" />
+                <div className="text-xs font-bold text-white">
+                  {projection?.summary || 'Analyzing price vector...'}
+                </div>
+              </div>
+              <p className="text-[11px] text-slate-400 mt-1 leading-relaxed">
+                {setup?.direction === 'SELL/SHORT'
+                  ? 'Price tapped high premium liquidity following the news injection and met strong rejection. The market is projected to revert back toward pre-news Fair Price.'
+                  : setup?.direction === 'BUY/LONG'
+                    ? 'Price swept discount sell stops on the news drop and snapped back with heavy buying displacement. Projected to mean-revert toward pre-news Fair Price.'
+                    : 'Market is holding near pre-news baseline. Stand by for the news catalyst to initiate liquidity grab before triggering the mean-reversion move.'}
+              </p>
+            </div>
+
+            {/* Stepper Roadmap */}
+            <div className="space-y-2.5">
+              {projection?.steps.map((st) => (
+                <div key={st.step} className="flex items-start gap-2.5 text-xs">
+                  <div className="flex items-center justify-center w-5 h-5 rounded-full bg-blue-950 border border-blue-600/60 text-blue-300 font-bold text-[10px] shrink-0 mt-0.5">
+                    {st.step}
+                  </div>
+                  <div>
+                    <span className="font-bold text-slate-200 block text-xs">{st.title}</span>
+                    <span className="text-[11px] text-slate-400 leading-snug">{st.desc}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="mt-4 pt-3 border-t border-slate-800 flex items-center justify-between text-[11px] text-slate-400">
+            <span className="flex items-center gap-1.5">
+              <Shield className="w-3.5 h-3.5 text-slate-500" />
+              Dynamic Invalidation: Stop Loss at structural wick extreme + 0.5 ATR
+            </span>
+            <span className="font-mono text-emerald-400 font-bold">Target 1: 1.5R</span>
+          </div>
+        </div>
+
+        {/* Marked Candles Card */}
+        <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 flex flex-col justify-between">
+          <div>
+            <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+              <div className="flex items-center gap-2">
+                <BarChart2 className="w-4 h-4 text-amber-400" />
+                <h3 className="text-xs font-bold text-slate-200 uppercase tracking-wide">
+                  Marked Strategy Candles (JJ Simon Anchors)
+                </h3>
+              </div>
+              <span className="text-[10px] font-mono text-slate-400">
+                1-Minute Precision
+              </span>
+            </div>
+
+            <p className="text-[11px] text-slate-400 my-2">
+              The engine marks key institutional candles on your chart to execute without emotion:
+            </p>
+
+            <div className="space-y-2 mt-2">
+              {data?.marked_candles.map((mc, idx) => (
+                <div key={idx} className="bg-slate-950 p-2.5 rounded-lg border border-slate-800/80">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${
+                      mc.tag === 'FAIR_PRICE'
+                        ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
+                        : mc.tag === 'NEWS_SPIKE'
+                          ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30'
+                          : 'bg-blue-500/20 text-blue-400 border border-blue-500/30'
+                    }`}>
+                      {mc.badge}
+                    </span>
+                    <span className="text-xs font-mono font-bold text-white">
+                      ${mc.price.toFixed(2)}
+                    </span>
+                  </div>
+                  <div className="text-[11px] text-slate-400">
+                    {mc.role}
+                  </div>
+                  <div className="grid grid-cols-4 gap-1 text-[10px] font-mono text-slate-500 mt-1.5 pt-1 border-t border-slate-900">
+                    <span>O: {mc.open.toFixed(2)}</span>
+                    <span>H: {mc.high.toFixed(2)}</span>
+                    <span>L: {mc.low.toFixed(2)}</span>
+                    <span>C: {mc.close.toFixed(2)}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="mt-3 pt-2 text-[10px] text-slate-500 flex items-center justify-between">
+            <span>Chart overlays: Gold = Fair Price, Purple = Spike High/Low, Blue = Entry</span>
+            <span className="text-amber-400 font-bold">Auto-plotted on TradingView above</span>
+          </div>
+        </div>
+      </div>
+
+      {/* ── FOREX FACTORY NEWS EMBEDDED VIEWER (IN-APP) ── */}
+      <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
+        {/* Calendar Header with Controls */}
+        <div className="p-3.5 bg-slate-950 border-b border-slate-800 flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-2.5">
+            <div className="p-2 rounded-lg bg-red-500/20 text-red-400">
+              <Calendar className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h3 className="text-sm font-bold text-white tracking-wide">
+                  FOREX FACTORY ECONOMIC CALENDAR (EMBEDDED)
+                </h3>
+                <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-red-500/20 text-red-300 border border-red-500/30 flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-red-400 animate-pulse" />
+                  LIVE FEED
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-400">
+                View real-time high-impact releases directly without leaving the app
+              </p>
+            </div>
+          </div>
+
+          {/* View Mode Toggle: Interactive Table vs Web Browser Frame */}
+          <div className="flex items-center gap-2">
+            <div className="flex bg-slate-900 p-0.5 rounded-lg border border-slate-800 text-xs">
+              <button
+                onClick={() => setCalendarTab('feed')}
+                className={`px-3 py-1 rounded-md font-bold transition ${
+                  calendarTab === 'feed'
+                    ? 'bg-blue-600 text-white shadow'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                📊 Interactive Calendar Feed
+              </button>
+              <button
+                onClick={() => setCalendarTab('webview')}
+                className={`px-3 py-1 rounded-md font-bold transition flex items-center gap-1 ${
+                  calendarTab === 'webview'
+                    ? 'bg-blue-600 text-white shadow'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                <Eye className="w-3.5 h-3.5" />
+                Forex Factory Web Frame
+              </button>
+            </div>
+
+            <button
+              onClick={fetchCalendar}
+              disabled={calLoading}
+              title="Refresh Forex Factory news"
+              className="p-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 transition"
+            >
+              <RefreshCw className={`w-4 h-4 ${calLoading ? 'animate-spin text-blue-400' : ''}`} />
+            </button>
+          </div>
+        </div>
+
+        {/* Next Major Catalyst Alert Ribbon */}
+        {nextHighImpact && (
+          <div className="bg-gradient-to-r from-red-950/60 via-slate-900 to-red-950/60 px-4 py-2 border-b border-red-900/40 flex items-center justify-between text-xs">
+            <div className="flex items-center gap-2">
+              <span className="p-1 bg-red-500/20 rounded text-red-400 font-bold text-[10px]">
+                🚨 NEXT HIGH-IMPACT RELEASE
+              </span>
+              <span className="font-bold text-white font-mono">{nextHighImpact.country} {nextHighImpact.title}</span>
+              <span className="text-slate-400 font-mono">({nextHighImpact.time_str})</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-slate-400">Countdown:</span>
+              <span className="px-2 py-0.5 rounded bg-red-600 text-white font-mono font-black text-xs animate-pulse">
+                {nextHighImpact.countdown}
+              </span>
+            </div>
+          </div>
+        )}
+
+        {/* Tab 1: Interactive Clean Feed */}
+        {calendarTab === 'feed' && (
+          <div className="p-4 space-y-3">
+            {/* Filter Bar */}
+            <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-slate-800 text-xs">
+              <div className="flex items-center gap-2">
+                <span className="text-slate-400 font-mono text-[11px] flex items-center gap-1">
+                  <Filter className="w-3 h-3 text-slate-500" /> Filter Impact:
+                </span>
+                <button
+                  onClick={() => setImpactFilter('HIGH_ONLY')}
+                  className={`px-2 py-1 rounded text-[11px] font-bold ${
+                    impactFilter === 'HIGH_ONLY'
+                      ? 'bg-red-500 text-white'
+                      : 'bg-slate-950 text-slate-400 hover:bg-slate-800 border border-slate-800'
+                  }`}
+                >
+                  🔴 High Impact Only (Red)
+                </button>
+                <button
+                  onClick={() => setImpactFilter('MED_HIGH')}
+                  className={`px-2 py-1 rounded text-[11px] font-bold ${
+                    impactFilter === 'MED_HIGH'
+                      ? 'bg-amber-500 text-slate-950'
+                      : 'bg-slate-950 text-slate-400 hover:bg-slate-800 border border-slate-800'
+                  }`}
+                >
+                  🟠 Medium + High
+                </button>
+                <button
+                  onClick={() => setImpactFilter('ALL')}
+                  className={`px-2 py-1 rounded text-[11px] font-bold ${
+                    impactFilter === 'ALL'
+                      ? 'bg-blue-600 text-white'
+                      : 'bg-slate-950 text-slate-400 hover:bg-slate-800 border border-slate-800'
+                  }`}
+                >
+                  All Releases
+                </button>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <span className="text-slate-400 font-mono text-[11px]">Currency:</span>
+                <button
+                  onClick={() => setCurrencyFilter('AUTO')}
+                  className={`px-2 py-1 rounded text-[11px] font-bold ${
+                    currencyFilter === 'AUTO'
+                      ? 'bg-blue-600 text-white'
+                      : 'bg-slate-950 text-slate-400 hover:bg-slate-800 border border-slate-800'
+                  }`}
+                >
+                  Auto ({activeCurrencies.join(', ')})
+                </button>
+                <button
+                  onClick={() => setCurrencyFilter('USD')}
+                  className={`px-2 py-1 rounded text-[11px] font-bold ${
+                    currencyFilter === 'USD'
+                      ? 'bg-blue-600 text-white'
+                      : 'bg-slate-950 text-slate-400 hover:bg-slate-800 border border-slate-800'
+                  }`}
+                >
+                  USD
+                </button>
+                <button
+                  onClick={() => setCurrencyFilter('ALL')}
+                  className={`px-2 py-1 rounded text-[11px] font-bold ${
+                    currencyFilter === 'ALL'
+                      ? 'bg-blue-600 text-white'
+                      : 'bg-slate-950 text-slate-400 hover:bg-slate-800 border border-slate-800'
+                  }`}
+                >
+                  All FX
+                </button>
+              </div>
+            </div>
+
+            {/* Economic Events Table */}
+            <div className="overflow-x-auto rounded-lg border border-slate-800 max-h-[380px] overflow-y-auto">
+              <table className="w-full text-left text-xs font-mono">
+                <thead className="bg-slate-950 sticky top-0 border-b border-slate-800 text-[10px] text-slate-400 uppercase">
+                  <tr>
+                    <th className="py-2 px-3">Date / Time (ET)</th>
+                    <th className="py-2 px-3">Cur</th>
+                    <th className="py-2 px-3">Impact</th>
+                    <th className="py-2 px-3">Event</th>
+                    <th className="py-2 px-3 text-right">Forecast</th>
+                    <th className="py-2 px-3 text-right">Previous</th>
+                    <th className="py-2 px-3 text-center">Status / Countdown</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-850 bg-slate-900/60">
+                  {filteredEvents.length === 0 ? (
+                    <tr>
+                      <td colSpan={7} className="py-6 text-center text-slate-500 font-sans">
+                        No economic releases matching the active filter.
+                      </td>
+                    </tr>
+                  ) : (
+                    filteredEvents.map((ev) => (
+                      <tr
+                        key={ev.id}
+                        className={`hover:bg-slate-800/50 transition ${
+                          ev.status === 'RELEASING_NOW' ? 'bg-red-950/30' : ''
+                        }`}
+                      >
+                        <td className="py-2.5 px-3 text-slate-300 whitespace-nowrap">
+                          <span className="text-[10px] text-slate-500 block">{ev.date_str}</span>
+                          <span className="font-bold">{ev.time_str}</span>
+                        </td>
+                        <td className="py-2.5 px-3 font-bold text-white whitespace-nowrap">
+                          {ev.country}
+                        </td>
+                        <td className="py-2.5 px-3 whitespace-nowrap">
+                          <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold ${
+                            ev.impact === 'High'
+                              ? 'bg-red-500/20 text-red-400 border border-red-500/40'
+                              : ev.impact === 'Medium'
+                                ? 'bg-amber-500/20 text-amber-400 border border-amber-500/40'
+                                : 'bg-yellow-500/20 text-yellow-300 border border-yellow-500/30'
+                          }`}>
+                            <span className={`w-2 h-2 rounded-full ${
+                              ev.impact === 'High'
+                                ? 'bg-red-500'
+                                : ev.impact === 'Medium'
+                                  ? 'bg-amber-500'
+                                  : 'bg-yellow-400'
+                            }`} />
+                            {ev.impact}
+                          </span>
+                        </td>
+                        <td className="py-2.5 px-3 text-white font-sans font-medium text-xs max-w-[280px] truncate">
+                          {ev.title}
+                        </td>
+                        <td className="py-2.5 px-3 text-right text-slate-300">
+                          {ev.forecast}
+                        </td>
+                        <td className="py-2.5 px-3 text-right text-slate-400">
+                          {ev.previous}
+                        </td>
+                        <td className="py-2.5 px-3 text-center whitespace-nowrap">
+                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                            ev.status === 'RELEASING_NOW'
+                              ? 'bg-red-600 text-white animate-pulse'
+                              : ev.status === 'RELEASING_SOON'
+                                ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                                : ev.status === 'UPCOMING'
+                                  ? 'bg-blue-950 text-blue-300 border border-blue-800'
+                                  : 'text-slate-500'
+                          }`}>
+                            {ev.countdown}
+                          </span>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="flex items-center justify-between text-[10px] text-slate-500 pt-1">
+              <span>Source: Forex Factory Live Data Feed (NFS / Fair Economy Media)</span>
+              <span>Updated: {lastRefreshed || 'Just now'}</span>
+            </div>
+          </div>
+        )}
+
+        {/* Tab 2: Embedded Web Browser Frame */}
+        {calendarTab === 'webview' && (
+          <div className="p-4 space-y-3">
+            <div className="p-3 bg-slate-950 rounded-lg border border-slate-800 flex items-center justify-between text-xs">
+              <span className="text-slate-300">
+                Direct Forex Factory calendar interface embedded inside the workspace:
+              </span>
+              <a
+                href="https://www.forexfactory.com/calendar"
+                target="_blank"
+                rel="noreferrer"
+                className="flex items-center gap-1.5 px-3 py-1 bg-blue-600 hover:bg-blue-500 text-white rounded font-bold transition text-xs"
+              >
+                <span>Open in Full Browser</span>
+                <ExternalLink className="w-3.5 h-3.5" />
+              </a>
+            </div>
+
+            <div className="w-full h-[520px] rounded-lg border border-slate-800 overflow-hidden bg-slate-950 relative">
+              <iframe
+                src="https://www.forexfactory.com/calendar"
+                title="Forex Factory Calendar"
+                className="w-full h-full border-0"
+                sandbox="allow-scripts allow-same-origin allow-popups allow-forms"
+              />
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* ── EDUCATIONAL GUIDE ACCORDION (JJ Simon Framework Explained) ── */}
+      <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
+        <button
+          onClick={() => setShowEducation(!showEducation)}
+          className="w-full p-3.5 bg-slate-950 flex items-center justify-between text-left hover:bg-slate-900 transition"
+        >
+          <div className="flex items-center gap-2.5">
+            <HelpCircle className="w-4 h-4 text-amber-400" />
+            <span className="text-xs font-bold text-white uppercase tracking-wider">
+              JJ Simon $1.3M Strategy Breakdown & Rules Explained
+            </span>
+          </div>
+          {showEducation ? <ChevronDown className="w-4 h-4 text-slate-400" /> : <ChevronRight className="w-4 h-4 text-slate-400" />}
+        </button>
+
+        {showEducation && (
+          <div className="p-4 space-y-4 text-xs text-slate-300 leading-relaxed border-t border-slate-800 bg-slate-950/60 font-sans">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <div className="p-3 bg-slate-900 rounded-lg border border-slate-800">
+                <h4 className="text-amber-400 font-bold mb-1 flex items-center gap-1.5">
+                  <Target className="w-3.5 h-3.5" />
+                  1. Pre-News "Fair Price" Anchor
+                </h4>
+                <p className="text-[11px] text-slate-400">
+                  The candle body immediately before the high-impact release represents the agreed equilibrium price between buyers and sellers. When news is injected, algorithms violently displace price into premium or discount. 75%+ of these initial spikes are fake liquidity raids that mean-revert back to this exact Fair Price.
+                </p>
+              </div>
+
+              <div className="p-3 bg-slate-900 rounded-lg border border-slate-800">
+                <h4 className="text-rose-400 font-bold mb-1 flex items-center gap-1.5">
+                  <ShieldAlert className="w-3.5 h-3.5" />
+                  2. The Counter-Wick 20% Rule
+                </h4>
+                <p className="text-[11px] text-slate-400">
+                  JJ Simon's primary filter for entering after news: On the entry displacement candle, the wick pointing AGAINST your trade direction cannot exceed 20% of the candle's total range. If counter-wick &gt; 20%, it signals strong opposing institutional absorption and invalidates the entry.
+                </p>
+              </div>
+
+              <div className="p-3 bg-slate-900 rounded-lg border border-slate-800">
+                <h4 className="text-emerald-400 font-bold mb-1 flex items-center gap-1.5">
+                  <Shield className="w-3.5 h-3.5" />
+                  3. Fixed 1.5R + Fair Price Projection
+                </h4>
+                <p className="text-[11px] text-slate-400">
+                  Never gamble on 1:10 miracles during news. Placing your stop beyond the news spike extreme (+ 0.5 ATR buffer) and securing a fixed 1.5R profit creates unbeatable mathematical expectancy when coupled with a 75%+ win rate setup.
+                </p>
+              </div>
+            </div>
+
+            <div className="p-3 bg-blue-950/40 rounded-lg border border-blue-900/40 flex items-start gap-2.5">
+              <Info className="w-4 h-4 text-blue-400 shrink-0 mt-0.5" />
+              <div className="text-[11px] text-blue-200">
+                <span className="font-bold text-white block">Why we don't trade during the release minute:</span>
+                Spreads widen from 0.2 to 5.0+ points and brokers slip market orders by hundreds of dollars. By waiting 2 to 5 minutes for the spike to exhaust and the counter-wick displacement to confirm, you execute with tight spreads, deep liquidity, and institutional backing.
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}

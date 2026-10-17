@@ -30,6 +30,7 @@ from backend.engine import fetch_ohlcv, calculate_support_resistance, fetch_orde
 from backend.telegram_bot import send_telegram_signal
 from backend.ws_stream import ws_router
 from backend import ict_engine
+from backend import news_engine
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -529,4 +530,64 @@ def audit_ict_log(req: ICTAuditRequest):
     if "error" in result:
         raise HTTPException(status_code=400, detail=result["error"])
     return result
+
+
+# ── JJ SIMON FAIR PRICE NEWS STRATEGY ENGINE ─────────────────────────────────
+
+NEWS_CACHE_TTL_SECONDS = 5.0
+NEWS_CACHE: Dict[str, Tuple[float, Dict[str, Any]]] = {}
+NEWS_CACHE_LOCK = threading.Lock()
+NEWS_1M_LIMIT = 120
+
+
+@app.get("/api/news/calendar")
+def get_economic_calendar(force: bool = False):
+    """Returns parsed Forex Factory economic events with countdowns and impact tags."""
+    events = news_engine.fetch_forex_factory_calendar(force_refresh=force)
+    return {
+        "status": "SUCCESS",
+        "count": len(events),
+        "events": events,
+        "source": "Forex Factory / Fair Economy Media",
+    }
+
+
+@app.get("/api/news/analysis")
+def get_news_strategy_analysis(
+    symbol: str = Query("XAU/USD", description="Trading symbol"),
+    timeframe: str = Query("1m", description="Chart timeframe")
+):
+    """
+    JJ Simon's Fair Price News Trading Strategy analysis:
+      - Economic release context & countdown
+      - Pre-news Fair Price baseline detection
+      - News impulse spike extreme
+      - Reversion (Fade to Fair Price) vs Continuation classification
+      - Counter-wick 20% threshold validation
+      - Precision Stop Loss & 1.5R projection targets
+      - Visual marked candles and chart lines
+    """
+    cache_key = symbol.upper()
+    with NEWS_CACHE_LOCK:
+        now = time.monotonic()
+        cached = NEWS_CACHE.get(cache_key)
+        if cached and now - cached[0] < NEWS_CACHE_TTL_SECONDS:
+            return cached[1]
+
+    df_1m = fetch_ohlcv(symbol=symbol, timeframe="1m", limit=NEWS_1M_LIMIT)
+    candles_1m = ict_engine._candle_rows(df_1m) if df_1m is not None and not df_1m.empty else []
+    data_source = df_1m.attrs.get("data_source", "unknown") if df_1m is not None else "unknown"
+
+    result = news_engine.analyze_news_strategy(
+        symbol=symbol,
+        timeframe=timeframe,
+        candles_1m=candles_1m,
+        data_source=data_source,
+    )
+    result["candles_returned"] = len(candles_1m)
+
+    with NEWS_CACHE_LOCK:
+        NEWS_CACHE[cache_key] = (time.monotonic(), result)
+    return result
+
 

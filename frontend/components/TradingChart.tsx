@@ -5,9 +5,10 @@ import { RefreshCw, Zap, ChevronDown, Clock, Radio, ArrowUpRight, ArrowDownRight
 import { API_BASE_URL } from '@/lib/apiConfig';
 import ICTScalpPanel, { type IctPublish } from '@/components/ICTScalpPanel';
 import SessionRibbon from '@/components/SessionRibbon';
+import NewsTradingPanel, { type NewsStrategyPublish } from '@/components/NewsTradingPanel';
 
 
-export type ChartTabId = 'live_signals' | 'algo_market_structure' | 'ict_scalp';
+export type ChartTabId = 'live_signals' | 'algo_market_structure' | 'ict_scalp' | 'news_trading';
 
 interface TradingChartProps {
   symbol: string;
@@ -16,6 +17,7 @@ interface TradingChartProps {
   activeTab: ChartTabId;
   onActiveTabChange: (tab: ChartTabId) => void;
   onLatestDataUpdate?: (data: { price: number; support: number; resistance: number }) => void;
+  onAutoFillTrade?: (params: any) => void;
 }
 
 declare global {
@@ -622,6 +624,7 @@ export default function TradingChart({
   activeTab,
   onActiveTabChange,
   onLatestDataUpdate,
+  onAutoFillTrade,
 }: TradingChartProps) {
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const widgetIdRef = useRef<string>(`tv_signal_widget_${Math.floor(Math.random() * 1000000)}`);
@@ -637,6 +640,7 @@ export default function TradingChart({
   const [marketDataSource, setMarketDataSource] = useState<string>('unknown');
   const [algoTrend, setAlgoTrend] = useState<{ status: string; pivots: any[]; dataSource: string } | null>(null);
   const [ictData, setIctData] = useState<IctPublish | null>(null);
+  const [newsData, setNewsData] = useState<NewsStrategyPublish | null>(null);
 
   // Keep stable identities unless the values actually change, so the chart
   // price-line effects do not re-run (and redraw) on every render.
@@ -644,6 +648,13 @@ export default function TradingChart({
     setIctData((prev) => {
       if (prev && ictPublishEqual(prev, next)) return prev;
       return next;
+    });
+  }, []);
+
+  const handleNewsPublish = useCallback((pub: NewsStrategyPublish) => {
+    setNewsData((prev) => {
+      if (prev && JSON.stringify(prev) === JSON.stringify(pub)) return prev;
+      return pub;
     });
   }, []);
 
@@ -659,6 +670,19 @@ export default function TradingChart({
   }, [ictData]);
 
   const ictChartLines = useMemo<ChartExtraLine[]>(() => ictData?.lines ?? [], [ictData]);
+
+  const newsTradeLevels = useMemo(() => {
+    const s = newsData?.setup;
+    if (!s || s.direction === 'WAIT' || !(s.entry_price > 0)) return null;
+    return {
+      signalType: (s.direction === 'SELL/SHORT' ? 'SELL/SHORT' : 'BUY/LONG') as 'SELL/SHORT' | 'BUY/LONG',
+      entry: s.entry_price,
+      stopLoss: s.stop_loss,
+      takeProfit: s.take_profit_1_5r,
+    };
+  }, [newsData]);
+
+  const newsChartLines = useMemo<ChartExtraLine[]>(() => newsData?.chartLines ?? [], [newsData]);
 
   const isHighValueAsset = latestPrice > 10.0;
   const precision = isHighValueAsset ? 2 : 4;
@@ -901,6 +925,7 @@ export default function TradingChart({
           { id: 'live_signals', label: 'Live Signals & Lines' },
           { id: 'algo_market_structure', label: 'Algo Market Structure (Live Feed)' },
           { id: 'ict_scalp', label: '⚡ ICT Scalp (AMD Sessions)' },
+          { id: 'news_trading', label: '📰 News Catalyst (Fair Price)' },
         ].map((tab) => (
           <button
             key={tab.id}
@@ -1078,6 +1103,24 @@ export default function TradingChart({
             extraLines={ictChartLines}
           />
           <ICTScalpPanel symbol={symbol} timeframe={timeframe} onPublish={handleIctPublish} />
+        </div>
+      )}
+
+      {activeTab === 'news_trading' && (
+        <div className="space-y-3">
+          <TVWidgetTab
+            symbol={symbol}
+            timeframe={timeframe}
+            tabId="news_trading_tv"
+            tradeLevels={newsTradeLevels}
+            extraLines={newsChartLines}
+          />
+          <NewsTradingPanel
+            symbol={symbol}
+            timeframe={timeframe}
+            onPublish={handleNewsPublish}
+            onAutoFillTrade={onAutoFillTrade}
+          />
         </div>
       )}
     </div>

@@ -140,7 +140,7 @@ export default function DashboardPage() {
 
   useEffect(() => {
     const storedTab = window.sessionStorage.getItem('wesignal.active-chart-tab');
-    if (storedTab === 'live_signals' || storedTab === 'algo_market_structure' || storedTab === 'ict_scalp') {
+    if (storedTab === 'live_signals' || storedTab === 'algo_market_structure' || storedTab === 'ict_scalp' || storedTab === 'news_trading') {
       setActiveChartTab(storedTab);
     }
   }, []);
@@ -407,6 +407,7 @@ export default function DashboardPage() {
                     onActiveTabChange={handleChartTabChange}
                     onTimeframeChange={(tf) => setTimeframe(tf)}
                     onLatestDataUpdate={handleDataUpdate}
+                    onAutoFillTrade={handleAutoFillTrade}
                   />
                 )}
 
