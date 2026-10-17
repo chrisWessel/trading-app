@@ -116,8 +116,42 @@ def map_symbol_to_currencies(symbol: str) -> List[str]:
     return ["USD"]
 
 
+def scrape_forex_factory_actuals() -> Dict[str, Dict[str, str]]:
+    """Scrapes actual releases and beat/miss sentiments from Forex Factory calendar."""
+    try:
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+        r = requests.get("https://www.forexfactory.com/calendar", headers=headers, timeout=6.0)
+        if r.status_code != 200:
+            return {}
+        rows = re.findall(r'<tr[^>]*data-event-id="(\d+)"[^>]*>(.*?)</tr>', r.text, re.DOTALL)
+        actuals_map: Dict[str, Dict[str, str]] = {}
+        for ev_id, html in rows:
+            cur_m = re.search(r'calendar__currency[^>]*>(.*?)</td>', html, re.DOTALL)
+            cur = re.sub(r'<[^>]+>', '', cur_m.group(1)).strip().upper() if cur_m else ""
+            title_m = re.search(r'calendar__event-title">([^<]+)</span>', html)
+            title = title_m.group(1).strip() if title_m else ""
+            actual_td = re.search(r'<td[^>]*class="[^"]*actual[^"]*"[^>]*>(.*?)</td>', html, re.DOTALL)
+            actual = ""
+            sentiment = "neutral"
+            if actual_td:
+                inner = actual_td.group(1)
+                if "better" in inner:
+                    sentiment = "better"
+                elif "worse" in inner:
+                    sentiment = "worse"
+                actual = re.sub(r'<[^>]+>', '', inner).strip()
+            
+            if title and cur:
+                norm_key = f"{cur}_{title.lower()}"
+                actuals_map[norm_key] = {"actual": actual or "—", "sentiment": sentiment}
+        return actuals_map
+    except Exception as e:
+        print(f"[NewsEngine] scrape actuals notice: {e}")
+        return {}
+
+
 def fetch_forex_factory_calendar(force_refresh: bool = False) -> List[Dict[str, Any]]:
-    """Fetch and parse Forex Factory weekly JSON feed with caching and rich metadata."""
+    """Fetch and parse Forex Factory weekly feed with actuals, sentiments, and rich metadata."""
     global _FF_CACHED_DATA, _FF_CACHED_TIME
     now_mono = time.monotonic()
 
@@ -128,17 +162,20 @@ def fetch_forex_factory_calendar(force_refresh: bool = False) -> List[Dict[str, 
     raw_list: List[Dict[str, Any]] = []
     try:
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-        res = requests.get(FF_CALENDAR_URL, headers=headers, timeout=5.0)
+        res = requests.get(FF_CALENDAR_URL, headers=headers, timeout=6.0)
         if res.status_code == 200:
             raw_list = res.json()
     except Exception as e:
-        print(f"[NewsEngine] Forex Factory fetch notice: {e}")
+        print(f"[NewsEngine] Forex Factory JSON fetch notice: {e}")
 
     if not raw_list and _FF_CACHED_DATA is not None:
         return _FF_CACHED_DATA
 
     if not raw_list:
         raw_list = FALLBACK_EVENTS
+
+    # Scrape live actuals from Forex Factory website
+    actuals_map = scrape_forex_factory_actuals()
 
     # Process and enrich events
     now_dt = dt.datetime.now(dt.timezone.utc)
@@ -151,6 +188,12 @@ def fetch_forex_factory_calendar(force_refresh: bool = False) -> List[Dict[str, 
         forecast = str(item.get("forecast") or "").strip()
         previous = str(item.get("previous") or "").strip()
         raw_date = item.get("date", "")
+
+        # Lookup scraped actuals
+        norm_key = f"{country}_{title.lower()}"
+        act_info = actuals_map.get(norm_key, {})
+        actual = act_info.get("actual") or item.get("actual") or "—"
+        actual_sentiment = act_info.get("sentiment") or item.get("actual_sentiment") or "neutral"
 
         # Parse date
         event_dt = None
@@ -210,6 +253,23 @@ def fetch_forex_factory_calendar(force_refresh: bool = False) -> List[Dict[str, 
         event_et = event_dt.astimezone(ET) if hasattr(event_dt, "astimezone") else event_dt
         time_str = event_et.strftime("%H:%M ET")
         date_str = event_et.strftime("%a, %b %d")
+        date_iso_day = event_et.strftime("%Y-%m-%d")
+
+        # Market impact forecast
+        market_impact_forecast = ""
+        t_low = title.lower()
+        if "cpi" in t_low or "inflation" in t_low or "ppi" in t_low:
+            market_impact_forecast = f"Inflation Gauge: Higher actual typically strengthens {country} and creates a sharp downward drop on Gold & risk assets."
+        elif "employment" in t_low or "nfp" in t_low or "payroll" in t_low or "claims" in t_low:
+            market_impact_forecast = f"Labor Market Driver: Stronger numbers support {country} yields; lower numbers trigger rapid dovish rallies."
+        elif "rate" in t_low or "fomc" in t_low or "ecb" in t_low or "monetary" in t_low:
+            market_impact_forecast = f"Central Bank Policy: Hawkish outcomes rally {country}; rate cuts or dovish guidance fuel risk asset and Gold surges."
+        elif "retail" in t_low or "sales" in t_low:
+            market_impact_forecast = f"Consumer Demand: Higher numbers show resilient spending, reinforcing {country} strength."
+        elif "gdp" in t_low or "pmi" in t_low:
+            market_impact_forecast = f"Economic Growth Benchmark: Prints above forecast validate expansion and drive institutional volume."
+        else:
+            market_impact_forecast = f"Macro Volatility Catalyst: High orderbook fluctuation expected. Watch pre-news Fair Price level."
 
         enriched.append({
             "id": f"ff_{country}_{idx}_{int(event_dt.timestamp())}",
@@ -220,16 +280,20 @@ def fetch_forex_factory_calendar(force_refresh: bool = False) -> List[Dict[str, 
             "impact_weight": impact_weight,
             "date_iso": event_dt.isoformat(),
             "date_str": date_str,
+            "date_iso_day": date_iso_day,
             "time_str": time_str,
             "forecast": forecast or "—",
             "previous": previous or "—",
+            "actual": actual or "—",
+            "actual_sentiment": actual_sentiment,
+            "market_impact_forecast": market_impact_forecast,
             "diff_minutes": diff_minutes,
             "status": status,
             "countdown": countdown,
             "is_red_folder": impact_level == "High",
         })
 
-    # Sort primarily by time difference relative to now
+    # Sort primarily by chronological order
     enriched.sort(key=lambda x: x["diff_minutes"])
 
     with _FF_CACHE_LOCK:
@@ -633,3 +697,4 @@ def analyze_news_strategy(
         "marked_candles": marked_candles,
         "chart_lines": chart_lines,
     }
+

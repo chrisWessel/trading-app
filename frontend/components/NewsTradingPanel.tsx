@@ -5,7 +5,8 @@ import {
   Calendar, Flame, ShieldAlert, Compass, Target, Shield, Clock,
   TrendingDown, TrendingUp, AlertTriangle, ArrowRight, CheckCircle2,
   XCircle, ExternalLink, RefreshCw, Filter, Sparkles, HelpCircle,
-  ChevronDown, ChevronRight, Eye, Play, BarChart2, Radio, Info, Layers
+  ChevronDown, ChevronRight, Eye, Play, BarChart2, Radio, Info, Layers,
+  ChevronUp, Zap, Check, Bell
 } from 'lucide-react';
 import { API_BASE_URL } from '@/lib/apiConfig';
 
@@ -37,7 +38,7 @@ export interface NewsStrategyPublish {
   }>;
 }
 
-interface EconomicEvent {
+export interface EconomicEvent {
   id: string;
   title: string;
   country: string;
@@ -46,13 +47,25 @@ interface EconomicEvent {
   impact_weight: number;
   date_iso: string;
   date_str: string;
+  date_iso_day?: string;
   time_str: string;
   forecast: string;
   previous: string;
+  actual: string;
+  actual_sentiment: 'better' | 'worse' | 'neutral';
+  market_impact_forecast?: string;
   diff_minutes: number;
   status: 'UPCOMING' | 'RELEASING_SOON' | 'RELEASING_NOW' | 'RECENT' | 'PAST';
   countdown: string;
   is_red_folder: boolean;
+}
+
+interface AvailableDate {
+  date_str: string;
+  date_iso_day: string;
+  total: number;
+  high_count: number;
+  diff_minutes: number;
 }
 
 interface MarkedCandle {
@@ -111,7 +124,10 @@ export default function NewsTradingPanel({
   const [data, setData] = useState<NewsAnalysisResponse | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [calendarEvents, setCalendarEvents] = useState<EconomicEvent[]>([]);
+  const [availableDates, setAvailableDates] = useState<AvailableDate[]>([]);
   const [calLoading, setCalLoading] = useState<boolean>(true);
+  const [selectedDate, setSelectedDate] = useState<string>('ALL');
+  const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
   const [impactFilter, setImpactFilter] = useState<'ALL' | 'HIGH_ONLY' | 'MED_HIGH'>('HIGH_ONLY');
   const [currencyFilter, setCurrencyFilter] = useState<'AUTO' | 'USD' | 'EUR' | 'GBP' | 'ALL'>('AUTO');
   const [calendarTab, setCalendarTab] = useState<'feed' | 'webview'>('feed');
@@ -148,6 +164,9 @@ export default function NewsTradingPanel({
       if (res.ok) {
         const json = await res.json();
         setCalendarEvents(json.events || []);
+        if (json.available_dates) {
+          setAvailableDates(json.available_dates);
+        }
       }
     } catch (e) {
       console.error('Error fetching calendar:', e);
@@ -162,7 +181,7 @@ export default function NewsTradingPanel({
     fetchAnalysis();
     fetchCalendar();
     const interval = setInterval(fetchAnalysis, 8000);
-    const calInterval = setInterval(fetchCalendar, 60000);
+    const calInterval = setInterval(fetchCalendar, 45000);
     return () => {
       clearInterval(interval);
       clearInterval(calInterval);
@@ -184,9 +203,16 @@ export default function NewsTradingPanel({
     return ['USD'];
   }, [symbol]);
 
-  // Filtered calendar events
+  // Filtered calendar events based on date, impact, and currency
   const filteredEvents = useMemo(() => {
     return calendarEvents.filter((ev) => {
+      // Date filter
+      if (selectedDate === 'UPCOMING_ONLY') {
+        if (ev.diff_minutes < -15) return false;
+      } else if (selectedDate !== 'ALL') {
+        if (ev.date_str !== selectedDate && ev.date_iso_day !== selectedDate) return false;
+      }
+
       // Impact filter
       if (impactFilter === 'HIGH_ONLY' && ev.impact !== 'High') return false;
       if (impactFilter === 'MED_HIGH' && ev.impact !== 'High' && ev.impact !== 'Medium') return false;
@@ -200,12 +226,21 @@ export default function NewsTradingPanel({
       }
       return true;
     });
-  }, [calendarEvents, impactFilter, currencyFilter, activeCurrencies]);
+  }, [calendarEvents, selectedDate, impactFilter, currencyFilter, activeCurrencies]);
 
   // Nearest upcoming high-impact event
   const nextHighImpact = useMemo(() => {
     return calendarEvents.find((e) => e.impact === 'High' && e.diff_minutes >= -5);
   }, [calendarEvents]);
+
+  // Event currently selected for inspection / forecasting details
+  const inspectedEvent = useMemo<EconomicEvent | null>(() => {
+    if (selectedEventId) {
+      const found = calendarEvents.find((e) => e.id === selectedEventId);
+      if (found) return found;
+    }
+    return nextHighImpact || calendarEvents.find((e) => e.diff_minutes >= -15) || calendarEvents[0] || null;
+  }, [selectedEventId, calendarEvents, nextHighImpact]);
 
   const setup = data?.setup;
   const projection = data?.projection;
@@ -473,20 +508,20 @@ export default function NewsTradingPanel({
             <div>
               <div className="flex items-center gap-2">
                 <h3 className="text-sm font-bold text-white tracking-wide">
-                  FOREX FACTORY ECONOMIC CALENDAR (EMBEDDED)
+                  FOREX FACTORY ECONOMIC CALENDAR (WITH LIVE ACTUALS & SENTIMENT)
                 </h3>
                 <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-red-500/20 text-red-300 border border-red-500/30 flex items-center gap-1">
                   <span className="w-1.5 h-1.5 rounded-full bg-red-400 animate-pulse" />
-                  LIVE FEED
+                  LIVE PARSED FEED
                 </span>
               </div>
               <p className="text-[11px] text-slate-400">
-                View real-time high-impact releases directly without leaving the app
+                View real-time high-impact releases, actual prints, forecasts, and upcoming dates
               </p>
             </div>
           </div>
 
-          {/* View Mode Toggle: Interactive Table vs Web Browser Frame */}
+          {/* View Mode Toggle: Interactive Table vs Institutional Calendar Frame */}
           <div className="flex items-center gap-2">
             <div className="flex bg-slate-900 p-0.5 rounded-lg border border-slate-800 text-xs">
               <button
@@ -497,7 +532,7 @@ export default function NewsTradingPanel({
                     : 'text-slate-400 hover:text-white'
                 }`}
               >
-                📊 Interactive Calendar Feed
+                📊 Interactive Calendar & Actuals
               </button>
               <button
                 onClick={() => setCalendarTab('webview')}
@@ -508,7 +543,7 @@ export default function NewsTradingPanel({
                 }`}
               >
                 <Eye className="w-3.5 h-3.5" />
-                Forex Factory Web Frame
+                Institutional Widget Frame
               </button>
             </div>
 
@@ -542,14 +577,136 @@ export default function NewsTradingPanel({
           </div>
         )}
 
+        {/* ── UPCOMING FORECAST & REPRICING DETAILS CARD (HIGHLIGHTED EVENT) ── */}
+        {inspectedEvent && (
+          <div className="mx-4 mt-4 p-4 rounded-xl bg-slate-950 border border-slate-800 shadow-inner">
+            <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-slate-800">
+              <div className="flex items-center gap-2.5">
+                <span className={`px-2.5 py-1 rounded-md text-xs font-black uppercase tracking-wide ${
+                  inspectedEvent.impact === 'High'
+                    ? 'bg-red-500/20 text-red-400 border border-red-500/40'
+                    : inspectedEvent.impact === 'Medium'
+                      ? 'bg-amber-500/20 text-amber-400 border border-amber-500/40'
+                      : 'bg-yellow-500/20 text-yellow-300 border border-yellow-500/30'
+                }`}>
+                  {inspectedEvent.country} · {inspectedEvent.impact} Impact
+                </span>
+                <h4 className="text-sm font-bold text-white">
+                  {inspectedEvent.title}
+                </h4>
+              </div>
+
+              <div className="flex items-center gap-2 text-xs font-mono">
+                <span className="text-slate-400">{inspectedEvent.date_str} @ {inspectedEvent.time_str}</span>
+                <span className={`px-2 py-0.5 rounded text-[11px] font-bold ${
+                  inspectedEvent.status === 'RELEASING_NOW'
+                    ? 'bg-red-600 text-white animate-pulse'
+                    : inspectedEvent.status === 'RELEASING_SOON'
+                      ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                      : inspectedEvent.status === 'UPCOMING'
+                        ? 'bg-blue-950 text-blue-300 border border-blue-800'
+                        : 'bg-slate-800 text-slate-300'
+                }`}>
+                  {inspectedEvent.countdown}
+                </span>
+              </div>
+            </div>
+
+            {/* 3-Column Metrics: Previous vs Forecast vs Actual */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 my-3">
+              <div className="p-2.5 rounded-lg bg-slate-900 border border-slate-800">
+                <span className="text-[10px] text-slate-500 block uppercase font-bold">PREVIOUS PRINT</span>
+                <span className="text-base font-bold font-mono text-slate-300">{inspectedEvent.previous || '—'}</span>
+              </div>
+
+              <div className="p-2.5 rounded-lg bg-slate-900 border border-slate-800">
+                <span className="text-[10px] text-slate-500 block uppercase font-bold">CONSENSUS FORECAST</span>
+                <span className="text-base font-bold font-mono text-blue-400">{inspectedEvent.forecast || '—'}</span>
+              </div>
+
+              <div className={`p-2.5 rounded-lg border ${
+                inspectedEvent.actual !== '—'
+                  ? inspectedEvent.actual_sentiment === 'better'
+                    ? 'bg-emerald-950/40 border-emerald-600/50'
+                    : inspectedEvent.actual_sentiment === 'worse'
+                      ? 'bg-rose-950/40 border-rose-600/50'
+                      : 'bg-slate-900 border-slate-700'
+                  : 'bg-slate-900/60 border-slate-800'
+              }`}>
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] text-slate-400 block uppercase font-bold">ACTUAL RELEASED</span>
+                  {inspectedEvent.actual !== '—' && (
+                    <span className={`text-[10px] font-bold px-1.5 py-0.2 rounded ${
+                      inspectedEvent.actual_sentiment === 'better'
+                        ? 'bg-emerald-500 text-slate-950 font-black'
+                        : inspectedEvent.actual_sentiment === 'worse'
+                          ? 'bg-rose-500 text-white font-black'
+                          : 'bg-slate-700 text-slate-300'
+                    }`}>
+                      {inspectedEvent.actual_sentiment === 'better' ? '▲ BEAT' : inspectedEvent.actual_sentiment === 'worse' ? '▼ MISS' : 'IN-LINE'}
+                    </span>
+                  )}
+                </div>
+                <span className={`text-base font-bold font-mono ${
+                  inspectedEvent.actual !== '—'
+                    ? inspectedEvent.actual_sentiment === 'better'
+                      ? 'text-emerald-400'
+                      : inspectedEvent.actual_sentiment === 'worse'
+                        ? 'text-rose-400'
+                        : 'text-white'
+                    : 'text-slate-500'
+                }`}>
+                  {inspectedEvent.actual !== '—' ? inspectedEvent.actual : 'Pending Release'}
+                </span>
+              </div>
+            </div>
+
+            {/* Expected Market Repricing Forecast & Strategy Notes */}
+            <div className="p-3 bg-blue-950/30 rounded-lg border border-blue-900/40 text-xs text-slate-300 space-y-1.5 font-sans">
+              <div className="flex items-center gap-1.5 text-blue-300 font-bold">
+                <Zap className="w-3.5 h-3.5 text-blue-400" />
+                <span>Market Repricing Forecast & Expected Asset Sensitivity:</span>
+              </div>
+              <p className="text-[11px] text-slate-300 leading-relaxed">
+                {inspectedEvent.market_impact_forecast || 'Macro catalyst expected to generate high volatility and spread expansion at release minute.'}
+              </p>
+              <div className="text-[10px] text-slate-400 pt-1 border-t border-blue-900/40 flex items-center justify-between">
+                <span>JJ Simon Rule: Anchor pre-news Fair Price candle $\to$ Fade after liquidity spike with counter-wick &le; 20%</span>
+                <span className="text-amber-400 font-bold">Click any row below to inspect its forecast details</span>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Tab 1: Interactive Clean Feed */}
         {calendarTab === 'feed' && (
           <div className="p-4 space-y-3">
-            {/* Filter Bar */}
-            <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-slate-800 text-xs">
+            {/* Filter Bar with Date Dropdown, Impact, and Currency */}
+            <div className="flex flex-wrap items-center justify-between gap-3 pb-2 border-b border-slate-800 text-xs">
+              {/* Date Dropdown */}
               <div className="flex items-center gap-2">
                 <span className="text-slate-400 font-mono text-[11px] flex items-center gap-1">
-                  <Filter className="w-3 h-3 text-slate-500" /> Filter Impact:
+                  <Calendar className="w-3.5 h-3.5 text-blue-400" /> Date:
+                </span>
+                <select
+                  value={selectedDate}
+                  onChange={(e) => setSelectedDate(e.target.value)}
+                  className="bg-slate-950 border border-slate-700 text-slate-200 rounded-lg px-2.5 py-1 text-xs font-mono font-bold hover:border-blue-500 focus:outline-none focus:border-blue-500 transition cursor-pointer"
+                >
+                  <option value="ALL">📅 All Dates (This Week)</option>
+                  <option value="UPCOMING_ONLY">⏳ Upcoming Dates Only</option>
+                  {availableDates.map((ad) => (
+                    <option key={ad.date_str} value={ad.date_str}>
+                      {ad.date_str} ({ad.total} events{ad.high_count > 0 ? ` · ${ad.high_count} Red` : ''})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Impact Filter */}
+              <div className="flex items-center gap-1.5">
+                <span className="text-slate-400 font-mono text-[11px] flex items-center gap-1">
+                  <Filter className="w-3 h-3 text-slate-500" /> Impact:
                 </span>
                 <button
                   onClick={() => setImpactFilter('HIGH_ONLY')}
@@ -559,7 +716,7 @@ export default function NewsTradingPanel({
                       : 'bg-slate-950 text-slate-400 hover:bg-slate-800 border border-slate-800'
                   }`}
                 >
-                  🔴 High Impact Only (Red)
+                  🔴 High (Red)
                 </button>
                 <button
                   onClick={() => setImpactFilter('MED_HIGH')}
@@ -569,7 +726,7 @@ export default function NewsTradingPanel({
                       : 'bg-slate-950 text-slate-400 hover:bg-slate-800 border border-slate-800'
                   }`}
                 >
-                  🟠 Medium + High
+                  🟠 Med + High
                 </button>
                 <button
                   onClick={() => setImpactFilter('ALL')}
@@ -579,12 +736,13 @@ export default function NewsTradingPanel({
                       : 'bg-slate-950 text-slate-400 hover:bg-slate-800 border border-slate-800'
                   }`}
                 >
-                  All Releases
+                  All
                 </button>
               </div>
 
-              <div className="flex items-center gap-2">
-                <span className="text-slate-400 font-mono text-[11px]">Currency:</span>
+              {/* Currency Filter */}
+              <div className="flex items-center gap-1.5">
+                <span className="text-slate-400 font-mono text-[11px]">Cur:</span>
                 <button
                   onClick={() => setCurrencyFilter('AUTO')}
                   className={`px-2 py-1 rounded text-[11px] font-bold ${
@@ -618,122 +776,154 @@ export default function NewsTradingPanel({
               </div>
             </div>
 
-            {/* Economic Events Table */}
-            <div className="overflow-x-auto rounded-lg border border-slate-800 max-h-[380px] overflow-y-auto">
+            {/* Economic Events Table with Actuals */}
+            <div className="overflow-x-auto rounded-lg border border-slate-800 max-h-[420px] overflow-y-auto">
               <table className="w-full text-left text-xs font-mono">
-                <thead className="bg-slate-950 sticky top-0 border-b border-slate-800 text-[10px] text-slate-400 uppercase">
+                <thead className="bg-slate-950 sticky top-0 border-b border-slate-800 text-[10px] text-slate-400 uppercase z-10">
                   <tr>
-                    <th className="py-2 px-3">Date / Time (ET)</th>
-                    <th className="py-2 px-3">Cur</th>
-                    <th className="py-2 px-3">Impact</th>
-                    <th className="py-2 px-3">Event</th>
-                    <th className="py-2 px-3 text-right">Forecast</th>
-                    <th className="py-2 px-3 text-right">Previous</th>
-                    <th className="py-2 px-3 text-center">Status / Countdown</th>
+                    <th className="py-2.5 px-3">Date / Time (ET)</th>
+                    <th className="py-2.5 px-3">Cur</th>
+                    <th className="py-2.5 px-3">Impact</th>
+                    <th className="py-2.5 px-3">Event Title</th>
+                    <th className="py-2.5 px-3 text-right">Actual</th>
+                    <th className="py-2.5 px-3 text-right">Forecast</th>
+                    <th className="py-2.5 px-3 text-right">Previous</th>
+                    <th className="py-2.5 px-3 text-center">Status / Countdown</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-850 bg-slate-900/60">
                   {filteredEvents.length === 0 ? (
                     <tr>
-                      <td colSpan={7} className="py-6 text-center text-slate-500 font-sans">
+                      <td colSpan={8} className="py-8 text-center text-slate-500 font-sans">
                         No economic releases matching the active filter.
                       </td>
                     </tr>
                   ) : (
-                    filteredEvents.map((ev) => (
-                      <tr
-                        key={ev.id}
-                        className={`hover:bg-slate-800/50 transition ${
-                          ev.status === 'RELEASING_NOW' ? 'bg-red-950/30' : ''
-                        }`}
-                      >
-                        <td className="py-2.5 px-3 text-slate-300 whitespace-nowrap">
-                          <span className="text-[10px] text-slate-500 block">{ev.date_str}</span>
-                          <span className="font-bold">{ev.time_str}</span>
-                        </td>
-                        <td className="py-2.5 px-3 font-bold text-white whitespace-nowrap">
-                          {ev.country}
-                        </td>
-                        <td className="py-2.5 px-3 whitespace-nowrap">
-                          <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold ${
-                            ev.impact === 'High'
-                              ? 'bg-red-500/20 text-red-400 border border-red-500/40'
-                              : ev.impact === 'Medium'
-                                ? 'bg-amber-500/20 text-amber-400 border border-amber-500/40'
-                                : 'bg-yellow-500/20 text-yellow-300 border border-yellow-500/30'
-                          }`}>
-                            <span className={`w-2 h-2 rounded-full ${
+                    filteredEvents.map((ev) => {
+                      const isSelected = inspectedEvent?.id === ev.id;
+                      return (
+                        <tr
+                          key={ev.id}
+                          onClick={() => setSelectedEventId(ev.id)}
+                          className={`cursor-pointer transition ${
+                            isSelected
+                              ? 'bg-blue-950/60 border-l-4 border-l-blue-500'
+                              : ev.status === 'RELEASING_NOW'
+                                ? 'bg-red-950/40 hover:bg-red-900/40'
+                                : 'hover:bg-slate-800/60'
+                          }`}
+                        >
+                          <td className="py-2.5 px-3 text-slate-300 whitespace-nowrap">
+                            <span className="text-[10px] text-slate-500 block">{ev.date_str}</span>
+                            <span className="font-bold">{ev.time_str}</span>
+                          </td>
+                          <td className="py-2.5 px-3 font-bold text-white whitespace-nowrap">
+                            {ev.country}
+                          </td>
+                          <td className="py-2.5 px-3 whitespace-nowrap">
+                            <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold ${
                               ev.impact === 'High'
-                                ? 'bg-red-500'
+                                ? 'bg-red-500/20 text-red-400 border border-red-500/40'
                                 : ev.impact === 'Medium'
-                                  ? 'bg-amber-500'
-                                  : 'bg-yellow-400'
-                            }`} />
-                            {ev.impact}
-                          </span>
-                        </td>
-                        <td className="py-2.5 px-3 text-white font-sans font-medium text-xs max-w-[280px] truncate">
-                          {ev.title}
-                        </td>
-                        <td className="py-2.5 px-3 text-right text-slate-300">
-                          {ev.forecast}
-                        </td>
-                        <td className="py-2.5 px-3 text-right text-slate-400">
-                          {ev.previous}
-                        </td>
-                        <td className="py-2.5 px-3 text-center whitespace-nowrap">
-                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                            ev.status === 'RELEASING_NOW'
-                              ? 'bg-red-600 text-white animate-pulse'
-                              : ev.status === 'RELEASING_SOON'
-                                ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
-                                : ev.status === 'UPCOMING'
-                                  ? 'bg-blue-950 text-blue-300 border border-blue-800'
-                                  : 'text-slate-500'
-                          }`}>
-                            {ev.countdown}
-                          </span>
-                        </td>
-                      </tr>
-                    ))
+                                  ? 'bg-amber-500/20 text-amber-400 border border-amber-500/40'
+                                  : 'bg-yellow-500/20 text-yellow-300 border border-yellow-500/30'
+                            }`}>
+                              <span className={`w-2 h-2 rounded-full ${
+                                ev.impact === 'High'
+                                  ? 'bg-red-500'
+                                  : ev.impact === 'Medium'
+                                    ? 'bg-amber-500'
+                                    : 'bg-yellow-400'
+                              }`} />
+                              {ev.impact}
+                            </span>
+                          </td>
+                          <td className="py-2.5 px-3 text-white font-sans font-medium text-xs max-w-[260px] truncate">
+                            <span className={isSelected ? 'text-blue-300 font-bold' : ''}>
+                              {ev.title}
+                            </span>
+                          </td>
+                          {/* ACTUAL COLUMN */}
+                          <td className="py-2.5 px-3 text-right whitespace-nowrap">
+                            {ev.actual !== '—' ? (
+                              <span className={`inline-block px-2 py-0.5 rounded font-bold text-xs ${
+                                ev.actual_sentiment === 'better'
+                                  ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40'
+                                  : ev.actual_sentiment === 'worse'
+                                    ? 'bg-rose-500/20 text-rose-400 border border-rose-500/40'
+                                    : 'bg-slate-800 text-slate-200'
+                              }`}>
+                                {ev.actual} {ev.actual_sentiment === 'better' ? '▲' : ev.actual_sentiment === 'worse' ? '▼' : ''}
+                              </span>
+                            ) : (
+                              <span className="text-slate-500 text-[11px]">—</span>
+                            )}
+                          </td>
+                          <td className="py-2.5 px-3 text-right text-slate-300 whitespace-nowrap">
+                            {ev.forecast}
+                          </td>
+                          <td className="py-2.5 px-3 text-right text-slate-400 whitespace-nowrap">
+                            {ev.previous}
+                          </td>
+                          <td className="py-2.5 px-3 text-center whitespace-nowrap">
+                            <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                              ev.status === 'RELEASING_NOW'
+                                ? 'bg-red-600 text-white animate-pulse'
+                                : ev.status === 'RELEASING_SOON'
+                                  ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                                  : ev.status === 'UPCOMING'
+                                    ? 'bg-blue-950 text-blue-300 border border-blue-800'
+                                    : 'text-slate-500'
+                            }`}>
+                              {ev.countdown}
+                            </span>
+                          </td>
+                        </tr>
+                      );
+                    })
                   )}
                 </tbody>
               </table>
             </div>
 
             <div className="flex items-center justify-between text-[10px] text-slate-500 pt-1">
-              <span>Source: Forex Factory Live Data Feed (NFS / Fair Economy Media)</span>
+              <span>Source: Forex Factory Live Data Feed (NFS / Fair Economy Media & Live HTML Actuals)</span>
               <span>Updated: {lastRefreshed || 'Just now'}</span>
             </div>
           </div>
         )}
 
-        {/* Tab 2: Embedded Web Browser Frame */}
+        {/* Tab 2: Embedded Institutional Calendar Widget (With zero iframe blocks) */}
         {calendarTab === 'webview' && (
           <div className="p-4 space-y-3">
-            <div className="p-3 bg-slate-950 rounded-lg border border-slate-800 flex items-center justify-between text-xs">
-              <span className="text-slate-300">
-                Direct Forex Factory calendar interface embedded inside the workspace:
-              </span>
+            <div className="p-3 bg-slate-950 rounded-lg border border-slate-800 flex flex-wrap items-center justify-between gap-2 text-xs">
+              <div className="flex items-center gap-2">
+                <span className="text-slate-300">
+                  Institutional Dark-Theme Economic Calendar (Embed-authorized, live updating):
+                </span>
+              </div>
               <a
                 href="https://www.forexfactory.com/calendar"
                 target="_blank"
                 rel="noreferrer"
-                className="flex items-center gap-1.5 px-3 py-1 bg-blue-600 hover:bg-blue-500 text-white rounded font-bold transition text-xs"
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-md font-bold transition text-xs shadow"
               >
-                <span>Open in Full Browser</span>
+                <span>Open Forex Factory in Full Window</span>
                 <ExternalLink className="w-3.5 h-3.5" />
               </a>
             </div>
 
-            <div className="w-full h-[520px] rounded-lg border border-slate-800 overflow-hidden bg-slate-950 relative">
+            <div className="w-full h-[540px] rounded-lg border border-slate-800 overflow-hidden bg-slate-950 relative">
               <iframe
-                src="https://www.forexfactory.com/calendar"
-                title="Forex Factory Calendar"
+                src="https://s.tradingview.com/embed-widget/events/?locale=en#%7B%22colorTheme%22%3A%22dark%22%2C%22isTransparent%22%3Atrue%2C%22width%22%3A%22100%25%22%2C%22height%22%3A%22100%25%22%2C%22importanceFilter%22%3A%22-1%2C0%2C1%22%2C%22countryFilter%22%3A%22us%2Ceu%2Cgb%2Cjp%2Cau%2Cca%2Cch%2Cnz%22%7D"
+                title="Institutional Economic Calendar"
                 className="w-full h-full border-0"
-                sandbox="allow-scripts allow-same-origin allow-popups allow-forms"
               />
             </div>
+
+            <p className="text-[10px] text-slate-500 italic">
+              Note: Forex Factory uses browser security policies (`X-Frame-Options: SAMEORIGIN`) to prevent direct cross-domain embedding. Our terminal solves this by providing both the direct scraped feed with Actuals & Sentiments in the first tab and the embed-compatible TradingView Institutional Calendar above.
+            </p>
           </div>
         )}
       </div>

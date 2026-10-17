@@ -542,13 +542,35 @@ NEWS_1M_LIMIT = 120
 
 @app.get("/api/news/calendar")
 def get_economic_calendar(force: bool = False):
-    """Returns parsed Forex Factory economic events with countdowns and impact tags."""
+    """Returns parsed Forex Factory economic events with countdowns, actuals, and impact tags."""
     events = news_engine.fetch_forex_factory_calendar(force_refresh=force)
+
+    # Calculate available dates with event and high impact counts
+    date_stats: Dict[str, Dict[str, Any]] = {}
+    for ev in events:
+        d = ev.get("date_str", "Unknown")
+        iso_day = ev.get("date_iso_day", "")
+        if d not in date_stats:
+            date_stats[d] = {
+                "date_str": d,
+                "date_iso_day": iso_day,
+                "total": 0,
+                "high_count": 0,
+                "diff_minutes": ev.get("diff_minutes", 0),
+            }
+        date_stats[d]["total"] += 1
+        if ev.get("impact") == "High":
+            date_stats[d]["high_count"] += 1
+
+    available_dates = list(date_stats.values())
+    available_dates.sort(key=lambda x: x["diff_minutes"])
+
     return {
         "status": "SUCCESS",
         "count": len(events),
         "events": events,
-        "source": "Forex Factory / Fair Economy Media",
+        "available_dates": available_dates,
+        "source": "Forex Factory / Fair Economy Media (Enriched with Live Actuals)",
     }
 
 
