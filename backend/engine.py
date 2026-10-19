@@ -303,6 +303,81 @@ def get_pip_size(symbol: str) -> float:
     else:
         return 0.01   # Default fallback
 
+def fetch_tradingview_live_quote(symbol: str) -> Optional[float]:
+    clean = clean_symbol_string(symbol)
+    tv_symbol = None
+    if any(k in clean for k in ['XAU', 'GOLD']):
+        tv_symbol = 'OANDA:XAUUSD'
+    elif 'EURUSD' in clean:
+        tv_symbol = 'FX_IDC:EURUSD'
+    elif 'GBPUSD' in clean:
+        tv_symbol = 'FX_IDC:GBPUSD'
+    elif 'USDJPY' in clean:
+        tv_symbol = 'FX_IDC:USDJPY'
+    elif 'BTC' in clean:
+        tv_symbol = 'BINANCE:BTCUSDT'
+    elif 'ETH' in clean:
+        tv_symbol = 'BINANCE:ETHUSDT'
+    elif 'SOL' in clean:
+        tv_symbol = 'BINANCE:SOLUSDT'
+
+    if not tv_symbol:
+        return None
+
+    try:
+        if 'BINANCE' in tv_symbol:
+            endpoint = 'https://scanner.tradingview.com/crypto/scan'
+        elif 'XAU' in tv_symbol:
+            endpoint = 'https://scanner.tradingview.com/cfd/scan'
+        else:
+            endpoint = 'https://scanner.tradingview.com/forex/scan'
+
+        r = requests.post(
+            endpoint,
+            json={'symbols': {'tickers': [tv_symbol]}, 'columns': ['close']},
+            headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'},
+            timeout=2.0
+        )
+        if r.status_code == 200:
+            data = r.json().get('data', [])
+            if data and data[0].get('d'):
+                val = float(data[0]['d'][0])
+                if val > 0:
+                    return val
+    except Exception:
+        pass
+    return None
+
+def get_synchronized_live_price(symbol: str) -> float:
+    clean = clean_symbol_string(symbol)
+    now = time.time()
+
+    # 1. TradingView scanner quote for exact chart synchronization (especially OANDA:XAUUSD)
+    tv_p = fetch_tradingview_live_quote(symbol)
+    if tv_p and tv_p > 0:
+        _, precision = get_asset_base_config(symbol)
+        p = round(tv_p, precision)
+        UNIVERSAL_PRICE_HUB[clean] = p
+        UNIVERSAL_PRICE_TIMESTAMPS[clean] = now
+        return p
+
+    if clean in UNIVERSAL_PRICE_HUB and clean in UNIVERSAL_PRICE_TIMESTAMPS:
+        if now - UNIVERSAL_PRICE_TIMESTAMPS[clean] < PRICE_HUB_TTL_SECONDS and UNIVERSAL_PRICE_HUB[clean] > 0:
+            return UNIVERSAL_PRICE_HUB[clean]
+
+    # 2. Market real OHLCV fallback
+    real_df = fetch_real_ohlcv_from_market(symbol=symbol, timeframe="1m", limit=5)
+    if real_df is not None and not real_df.empty:
+        p = float(real_df['close'].iloc[-1])
+        UNIVERSAL_PRICE_HUB[clean] = p
+        UNIVERSAL_PRICE_TIMESTAMPS[clean] = now
+        return p
+
+    base_price, precision = get_asset_base_config(symbol)
+    UNIVERSAL_PRICE_HUB[clean] = base_price
+    UNIVERSAL_PRICE_TIMESTAMPS[clean] = now
+    return base_price
+
 def fetch_real_ohlcv_from_market(symbol: str, timeframe: str = "1m", limit: int = 100) -> Optional[pd.DataFrame]:
     clean = clean_symbol_string(symbol)
 
@@ -346,13 +421,26 @@ def fetch_real_ohlcv_from_market(symbol: str, timeframe: str = "1m", limit: int 
                             'volume': float(k[5])
                         })
                     df = pd.DataFrame(records)
-                    df.attrs['data_source'] = 'Binance PAXGUSDT (reference)' if is_mt5_gold_symbol(symbol) else 'Binance'
+                    df.attrs['data_source'] = 'Binance PAXGUSDT (calibrated)' if is_mt5_gold_symbol(symbol) else 'Binance'
                     _, precision = get_asset_base_config(symbol)
                     for col in ['open', 'high', 'low', 'close']:
                         df[col] = df[col].round(precision)
                     
-                    latest_p = float(df['close'].iloc[-1])
-                    UNIVERSAL_PRICE_HUB[clean] = latest_p
+                    # Align candles to live TradingView spot quote (e.g. OANDA:XAUUSD)
+                    tv_spot = fetch_tradingview_live_quote(symbol)
+                    if tv_spot and tv_spot > 0:
+                        last_close = float(df['close'].iloc[-1])
+                        offset = tv_spot - last_close
+                        if abs(offset) > 0.02:
+                            for c in ['open', 'high', 'low', 'close']:
+                                df[c] = (df[c] + offset).round(precision)
+                        df.at[df.index[-1], 'close'] = round(tv_spot, precision)
+                        UNIVERSAL_PRICE_HUB[clean] = round(tv_spot, precision)
+                        UNIVERSAL_PRICE_TIMESTAMPS[clean] = time.time()
+                    else:
+                        latest_p = float(df['close'].iloc[-1])
+                        UNIVERSAL_PRICE_HUB[clean] = latest_p
+                        UNIVERSAL_PRICE_TIMESTAMPS[clean] = time.time()
                     return df
         except Exception as e:
             print(f"Binance spot fetch notice for {symbol}: {e}")
@@ -370,7 +458,6 @@ def fetch_real_ohlcv_from_market(symbol: str, timeframe: str = "1m", limit: int 
             if r.status_code == 200:
                 data = r.json()
                 if not data.get('error') and data.get('result'):
-                    # Kraken result keys: ['PAXGUSD', 'last']
                     pair_key = list(data['result'].keys())[0]
                     klines = data['result'][pair_key]
                     if isinstance(klines, list) and len(klines) > 0:
@@ -392,6 +479,7 @@ def fetch_real_ohlcv_from_market(symbol: str, timeframe: str = "1m", limit: int 
                         
                         latest_p = float(df['close'].iloc[-1])
                         UNIVERSAL_PRICE_HUB[clean] = latest_p
+                        UNIVERSAL_PRICE_TIMESTAMPS[clean] = time.time()
                         return df
         except Exception as e:
             print(f"Kraken spot fetch notice for {symbol}: {e}")
@@ -446,8 +534,20 @@ def fetch_real_ohlcv_from_market(symbol: str, timeframe: str = "1m", limit: int 
                     for col in ['open', 'high', 'low', 'close']:
                         df[col] = df[col].round(precision)
                     
-                    latest_p = float(df['close'].iloc[-1])
-                    UNIVERSAL_PRICE_HUB[clean] = latest_p
+                    tv_spot = fetch_tradingview_live_quote(symbol)
+                    if tv_spot and tv_spot > 0:
+                        last_close = float(df['close'].iloc[-1])
+                        offset = tv_spot - last_close
+                        if abs(offset) > 0.02:
+                            for c in ['open', 'high', 'low', 'close']:
+                                df[c] = (df[c] + offset).round(precision)
+                        df.at[df.index[-1], 'close'] = round(tv_spot, precision)
+                        UNIVERSAL_PRICE_HUB[clean] = round(tv_spot, precision)
+                        UNIVERSAL_PRICE_TIMESTAMPS[clean] = time.time()
+                    else:
+                        latest_p = float(df['close'].iloc[-1])
+                        UNIVERSAL_PRICE_HUB[clean] = latest_p
+                        UNIVERSAL_PRICE_TIMESTAMPS[clean] = time.time()
                     
                     if len(df) > limit:
                         df = df.tail(limit).reset_index(drop=True)
@@ -456,81 +556,6 @@ def fetch_real_ohlcv_from_market(symbol: str, timeframe: str = "1m", limit: int 
         print(f"Market fetch notice for {symbol}: {e}")
         
     return None
-
-def fetch_tradingview_live_quote(symbol: str) -> Optional[float]:
-    clean = clean_symbol_string(symbol)
-    tv_symbol = None
-    if any(k in clean for k in ['XAU', 'GOLD']):
-        tv_symbol = 'OANDA:XAUUSD'
-    elif 'EURUSD' in clean:
-        tv_symbol = 'FX_IDC:EURUSD'
-    elif 'GBPUSD' in clean:
-        tv_symbol = 'FX_IDC:GBPUSD'
-    elif 'USDJPY' in clean:
-        tv_symbol = 'FX_IDC:USDJPY'
-    elif 'BTC' in clean:
-        tv_symbol = 'BINANCE:BTCUSDT'
-    elif 'ETH' in clean:
-        tv_symbol = 'BINANCE:ETHUSDT'
-    elif 'SOL' in clean:
-        tv_symbol = 'BINANCE:SOLUSDT'
-
-    if not tv_symbol:
-        return None
-
-    try:
-        if 'BINANCE' in tv_symbol:
-            endpoint = 'https://scanner.tradingview.com/crypto/scan'
-        elif 'XAU' in tv_symbol:
-            endpoint = 'https://scanner.tradingview.com/cfd/scan'
-        else:
-            endpoint = 'https://scanner.tradingview.com/forex/scan'
-
-        r = requests.post(
-            endpoint,
-            json={'symbols': {'tickers': [tv_symbol]}, 'columns': ['close']},
-            headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'},
-            timeout=2.0
-        )
-        if r.status_code == 200:
-            data = r.json().get('data', [])
-            if data and data[0].get('d'):
-                val = float(data[0]['d'][0])
-                if val > 0:
-                    return val
-    except Exception:
-        pass
-    return None
-
-def get_synchronized_live_price(symbol: str) -> float:
-    clean = clean_symbol_string(symbol)
-    now = time.time()
-
-    if clean in UNIVERSAL_PRICE_HUB and clean in UNIVERSAL_PRICE_TIMESTAMPS:
-        if now - UNIVERSAL_PRICE_TIMESTAMPS[clean] < PRICE_HUB_TTL_SECONDS and UNIVERSAL_PRICE_HUB[clean] > 0:
-            return UNIVERSAL_PRICE_HUB[clean]
-
-    # 1. TradingView scanner quote for exact chart synchronization (especially OANDA:XAUUSD)
-    tv_p = fetch_tradingview_live_quote(symbol)
-    if tv_p and tv_p > 0:
-        _, precision = get_asset_base_config(symbol)
-        p = round(tv_p, precision)
-        UNIVERSAL_PRICE_HUB[clean] = p
-        UNIVERSAL_PRICE_TIMESTAMPS[clean] = now
-        return p
-
-    # 2. Market real OHLCV fallback
-    real_df = fetch_real_ohlcv_from_market(symbol=symbol, timeframe="1m", limit=5)
-    if real_df is not None and not real_df.empty:
-        p = float(real_df['close'].iloc[-1])
-        UNIVERSAL_PRICE_HUB[clean] = p
-        UNIVERSAL_PRICE_TIMESTAMPS[clean] = now
-        return p
-
-    base_price, precision = get_asset_base_config(symbol)
-    UNIVERSAL_PRICE_HUB[clean] = base_price
-    UNIVERSAL_PRICE_TIMESTAMPS[clean] = now
-    return base_price
 
 def generate_live_ticking_ohlcv(symbol: str = "EUR/USD", timeframe: str = "1m", limit: int = 100) -> pd.DataFrame:
     now_sec = int(time.time())
@@ -542,8 +567,6 @@ def generate_live_ticking_ohlcv(symbol: str = "EUR/USD", timeframe: str = "1m", 
     
     current_bar_ts = (now_sec // step_sec) * step_sec
     timestamps = [(current_bar_ts - (limit - 1 - i) * step_sec) * 1000 for i in range(limit)]
-    
-    records = []
     
     # Square-root of time volatility scaling for accurate multi-timeframe candle ranges
     tf_vol_scale = {
@@ -563,41 +586,38 @@ def generate_live_ticking_ohlcv(symbol: str = "EUR/USD", timeframe: str = "1m", 
         base_vol = 100000
 
     volatility = base_volatility * math.sqrt(scale)
-
     hist_rng = random.Random(int(now_sec // 86400) + hash(symbol) % 100000 + hash(timeframe) % 5000)
-    
-    price = synced_price
-    for i in range(limit - 1):
-        change = hist_rng.gauss(0, volatility)
-        open_p = price
-        close_p = open_p * (1 + change)
-        high_p = max(open_p, close_p) * (1 + abs(hist_rng.gauss(0, volatility * 0.5)))
-        low_p = min(open_p, close_p) * (1 - abs(hist_rng.gauss(0, volatility * 0.5)))
+
+    # Generate backwards from synced_price at index [-1] so current price is EXACTLY synced_price
+    records = [None] * limit
+
+    live_open = synced_price * (1 - hist_rng.gauss(0, volatility * 0.2))
+    live_high = max(live_open, synced_price) * (1 + abs(hist_rng.gauss(0, volatility * 0.15)))
+    live_low = min(live_open, synced_price) * (1 - abs(hist_rng.gauss(0, volatility * 0.15)))
+    records[limit - 1] = {
+        'timestamp': timestamps[-1],
+        'open': round(live_open, precision),
+        'high': round(live_high, precision),
+        'low': round(live_low, precision),
+        'close': round(synced_price, precision),
+        'volume': round(base_vol * 1.2, 2)
+    }
+
+    curr_close = live_open
+    for i in range(limit - 2, -1, -1):
+        prev_open = curr_close * (1 - hist_rng.gauss(0, volatility * 0.3))
+        high_p = max(prev_open, curr_close) * (1 + abs(hist_rng.gauss(0, volatility * 0.2)))
+        low_p = min(prev_open, curr_close) * (1 - abs(hist_rng.gauss(0, volatility * 0.2)))
         vol = hist_rng.uniform(base_vol * 0.7, base_vol * 1.5)
-        
-        records.append({
+        records[i] = {
             'timestamp': timestamps[i],
-            'open': round(open_p, precision),
+            'open': round(prev_open, precision),
             'high': round(high_p, precision),
             'low': round(low_p, precision),
-            'close': round(close_p, precision),
+            'close': round(curr_close, precision),
             'volume': round(vol, 2)
-        })
-        price = close_p
-
-    open_live = price
-    high_live = max(open_live, synced_price)
-    low_live = min(open_live, synced_price)
-    vol_live = base_vol * 1.2
-
-    records.append({
-        'timestamp': timestamps[-1],
-        'open': round(open_live, precision),
-        'high': round(high_live, precision),
-        'low': round(low_live, precision),
-        'close': round(synced_price, precision),
-        'volume': round(vol_live, 2)
-    })
+        }
+        curr_close = prev_open
 
     df = pd.DataFrame(records)
     df.attrs['data_source'] = 'SIMULATED'
@@ -608,22 +628,40 @@ def fetch_ohlcv(symbol: str = "EUR/USD", timeframe: str = "1m", limit: int = 100
     cache_key = f"{clean}_{timeframe}_{limit}"
     now = time.time()
     
+    synced_p = get_synchronized_live_price(symbol)
+    _, precision = get_asset_base_config(symbol)
+
     if cache_key in OHLCV_CACHE:
         cached_time, cached_df = OHLCV_CACHE[cache_key]
         if now - cached_time < CACHE_TTL_SECONDS:
             df = cached_df.copy()
-            synced_p = get_synchronized_live_price(symbol)
-            df.at[df.index[-1], 'close'] = synced_p
+            if synced_p and synced_p > 0:
+                last_c = float(df['close'].iloc[-1])
+                offset = synced_p - last_c
+                if abs(offset) > 0.02:
+                    for col in ['open', 'high', 'low', 'close']:
+                        df[col] = (df[col] + offset).round(precision)
+                df.at[df.index[-1], 'close'] = synced_p
             return df
 
     real_df = fetch_real_ohlcv_from_market(symbol=symbol, timeframe=timeframe, limit=limit)
     if real_df is not None and not real_df.empty:
+        if synced_p and synced_p > 0:
+            last_c = float(real_df['close'].iloc[-1])
+            offset = synced_p - last_c
+            if abs(offset) > 0.02:
+                for col in ['open', 'high', 'low', 'close']:
+                    real_df[col] = (real_df[col] + offset).round(precision)
+            real_df.at[real_df.index[-1], 'close'] = synced_p
+            UNIVERSAL_PRICE_HUB[clean] = synced_p
+            UNIVERSAL_PRICE_TIMESTAMPS[clean] = now
+
         OHLCV_CACHE[cache_key] = (now, real_df)
         return real_df.copy()
 
     fetched_df = generate_live_ticking_ohlcv(symbol=symbol, timeframe=timeframe, limit=limit)
-    synced_p = get_synchronized_live_price(symbol)
-    fetched_df.at[fetched_df.index[-1], 'close'] = synced_p
+    if synced_p and synced_p > 0:
+        fetched_df.at[fetched_df.index[-1], 'close'] = synced_p
 
     OHLCV_CACHE[cache_key] = (now, fetched_df)
     return fetched_df.copy()
@@ -964,7 +1002,7 @@ def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m") ->
         entry_price = synced_now
         entry_zones[0] = entry_price
 
-    min_effective_risk = max(risk_amount, atr * 1.5, 2.0 if entry_price > 10.0 else 0.0015)
+    min_effective_risk = max(risk_amount, atr * 1.5, 3.0 if any(k in clean_symbol_string(symbol) for k in ['XAU', 'GOLD']) else (2.0 if entry_price > 10.0 else 0.0015))
 
     if signal_type == "SELL/SHORT":
         # SELL: Stop loss MUST be strictly ABOVE entry price with adequate safety cushion
@@ -986,6 +1024,8 @@ def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m") ->
             if entry_zones[i] <= entry_price:
                 entry_zones[i] = round(entry_price + zone_step * i, precision)
 
+        rationale = f"[{timeframe.upper()}] [{trend}] Bearish Rejection / Downtrend (ATR ${atr:.{precision}f}). SL: ${stop_loss:.{precision}f}, Risk: ${abs(stop_loss - entry_price):.{precision}f}, OBI {obi_score:+.2f}."
+
     elif signal_type == "BUY/LONG":
         # BUY: Stop loss MUST be strictly BELOW entry price with adequate safety cushion
         if stop_loss >= entry_price or stop_loss > entry_price - 0.5:
@@ -1005,6 +1045,8 @@ def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m") ->
         for i in range(1, len(entry_zones)):
             if entry_zones[i] >= entry_price:
                 entry_zones[i] = round(entry_price - zone_step * i, precision)
+
+        rationale = f"[{timeframe.upper()}] [{trend}] Bullish Demand (ATR ${atr:.{precision}f}). SL: ${stop_loss:.{precision}f}, Risk: ${abs(entry_price - stop_loss):.{precision}f}, OBI {obi_score:+.2f}."
 
     return {
         "symbol": symbol,

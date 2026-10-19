@@ -534,7 +534,7 @@ def audit_ict_log(req: ICTAuditRequest):
 
 # ── JJ SIMON FAIR PRICE NEWS STRATEGY ENGINE ─────────────────────────────────
 
-NEWS_CACHE_TTL_SECONDS = 5.0
+NEWS_CACHE_TTL_SECONDS = 2.0
 NEWS_CACHE: Dict[str, Tuple[float, Dict[str, Any]]] = {}
 NEWS_CACHE_LOCK = threading.Lock()
 NEWS_1M_LIMIT = 120

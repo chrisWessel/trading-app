@@ -517,6 +517,10 @@ def analyze_news_strategy(
     recent_candidates = sample_window[-6:]
     best_trigger = None
 
+    precision = 2 if any(k in symbol.upper() for k in ["XAU", "GOLD", "BTC", "ETH", "SOL"]) else 4
+    is_gold = any(k in symbol.upper() for k in ["XAU", "GOLD"])
+    min_effective_risk = 3.0 if is_gold else (max(0.5 * atr14, 2.0) if current_price > 10 else 0.0015)
+
     if dist_from_fair > (0.6 * atr14):
         # Bullish spike occurred -> Look for Bearish Reversion back to Fair Price
         direction = "SELL/SHORT"
@@ -534,13 +538,13 @@ def analyze_news_strategy(
             best_trigger = last_candle
             counter_wick_ratio, counter_wick_valid, counter_wick_notes = check_counter_wick_rule(last_candle, "SELL/SHORT")
 
-        entry_price = float(best_trigger["close"])
-        # Stop loss MUST be strictly ABOVE entry price for a SELL/SHORT
-        stop_loss = max(highest_p + (0.5 * atr14), entry_price + max(0.2 * atr14, 0.5))
-        risk = max(abs(stop_loss - entry_price), 0.2 * atr14)
-        # 1.5R projection target MUST be strictly BELOW entry price for a SELL/SHORT
-        take_profit_1_5r = min(entry_price - (1.5 * risk), entry_price - 0.5)
-        take_profit_fair = fair_price
+        entry_price = current_price
+        # Stop loss MUST be strictly ABOVE current market price / entry for a SELL/SHORT
+        stop_loss = round(max(highest_p + (0.5 * atr14), current_price + min_effective_risk), precision)
+        risk = max(abs(stop_loss - entry_price), min_effective_risk)
+        # 1.5R projection target MUST be strictly BELOW current market price / entry for a SELL/SHORT
+        take_profit_1_5r = round(min(entry_price - (1.5 * risk), entry_price - 0.5), precision)
+        take_profit_fair = round(fair_price, precision)
 
         if counter_wick_valid:
             phase = "ENTRY_READY"
@@ -565,13 +569,13 @@ def analyze_news_strategy(
             best_trigger = last_candle
             counter_wick_ratio, counter_wick_valid, counter_wick_notes = check_counter_wick_rule(last_candle, "BUY/LONG")
 
-        entry_price = float(best_trigger["close"])
-        # Stop loss MUST be strictly BELOW entry price for a BUY/LONG
-        stop_loss = min(lowest_p - (0.5 * atr14), entry_price - max(0.2 * atr14, 0.5))
-        risk = max(abs(entry_price - stop_loss), 0.2 * atr14)
-        # 1.5R projection target MUST be strictly ABOVE entry price for a BUY/LONG
-        take_profit_1_5r = max(entry_price + (1.5 * risk), entry_price + 0.5)
-        take_profit_fair = fair_price
+        entry_price = current_price
+        # Stop loss MUST be strictly BELOW current market price / entry for a BUY/LONG
+        stop_loss = round(min(lowest_p - (0.5 * atr14), current_price - min_effective_risk), precision)
+        risk = max(abs(entry_price - stop_loss), min_effective_risk)
+        # 1.5R projection target MUST be strictly ABOVE current market price / entry for a BUY/LONG
+        take_profit_1_5r = round(max(entry_price + (1.5 * risk), entry_price + 0.5), precision)
+        take_profit_fair = round(fair_price, precision)
 
         if counter_wick_valid:
             phase = "ENTRY_READY"
@@ -584,8 +588,8 @@ def analyze_news_strategy(
         direction = "WAIT"
         phase = "AT_FAIR_PRICE"
         entry_price = current_price
-        stop_loss = current_price - atr14
-        take_profit_1_5r = current_price + (1.5 * atr14)
+        stop_loss = round(current_price - min_effective_risk, precision)
+        take_profit_1_5r = round(current_price + (1.5 * min_effective_risk), precision)
         confidence = 50
         counter_wick_notes = "Price currently trading near pre-news equilibrium. Awaiting news catalyst injection."
 

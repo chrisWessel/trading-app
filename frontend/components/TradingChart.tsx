@@ -632,21 +632,33 @@ export default function TradingChart({
 
   const ictChartLines = useMemo<ChartExtraLine[]>(() => ictData?.lines ?? [], [ictData]);
 
+  const isHighValueAsset = latestPrice > 10.0;
+  const precision = isHighValueAsset ? 2 : 4;
+  const isGoldSymbol = symbol.toUpperCase().includes('XAU') || symbol.toUpperCase().includes('GOLD');
+
   const newsTradeLevels = useMemo(() => {
     const s = newsData?.setup;
     if (!s || s.direction === 'WAIT' || !(s.entry_price > 0)) return null;
+    const isSell = s.direction === 'SELL/SHORT';
+    const minBuffer = isGoldSymbol ? 3.0 : (s.entry_price > 10 ? s.entry_price * 0.005 : 0.001);
+    let sl = s.stop_loss;
+    let tp = s.take_profit_1_5r;
+    if (isSell) {
+      if (sl <= s.entry_price) sl = Number((s.entry_price + minBuffer).toFixed(precision));
+      if (tp >= s.entry_price) tp = Number((s.entry_price - minBuffer * 1.5).toFixed(precision));
+    } else {
+      if (sl >= s.entry_price) sl = Number((s.entry_price - minBuffer).toFixed(precision));
+      if (tp <= s.entry_price) tp = Number((s.entry_price + minBuffer * 1.5).toFixed(precision));
+    }
     return {
-      signalType: (s.direction === 'SELL/SHORT' ? 'SELL/SHORT' : 'BUY/LONG') as 'SELL/SHORT' | 'BUY/LONG',
+      signalType: (isSell ? 'SELL/SHORT' : 'BUY/LONG') as 'SELL/SHORT' | 'BUY/LONG',
       entry: s.entry_price,
-      stopLoss: s.stop_loss,
-      takeProfit: s.take_profit_1_5r,
+      stopLoss: sl,
+      takeProfit: tp,
     };
-  }, [newsData]);
+  }, [newsData, isGoldSymbol, precision]);
 
   const newsChartLines = useMemo<ChartExtraLine[]>(() => newsData?.chartLines ?? [], [newsData]);
-
-  const isHighValueAsset = latestPrice > 10.0;
-  const precision = isHighValueAsset ? 2 : 4;
 
   const normSig = (signalType || '').toUpperCase();
   const rawStopLoss = Number(tradeParams?.stop_loss);
@@ -662,7 +674,6 @@ export default function TradingChart({
     else if (rawStopLoss < signalEntryPrice) isBuySignal = true;
   }
 
-  const isGoldSymbol = symbol.toUpperCase().includes('XAU') || symbol.toUpperCase().includes('GOLD');
   const hasDirectionalSignal = isSellSignal || isBuySignal;
 
   // Use the raw backend SL/TP directly — the backend already enforces directional
