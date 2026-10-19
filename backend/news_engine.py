@@ -535,11 +535,11 @@ def analyze_news_strategy(
             counter_wick_ratio, counter_wick_valid, counter_wick_notes = check_counter_wick_rule(last_candle, "SELL/SHORT")
 
         entry_price = float(best_trigger["close"])
-        # Stop loss placed above the spike high + 0.5 ATR buffer
-        stop_loss = highest_p + (0.5 * atr14)
+        # Stop loss MUST be strictly ABOVE entry price for a SELL/SHORT
+        stop_loss = max(highest_p + (0.5 * atr14), entry_price + max(0.2 * atr14, 0.5))
         risk = max(abs(stop_loss - entry_price), 0.2 * atr14)
-        # 1.5R projection target
-        take_profit_1_5r = entry_price - (1.5 * risk)
+        # 1.5R projection target MUST be strictly BELOW entry price for a SELL/SHORT
+        take_profit_1_5r = min(entry_price - (1.5 * risk), entry_price - 0.5)
         take_profit_fair = fair_price
 
         if counter_wick_valid:
@@ -566,11 +566,11 @@ def analyze_news_strategy(
             counter_wick_ratio, counter_wick_valid, counter_wick_notes = check_counter_wick_rule(last_candle, "BUY/LONG")
 
         entry_price = float(best_trigger["close"])
-        # Stop loss placed below the spike low - 0.5 ATR buffer
-        stop_loss = lowest_p - (0.5 * atr14)
+        # Stop loss MUST be strictly BELOW entry price for a BUY/LONG
+        stop_loss = min(lowest_p - (0.5 * atr14), entry_price - max(0.2 * atr14, 0.5))
         risk = max(abs(entry_price - stop_loss), 0.2 * atr14)
-        # 1.5R projection target
-        take_profit_1_5r = entry_price + (1.5 * risk)
+        # 1.5R projection target MUST be strictly ABOVE entry price for a BUY/LONG
+        take_profit_1_5r = max(entry_price + (1.5 * risk), entry_price + 0.5)
         take_profit_fair = fair_price
 
         if counter_wick_valid:
@@ -686,25 +686,28 @@ def analyze_news_strategy(
     ]
 
     if phase == "ENTRY_READY" or direction in ("BUY/LONG", "SELL/SHORT"):
+        is_short = direction == "SELL/SHORT"
+        sl_text = "ABOVE ENTRY" if is_short else "BELOW ENTRY"
+        tp_text = "BELOW ENTRY" if is_short else "ABOVE ENTRY"
         chart_lines.extend([
             {
                 "price": round(entry_price, precision),
-                "color": "#3b82f6",  # Blue
-                "title": f"News Entry Trigger (${entry_price:.{precision}f})",
+                "color": "#f43f5e" if is_short else "#3b82f6",
+                "title": f"{'🔴 SHORT' if is_short else '🟢 LONG'} Entry (${entry_price:.{precision}f})",
                 "lineWidth": 2,
                 "lineStyle": 0,
             },
             {
                 "price": round(stop_loss, precision),
                 "color": "#ef4444",  # Red
-                "title": f"Stop Loss [ATR Buffer] (${stop_loss:.{precision}f})",
+                "title": f"🛑 Stop Loss [{sl_text}] (${stop_loss:.{precision}f})",
                 "lineWidth": 2,
                 "lineStyle": 1,
             },
             {
                 "price": round(take_profit_1_5r, precision),
                 "color": "#10b981",  # Emerald
-                "title": f"Target 1.5R (${take_profit_1_5r:.{precision}f})",
+                "title": f"🎯 Target 1.5R [{tp_text}] (${take_profit_1_5r:.{precision}f})",
                 "lineWidth": 2,
                 "lineStyle": 0,
             },

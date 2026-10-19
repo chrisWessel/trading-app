@@ -99,20 +99,20 @@ export default function CustomAlgorithmicChart({ symbol, timeframe, tabId, trade
     }
 
     const isSell = levels.signalType === 'SELL/SHORT';
-    const levelsAreDirectional = isSell
-      ? levels.stopLoss > levels.entry && levels.takeProfit < levels.entry
-      : levels.stopLoss < levels.entry && levels.takeProfit > levels.entry;
-    if (!levelsAreDirectional) {
-      chart._signalPriceLines = [];
-      return;
-    }
+    const defaultRisk = Math.max(Math.abs(levels.entry - levels.stopLoss), levels.entry * 0.001, 1.0);
+    const validSL = isSell
+      ? (levels.stopLoss > levels.entry ? levels.stopLoss : levels.entry + defaultRisk)
+      : (levels.stopLoss < levels.entry ? levels.stopLoss : levels.entry - defaultRisk);
+    const validTP = isSell
+      ? (levels.takeProfit < levels.entry ? levels.takeProfit : levels.entry - defaultRisk * 1.5)
+      : (levels.takeProfit > levels.entry ? levels.takeProfit : levels.entry + defaultRisk * 1.5);
 
     chart._signalPriceLines = [
-      series.createPriceLine({ price: levels.entry, color: isSell ? '#f43f5e' : '#3b82f6', lineWidth: 2, axisLabelVisible: true, title: isSell ? 'SELL ENTRY' : 'BUY ENTRY' }),
-      series.createPriceLine({ price: levels.stopLoss, color: '#f43f5e', lineWidth: 2, axisLabelVisible: true, title: 'STOP LOSS' }),
-      series.createPriceLine({ price: levels.takeProfit, color: '#10b981', lineWidth: 2, axisLabelVisible: true, title: isSell ? 'TAKE PROFIT · BUY BACK' : 'TAKE PROFIT · SELL' }),
-      ...(levels.support ? [series.createPriceLine({ price: levels.support, color: '#22c55e', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: 'SUPPORT' })] : []),
-      ...(levels.resistance ? [series.createPriceLine({ price: levels.resistance, color: '#f97316', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: 'RESISTANCE' })] : []),
+      series.createPriceLine({ price: levels.entry, color: isSell ? '#f43f5e' : '#3b82f6', lineWidth: 2, axisLabelVisible: true, title: isSell ? '🔴 SELL ENTRY' : '🟢 BUY ENTRY' }),
+      series.createPriceLine({ price: validSL, color: '#f43f5e', lineWidth: 2, axisLabelVisible: true, title: isSell ? '🛑 SHORT STOP LOSS (ABOVE ENTRY)' : '🛑 LONG STOP LOSS (BELOW ENTRY)' }),
+      series.createPriceLine({ price: validTP, color: '#10b981', lineWidth: 2, axisLabelVisible: true, title: isSell ? '🎯 SHORT TARGET (BELOW ENTRY)' : '🎯 LONG TARGET (ABOVE ENTRY)' }),
+      ...(levels.support && Math.abs(levels.support - validSL) > 0.05 ? [series.createPriceLine({ price: levels.support, color: '#22c55e', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: 'SUPPORT' })] : []),
+      ...(levels.resistance && Math.abs(levels.resistance - validSL) > 0.05 ? [series.createPriceLine({ price: levels.resistance, color: '#f97316', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: 'RESISTANCE' })] : []),
     ];
   }, [tradeLevels?.signalType, tradeLevels?.entry, tradeLevels?.stopLoss, tradeLevels?.takeProfit]);
   
@@ -237,16 +237,21 @@ export default function CustomAlgorithmicChart({ symbol, timeframe, tabId, trade
       const levels = tradeLevelsRef.current;
       if (levels) {
         const isSell = levels.signalType === 'SELL/SHORT';
-        const levelsAreDirectional = isSell
-          ? levels.stopLoss > levels.entry && levels.takeProfit < levels.entry
-          : levels.stopLoss < levels.entry && levels.takeProfit > levels.entry;
-        chart._signalPriceLines = levelsAreDirectional ? [
-          series.createPriceLine({ price: levels.entry, color: isSell ? '#f43f5e' : '#3b82f6', lineWidth: 2, axisLabelVisible: true, title: isSell ? 'SELL ENTRY' : 'BUY ENTRY' }),
-          series.createPriceLine({ price: levels.stopLoss, color: '#f43f5e', lineWidth: 2, axisLabelVisible: true, title: 'STOP LOSS' }),
-           series.createPriceLine({ price: levels.takeProfit, color: '#10b981', lineWidth: 2, axisLabelVisible: true, title: isSell ? 'TAKE PROFIT · BUY BACK' : 'TAKE PROFIT · SELL' }),
-           ...(levels.support ? [series.createPriceLine({ price: levels.support, color: '#22c55e', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: 'SUPPORT' })] : []),
-           ...(levels.resistance ? [series.createPriceLine({ price: levels.resistance, color: '#f97316', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: 'RESISTANCE' })] : []),
-        ] : [];
+        const defaultRisk = Math.max(Math.abs(levels.entry - levels.stopLoss), levels.entry * 0.001, 1.0);
+        const validSL = isSell
+          ? (levels.stopLoss > levels.entry ? levels.stopLoss : levels.entry + defaultRisk)
+          : (levels.stopLoss < levels.entry ? levels.stopLoss : levels.entry - defaultRisk);
+        const validTP = isSell
+          ? (levels.takeProfit < levels.entry ? levels.takeProfit : levels.entry - defaultRisk * 1.5)
+          : (levels.takeProfit > levels.entry ? levels.takeProfit : levels.entry + defaultRisk * 1.5);
+
+        chart._signalPriceLines = [
+          series.createPriceLine({ price: levels.entry, color: isSell ? '#f43f5e' : '#3b82f6', lineWidth: 2, axisLabelVisible: true, title: isSell ? '🔴 SELL ENTRY' : '🟢 BUY ENTRY' }),
+          series.createPriceLine({ price: validSL, color: '#f43f5e', lineWidth: 2, axisLabelVisible: true, title: isSell ? '🛑 SHORT STOP LOSS (ABOVE ENTRY)' : '🛑 LONG STOP LOSS (BELOW ENTRY)' }),
+          series.createPriceLine({ price: validTP, color: '#10b981', lineWidth: 2, axisLabelVisible: true, title: isSell ? '🎯 SHORT TARGET (BELOW ENTRY)' : '🎯 LONG TARGET (ABOVE ENTRY)' }),
+          ...(levels.support && Math.abs(levels.support - validSL) > 0.05 ? [series.createPriceLine({ price: levels.support, color: '#22c55e', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: 'SUPPORT' })] : []),
+          ...(levels.resistance && Math.abs(levels.resistance - validSL) > 0.05 ? [series.createPriceLine({ price: levels.resistance, color: '#f97316', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: 'RESISTANCE' })] : []),
+        ];
       } else {
         chart._signalPriceLines = [];
       }
