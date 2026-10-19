@@ -1,11 +1,12 @@
 'use client';
 
 import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
-import { RefreshCw, Zap, ChevronDown, Clock, Radio, ArrowUpRight, ArrowDownRight, Shield, Target, AlertOctagon, Activity, ArrowRightLeft, TrendingUp } from 'lucide-react';
+import { RefreshCw, Zap, ChevronDown, Clock, Radio, ArrowUpRight, ArrowDownRight, Shield, Target, AlertOctagon, Activity, ArrowRightLeft, TrendingUp, BarChart2, Monitor } from 'lucide-react';
 import { API_BASE_URL } from '@/lib/apiConfig';
 import ICTScalpPanel, { type IctPublish } from '@/components/ICTScalpPanel';
 import SessionRibbon from '@/components/SessionRibbon';
 import NewsTradingPanel, { type NewsStrategyPublish } from '@/components/NewsTradingPanel';
+import CustomAlgorithmicChart from '@/components/CustomAlgorithmicChart';
 
 
 export type ChartTabId = 'live_signals' | 'algo_market_structure' | 'ict_scalp' | 'news_trading';
@@ -148,7 +149,6 @@ function TVWidgetTab({ symbol, timeframe, tabId, instructions, studies, tradeLev
   const priceLineIdsRef = useRef<any[]>([]);
   const extraLineIdsRef = useRef<any[]>([]);
   const [chartReady, setChartReady] = useState(false);
-  const CHART_HEIGHT = 520;
 
   useEffect(() => {
     const scriptId = 'tradingview-widget-script';
@@ -278,17 +278,10 @@ function TVWidgetTab({ symbol, timeframe, tabId, instructions, studies, tradeLev
     const levels = tradeLevels;
     const isSell = levels.signalType === 'SELL/SHORT';
 
-    // Strict mathematical direction clamping:
-    // A SELL trade MUST have Stop Loss > Entry and Take Profit < Entry.
-    // A BUY trade MUST have Stop Loss < Entry and Take Profit > Entry.
-    const defaultRisk = Math.max(Math.abs(levels.entry - levels.stopLoss), levels.entry * 0.001, 1.0);
-    const validSL = isSell
-      ? (levels.stopLoss > levels.entry ? levels.stopLoss : levels.entry + defaultRisk)
-      : (levels.stopLoss < levels.entry ? levels.stopLoss : levels.entry - defaultRisk);
-
-    const validTP = isSell
-      ? (levels.takeProfit < levels.entry ? levels.takeProfit : levels.entry - defaultRisk * 1.5)
-      : (levels.takeProfit > levels.entry ? levels.takeProfit : levels.entry + defaultRisk * 1.5);
+    // Use the backend-provided SL/TP directly — the backend already enforces
+    // directional correctness.  No frontend re-clamping needed.
+    const sl = levels.stopLoss;
+    const tp = levels.takeProfit;
 
     const tryCreate = (price: number, color: string, title: string) => {
       try {
@@ -298,12 +291,12 @@ function TVWidgetTab({ symbol, timeframe, tabId, instructions, studies, tradeLev
     };
 
     tryCreate(levels.entry, isSell ? '#f43f5e' : '#3b82f6', isSell ? '🔴 SELL ENTRY' : '🟢 BUY ENTRY');
-    tryCreate(validSL, '#f43f5e', isSell ? '🛑 SHORT STOP LOSS (ABOVE ENTRY)' : '🛑 LONG STOP LOSS (BELOW ENTRY)');
-    tryCreate(validTP, '#10b981', isSell ? '🎯 SHORT TARGET (BELOW ENTRY)' : '🎯 LONG TARGET (ABOVE ENTRY)');
-    if (levels.support && levels.support > 0 && Math.abs(levels.support - validSL) > 0.1 && Math.abs(levels.support - validTP) > 0.1) {
+    if (sl > 0) tryCreate(sl, '#f43f5e', isSell ? '🛑 SHORT STOP LOSS (ABOVE ENTRY)' : '🛑 LONG STOP LOSS (BELOW ENTRY)');
+    if (tp > 0) tryCreate(tp, '#10b981', isSell ? '🎯 SHORT TARGET (BELOW ENTRY)' : '🎯 LONG TARGET (ABOVE ENTRY)');
+    if (levels.support && levels.support > 0 && Math.abs(levels.support - sl) > 0.1 && Math.abs(levels.support - tp) > 0.1) {
       tryCreate(levels.support, '#22c55e', 'SUPPORT');
     }
-    if (levels.resistance && levels.resistance > 0 && Math.abs(levels.resistance - validSL) > 0.1 && Math.abs(levels.resistance - validTP) > 0.1) {
+    if (levels.resistance && levels.resistance > 0 && Math.abs(levels.resistance - sl) > 0.1 && Math.abs(levels.resistance - tp) > 0.1) {
       tryCreate(levels.resistance, '#f97316', 'RESISTANCE');
     }
   }, [chartReady, tradeLevels]);
@@ -340,58 +333,6 @@ function TVWidgetTab({ symbol, timeframe, tabId, instructions, studies, tradeLev
     });
   }, [chartReady, extraKey]);
 
-  const renderHtmlOverlay = () => {
-    if (!tradeLevels || tradeLevels.entry <= 0 || chartReady) return null;
-
-    const isSell = tradeLevels.signalType === 'SELL/SHORT';
-    const defaultRisk = Math.max(Math.abs(tradeLevels.entry - tradeLevels.stopLoss), tradeLevels.entry * 0.001, 1.0);
-    const validSL = isSell
-      ? (tradeLevels.stopLoss > tradeLevels.entry ? tradeLevels.stopLoss : tradeLevels.entry + defaultRisk)
-      : (tradeLevels.stopLoss < tradeLevels.entry ? tradeLevels.stopLoss : tradeLevels.entry - defaultRisk);
-    const validTP = isSell
-      ? (tradeLevels.takeProfit < tradeLevels.entry ? tradeLevels.takeProfit : tradeLevels.entry - defaultRisk * 1.5)
-      : (tradeLevels.takeProfit > tradeLevels.entry ? tradeLevels.takeProfit : tradeLevels.entry + defaultRisk * 1.5);
-
-    const prices = [tradeLevels.entry, validSL, validTP];
-    if (tradeLevels.support && tradeLevels.support > 0) prices.push(tradeLevels.support);
-    if (tradeLevels.resistance && tradeLevels.resistance > 0) prices.push(tradeLevels.resistance);
-    const valid = prices.filter(p => p > 0);
-    if (valid.length === 0) return null;
-
-    const minP = Math.min(...valid);
-    const maxP = Math.max(...valid);
-    const range = maxP - minP || 1;
-    const pad = range * 0.15;
-    const adjMin = minP - pad;
-    const adjMax = maxP + pad;
-    const adjRange = adjMax - adjMin;
-
-    const lines = [
-      { price: tradeLevels.entry, color: isSell ? '#f43f5e' : '#3b82f6', label: isSell ? '🔴 SELL ENTRY' : '🟢 BUY ENTRY' },
-      { price: validSL, color: '#f43f5e', label: isSell ? '🛑 SL (ABOVE ENTRY)' : '🛑 SL (BELOW ENTRY)' },
-      { price: validTP, color: '#10b981', label: isSell ? '🎯 TP (BELOW ENTRY)' : '🎯 TP (ABOVE ENTRY)' },
-    ];
-    if (tradeLevels.support && tradeLevels.support > 0 && Math.abs(tradeLevels.support - validSL) > 0.1) lines.push({ price: tradeLevels.support, color: '#22c55e', label: 'SUPPORT' });
-    if (tradeLevels.resistance && tradeLevels.resistance > 0 && Math.abs(tradeLevels.resistance - validSL) > 0.1) lines.push({ price: tradeLevels.resistance, color: '#f97316', label: 'RESISTANCE' });
-
-    return (
-      <div className="absolute inset-0 pointer-events-none" style={{ zIndex: 10 }}>
-        {lines.map((line, i) => {
-          const y = ((adjMax - line.price) / adjRange) * CHART_HEIGHT;
-          return (
-            <div key={i} className="absolute left-0 right-0" style={{ top: `${y}px` }}>
-              <div className="absolute inset-x-0 h-px" style={{ backgroundColor: line.color, opacity: 0.7 }}></div>
-              <span className="absolute left-1 top-0 text-xs font-mono px-1.5 py-0.5 rounded"
-                style={{ backgroundColor: 'rgba(0,0,0,0.85)', color: line.color }}>
-                {line.label} {line.price.toFixed(2)}
-              </span>
-            </div>
-          );
-        })}
-      </div>
-    );
-  };
-
   return (
     <div className="flex flex-col gap-3">
       {instructions && (
@@ -401,7 +342,6 @@ function TVWidgetTab({ symbol, timeframe, tabId, instructions, studies, tradeLev
       )}
       <div className="relative w-full h-[520px] rounded-lg overflow-hidden border border-slate-950">
         <div ref={containerRef} className="w-full h-full" />
-        {renderHtmlOverlay()}
       </div>
     </div>
   );
@@ -654,6 +594,7 @@ export default function TradingChart({
   const [resistanceLevel, setResistanceLevel] = useState<number>(0);
   const [wsConnected, setWsConnected] = useState<boolean>(false);
   const [showDropdown, setShowDropdown] = useState<boolean>(false);
+  const [chartViewMode, setChartViewMode] = useState<'precision' | 'tradingview'>('precision');
 
   const [signalType, setSignalType] = useState<string>('NEUTRAL');
   const [tradeParams, setTradeParams] = useState<any>(null);
@@ -724,42 +665,12 @@ export default function TradingChart({
   const isGoldSymbol = symbol.toUpperCase().includes('XAU') || symbol.toUpperCase().includes('GOLD');
   const hasDirectionalSignal = isSellSignal || isBuySignal;
 
-  const defaultRisk = Math.max(
-    Number.isFinite(rawStopLoss) && rawStopLoss > 0 ? Math.abs(signalEntryPrice - rawStopLoss) : 0,
-    Math.abs(resistanceLevel - supportLevel) * 0.1,
-    signalEntryPrice * 0.001,
-    1.0
-  );
-
-  // STRICT MATHEMATICAL GUARANTEE:
-  // For SELL / SHORT: Stop Loss MUST be strictly ABOVE entry. Take Profit MUST be strictly BELOW entry.
-  // For BUY / LONG: Stop Loss MUST be strictly BELOW entry. Take Profit MUST be strictly ABOVE entry.
-  let stopLossPrice = 0;
-  let takeProfitPrice = 0;
-
-  if (signalEntryPrice > 0 && (isSellSignal || isBuySignal)) {
-    if (isSellSignal) {
-      // SL is strictly ABOVE entry
-      stopLossPrice = (Number.isFinite(rawStopLoss) && rawStopLoss > signalEntryPrice)
-        ? rawStopLoss
-        : signalEntryPrice + defaultRisk;
-      // TP is strictly BELOW entry
-      const tpDist = (Number.isFinite(rawTakeProfit) && rawTakeProfit < signalEntryPrice)
-        ? (signalEntryPrice - rawTakeProfit)
-        : defaultRisk * 1.5;
-      takeProfitPrice = signalEntryPrice - tpDist;
-    } else {
-      // SL is strictly BELOW entry
-      stopLossPrice = (Number.isFinite(rawStopLoss) && rawStopLoss < signalEntryPrice)
-        ? rawStopLoss
-        : signalEntryPrice - defaultRisk;
-      // TP is strictly ABOVE entry
-      const tpDist = (Number.isFinite(rawTakeProfit) && rawTakeProfit > signalEntryPrice)
-        ? (rawTakeProfit - signalEntryPrice)
-        : defaultRisk * 1.5;
-      takeProfitPrice = signalEntryPrice + tpDist;
-    }
-  }
+  // Use the raw backend SL/TP directly — the backend already enforces directional
+  // correctness (SELL SL > entry, BUY SL < entry).  Re-computing here with
+  // defaultRisk fallbacks produced different values from the left-panel sidebar,
+  // causing the "SL $4164.92 vs $4190" mismatch.
+  const stopLossPrice = (Number.isFinite(rawStopLoss) && rawStopLoss > 0) ? rawStopLoss : 0;
+  const takeProfitPrice = (Number.isFinite(rawTakeProfit) && rawTakeProfit > 0) ? rawTakeProfit : 0;
 
   // ── Fetch algo market structure analysis from backend ──
   const fetchAlgoAnalysis = useCallback(async () => {
@@ -974,27 +885,58 @@ export default function TradingChart({
       </div>
 
       {/* Tabs Switcher */}
-      <div className="flex flex-wrap items-center gap-2 border-b border-slate-800 pb-3">
-        {[
-          { id: 'live_signals', label: 'Live Signals & Lines' },
-          { id: 'algo_market_structure', label: 'Algo Market Structure (Live Feed)' },
-          { id: 'ict_scalp', label: '⚡ ICT Scalp (AMD Sessions)' },
-          { id: 'news_trading', label: '📰 News Catalyst (Fair Price)' },
-        ].map((tab) => (
-          <button
-            key={tab.id}
-            onClick={() => {
-              onActiveTabChange(tab.id as ChartTabId);
-            }}
-            className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all ${
-              activeTab === tab.id
-                ? 'bg-blue-600 text-white shadow-md shadow-blue-900/40'
-                : 'bg-slate-950 text-slate-400 hover:bg-slate-800 hover:text-slate-200 border border-slate-800'
-            }`}
-          >
-            {tab.label}
-          </button>
-        ))}
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 pb-3">
+        <div className="flex flex-wrap items-center gap-2">
+          {[
+            { id: 'live_signals', label: 'Live Signals & Lines' },
+            { id: 'algo_market_structure', label: 'Algo Market Structure (Live Feed)' },
+            { id: 'ict_scalp', label: '⚡ ICT Scalp (AMD Sessions)' },
+            { id: 'news_trading', label: '📰 News Catalyst (Fair Price)' },
+          ].map((tab) => (
+            <button
+              key={tab.id}
+              onClick={() => {
+                onActiveTabChange(tab.id as ChartTabId);
+              }}
+              className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all ${
+                activeTab === tab.id
+                  ? 'bg-blue-600 text-white shadow-md shadow-blue-900/40'
+                  : 'bg-slate-950 text-slate-400 hover:bg-slate-800 hover:text-slate-200 border border-slate-800'
+              }`}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+
+        {activeTab === 'live_signals' && (
+          <div className="flex items-center gap-1 bg-slate-950 p-1 rounded-lg border border-slate-800 font-mono text-xs">
+            <button
+              onClick={() => setChartViewMode('precision')}
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-bold transition ${
+                chartViewMode === 'precision'
+                  ? 'bg-blue-600 text-white shadow-md shadow-blue-900/40'
+                  : 'text-slate-400 hover:text-white hover:bg-slate-800'
+              }`}
+              title="Precision Interactive Chart with exact anchored SL/TP/Entry lines"
+            >
+              <BarChart2 className="w-3.5 h-3.5 text-emerald-400" />
+              <span>Precision Lines Chart</span>
+            </button>
+            <button
+              onClick={() => setChartViewMode('tradingview')}
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-bold transition ${
+                chartViewMode === 'tradingview'
+                  ? 'bg-blue-600 text-white shadow-md shadow-blue-900/40'
+                  : 'text-slate-400 hover:text-white hover:bg-slate-800'
+              }`}
+              title="OANDA TradingView Widget Feed"
+            >
+              <Monitor className="w-3.5 h-3.5 text-blue-400" />
+              <span>OANDA TradingView</span>
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Visual Technical Trading Decision Lines Guide Bar - ONLY on Live Signals */}
@@ -1150,19 +1092,35 @@ export default function TradingChart({
 
       {/* Tab Content Render */}
       {activeTab === 'live_signals' && (
-        <TVWidgetTab
-          symbol={symbol}
-          timeframe={timeframe}
-          tabId="live_signals_tv"
-          tradeLevels={signalEntryPrice > 0 && (sl > 0 && tp > 0) && (isSellSignal || isBuySignal) ? {
-            signalType: isSellSignal ? 'SELL/SHORT' : 'BUY/LONG',
-            entry: signalEntryPrice,
-            stopLoss: sl,
-            takeProfit: tp,
-            support: supportLevel,
-            resistance: resistanceLevel,
-          } : null}
-        />
+        chartViewMode === 'precision' ? (
+          <CustomAlgorithmicChart
+            symbol={symbol}
+            timeframe={timeframe}
+            tabId="live_signals_precision"
+            tradeLevels={signalEntryPrice > 0 && (sl > 0 || tp > 0) && (isSellSignal || isBuySignal) ? {
+              signalType: isSellSignal ? 'SELL/SHORT' : 'BUY/LONG',
+              entry: signalEntryPrice,
+              stopLoss: sl,
+              takeProfit: tp,
+              support: supportLevel,
+              resistance: resistanceLevel,
+            } : null}
+          />
+        ) : (
+          <TVWidgetTab
+            symbol={symbol}
+            timeframe={timeframe}
+            tabId="live_signals_tv"
+            tradeLevels={signalEntryPrice > 0 && (sl > 0 || tp > 0) && (isSellSignal || isBuySignal) ? {
+              signalType: isSellSignal ? 'SELL/SHORT' : 'BUY/LONG',
+              entry: signalEntryPrice,
+              stopLoss: sl,
+              takeProfit: tp,
+              support: supportLevel,
+              resistance: resistanceLevel,
+            } : null}
+          />
+        )
       )}
       
       {activeTab === 'algo_market_structure' && (

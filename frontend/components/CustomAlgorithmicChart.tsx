@@ -99,20 +99,16 @@ export default function CustomAlgorithmicChart({ symbol, timeframe, tabId, trade
     }
 
     const isSell = levels.signalType === 'SELL/SHORT';
-    const defaultRisk = Math.max(Math.abs(levels.entry - levels.stopLoss), levels.entry * 0.001, 1.0);
-    const validSL = isSell
-      ? (levels.stopLoss > levels.entry ? levels.stopLoss : levels.entry + defaultRisk)
-      : (levels.stopLoss < levels.entry ? levels.stopLoss : levels.entry - defaultRisk);
-    const validTP = isSell
-      ? (levels.takeProfit < levels.entry ? levels.takeProfit : levels.entry - defaultRisk * 1.5)
-      : (levels.takeProfit > levels.entry ? levels.takeProfit : levels.entry + defaultRisk * 1.5);
+    // Use backend-provided SL/TP directly — already directionally correct.
+    const sl = levels.stopLoss;
+    const tp = levels.takeProfit;
 
     chart._signalPriceLines = [
       series.createPriceLine({ price: levels.entry, color: isSell ? '#f43f5e' : '#3b82f6', lineWidth: 2, axisLabelVisible: true, title: isSell ? '🔴 SELL ENTRY' : '🟢 BUY ENTRY' }),
-      series.createPriceLine({ price: validSL, color: '#f43f5e', lineWidth: 2, axisLabelVisible: true, title: isSell ? '🛑 SHORT STOP LOSS (ABOVE ENTRY)' : '🛑 LONG STOP LOSS (BELOW ENTRY)' }),
-      series.createPriceLine({ price: validTP, color: '#10b981', lineWidth: 2, axisLabelVisible: true, title: isSell ? '🎯 SHORT TARGET (BELOW ENTRY)' : '🎯 LONG TARGET (ABOVE ENTRY)' }),
-      ...(levels.support && Math.abs(levels.support - validSL) > 0.05 ? [series.createPriceLine({ price: levels.support, color: '#22c55e', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: 'SUPPORT' })] : []),
-      ...(levels.resistance && Math.abs(levels.resistance - validSL) > 0.05 ? [series.createPriceLine({ price: levels.resistance, color: '#f97316', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: 'RESISTANCE' })] : []),
+      ...(sl > 0 ? [series.createPriceLine({ price: sl, color: '#f43f5e', lineWidth: 2, axisLabelVisible: true, title: isSell ? '🛑 SHORT STOP LOSS (ABOVE ENTRY)' : '🛑 LONG STOP LOSS (BELOW ENTRY)' })] : []),
+      ...(tp > 0 ? [series.createPriceLine({ price: tp, color: '#10b981', lineWidth: 2, axisLabelVisible: true, title: isSell ? '🎯 SHORT TARGET (BELOW ENTRY)' : '🎯 LONG TARGET (ABOVE ENTRY)' })] : []),
+      ...(levels.support && Math.abs(levels.support - sl) > 0.05 ? [series.createPriceLine({ price: levels.support, color: '#22c55e', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: 'SUPPORT' })] : []),
+      ...(levels.resistance && Math.abs(levels.resistance - sl) > 0.05 ? [series.createPriceLine({ price: levels.resistance, color: '#f97316', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: 'RESISTANCE' })] : []),
     ];
   }, [tradeLevels?.signalType, tradeLevels?.entry, tradeLevels?.stopLoss, tradeLevels?.takeProfit]);
   
@@ -237,20 +233,15 @@ export default function CustomAlgorithmicChart({ symbol, timeframe, tabId, trade
       const levels = tradeLevelsRef.current;
       if (levels) {
         const isSell = levels.signalType === 'SELL/SHORT';
-        const defaultRisk = Math.max(Math.abs(levels.entry - levels.stopLoss), levels.entry * 0.001, 1.0);
-        const validSL = isSell
-          ? (levels.stopLoss > levels.entry ? levels.stopLoss : levels.entry + defaultRisk)
-          : (levels.stopLoss < levels.entry ? levels.stopLoss : levels.entry - defaultRisk);
-        const validTP = isSell
-          ? (levels.takeProfit < levels.entry ? levels.takeProfit : levels.entry - defaultRisk * 1.5)
-          : (levels.takeProfit > levels.entry ? levels.takeProfit : levels.entry + defaultRisk * 1.5);
+        const sl = levels.stopLoss;
+        const tp = levels.takeProfit;
 
         chart._signalPriceLines = [
           series.createPriceLine({ price: levels.entry, color: isSell ? '#f43f5e' : '#3b82f6', lineWidth: 2, axisLabelVisible: true, title: isSell ? '🔴 SELL ENTRY' : '🟢 BUY ENTRY' }),
-          series.createPriceLine({ price: validSL, color: '#f43f5e', lineWidth: 2, axisLabelVisible: true, title: isSell ? '🛑 SHORT STOP LOSS (ABOVE ENTRY)' : '🛑 LONG STOP LOSS (BELOW ENTRY)' }),
-          series.createPriceLine({ price: validTP, color: '#10b981', lineWidth: 2, axisLabelVisible: true, title: isSell ? '🎯 SHORT TARGET (BELOW ENTRY)' : '🎯 LONG TARGET (ABOVE ENTRY)' }),
-          ...(levels.support && Math.abs(levels.support - validSL) > 0.05 ? [series.createPriceLine({ price: levels.support, color: '#22c55e', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: 'SUPPORT' })] : []),
-          ...(levels.resistance && Math.abs(levels.resistance - validSL) > 0.05 ? [series.createPriceLine({ price: levels.resistance, color: '#f97316', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: 'RESISTANCE' })] : []),
+          ...(sl > 0 ? [series.createPriceLine({ price: sl, color: '#f43f5e', lineWidth: 2, axisLabelVisible: true, title: isSell ? '🛑 SHORT STOP LOSS (ABOVE ENTRY)' : '🛑 LONG STOP LOSS (BELOW ENTRY)' })] : []),
+          ...(tp > 0 ? [series.createPriceLine({ price: tp, color: '#10b981', lineWidth: 2, axisLabelVisible: true, title: isSell ? '🎯 SHORT TARGET (BELOW ENTRY)' : '🎯 LONG TARGET (ABOVE ENTRY)' })] : []),
+          ...(levels.support && Math.abs(levels.support - sl) > 0.05 ? [series.createPriceLine({ price: levels.support, color: '#22c55e', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: 'SUPPORT' })] : []),
+          ...(levels.resistance && Math.abs(levels.resistance - sl) > 0.05 ? [series.createPriceLine({ price: levels.resistance, color: '#f97316', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: 'RESISTANCE' })] : []),
         ];
       } else {
         chart._signalPriceLines = [];
@@ -304,7 +295,7 @@ export default function CustomAlgorithmicChart({ symbol, timeframe, tabId, trade
         </div>
       )}
       
-      <div className="relative w-full h-[400px]">
+      <div className="relative w-full h-[520px]">
         {loading && (
           <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-slate-900/80 backdrop-blur-sm">
             <Loader2 className="w-8 h-8 text-blue-500 animate-spin mb-2" />
