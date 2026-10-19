@@ -21,6 +21,8 @@ except (ImportError, OSError):
 OHLCV_CACHE: Dict[str, Tuple[float, pd.DataFrame]] = {}
 ORDERBOOK_CACHE: Dict[str, Tuple[float, Dict[str, Any]]] = {}
 UNIVERSAL_PRICE_HUB: Dict[str, float] = {}
+UNIVERSAL_PRICE_TIMESTAMPS: Dict[str, float] = {}
+PRICE_HUB_TTL_SECONDS = 3.0
 CACHE_TTL_SECONDS = 1.0  # Ultra-fast memory cache TTL
 MT5_GOLD_SYMBOL = os.getenv("MT5_GOLD_SYMBOL", "XAUUSD")
 MT5_TERMINAL_PATH = os.getenv("MT5_TERMINAL_PATH", r"C:\Program Files\MetaTrader 5\terminal64.exe")
@@ -455,20 +457,79 @@ def fetch_real_ohlcv_from_market(symbol: str, timeframe: str = "1m", limit: int 
         
     return None
 
+def fetch_tradingview_live_quote(symbol: str) -> Optional[float]:
+    clean = clean_symbol_string(symbol)
+    tv_symbol = None
+    if any(k in clean for k in ['XAU', 'GOLD']):
+        tv_symbol = 'OANDA:XAUUSD'
+    elif 'EURUSD' in clean:
+        tv_symbol = 'FX_IDC:EURUSD'
+    elif 'GBPUSD' in clean:
+        tv_symbol = 'FX_IDC:GBPUSD'
+    elif 'USDJPY' in clean:
+        tv_symbol = 'FX_IDC:USDJPY'
+    elif 'BTC' in clean:
+        tv_symbol = 'BINANCE:BTCUSDT'
+    elif 'ETH' in clean:
+        tv_symbol = 'BINANCE:ETHUSDT'
+    elif 'SOL' in clean:
+        tv_symbol = 'BINANCE:SOLUSDT'
+
+    if not tv_symbol:
+        return None
+
+    try:
+        if 'BINANCE' in tv_symbol:
+            endpoint = 'https://scanner.tradingview.com/crypto/scan'
+        elif 'XAU' in tv_symbol:
+            endpoint = 'https://scanner.tradingview.com/cfd/scan'
+        else:
+            endpoint = 'https://scanner.tradingview.com/forex/scan'
+
+        r = requests.post(
+            endpoint,
+            json={'symbols': {'tickers': [tv_symbol]}, 'columns': ['close']},
+            headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'},
+            timeout=2.0
+        )
+        if r.status_code == 200:
+            data = r.json().get('data', [])
+            if data and data[0].get('d'):
+                val = float(data[0]['d'][0])
+                if val > 0:
+                    return val
+    except Exception:
+        pass
+    return None
+
 def get_synchronized_live_price(symbol: str) -> float:
     clean = clean_symbol_string(symbol)
+    now = time.time()
 
-    if clean in UNIVERSAL_PRICE_HUB and UNIVERSAL_PRICE_HUB[clean] > 0:
-        return UNIVERSAL_PRICE_HUB[clean]
+    if clean in UNIVERSAL_PRICE_HUB and clean in UNIVERSAL_PRICE_TIMESTAMPS:
+        if now - UNIVERSAL_PRICE_TIMESTAMPS[clean] < PRICE_HUB_TTL_SECONDS and UNIVERSAL_PRICE_HUB[clean] > 0:
+            return UNIVERSAL_PRICE_HUB[clean]
 
+    # 1. TradingView scanner quote for exact chart synchronization (especially OANDA:XAUUSD)
+    tv_p = fetch_tradingview_live_quote(symbol)
+    if tv_p and tv_p > 0:
+        _, precision = get_asset_base_config(symbol)
+        p = round(tv_p, precision)
+        UNIVERSAL_PRICE_HUB[clean] = p
+        UNIVERSAL_PRICE_TIMESTAMPS[clean] = now
+        return p
+
+    # 2. Market real OHLCV fallback
     real_df = fetch_real_ohlcv_from_market(symbol=symbol, timeframe="1m", limit=5)
     if real_df is not None and not real_df.empty:
         p = float(real_df['close'].iloc[-1])
         UNIVERSAL_PRICE_HUB[clean] = p
+        UNIVERSAL_PRICE_TIMESTAMPS[clean] = now
         return p
 
     base_price, precision = get_asset_base_config(symbol)
     UNIVERSAL_PRICE_HUB[clean] = base_price
+    UNIVERSAL_PRICE_TIMESTAMPS[clean] = now
     return base_price
 
 def generate_live_ticking_ohlcv(symbol: str = "EUR/USD", timeframe: str = "1m", limit: int = 100) -> pd.DataFrame:
@@ -897,43 +958,52 @@ def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m") ->
     # Absolute guarantee: no matter what was computed above, these rules MUST hold.
     #   SELL/SHORT: Stop Loss MUST be ABOVE entry.  All TPs MUST be BELOW entry.
     #   BUY/LONG:  Stop Loss MUST be BELOW entry.  All TPs MUST be ABOVE entry.
-    # If a value is on the wrong side we correct it using the pip/risk distance.
-    min_buffer = pip * 10  # at least 10 pips clearance from entry
+    # Re-sync entry_price with live ticking price right before finalizing trade parameters
+    synced_now = get_synchronized_live_price(symbol)
+    if synced_now and synced_now > 0:
+        entry_price = synced_now
+        entry_zones[0] = entry_price
+
+    min_effective_risk = max(risk_amount, atr * 1.5, 2.0 if entry_price > 10.0 else 0.0015)
 
     if signal_type == "SELL/SHORT":
-        # SL must be strictly above entry
-        if stop_loss <= entry_price:
-            stop_loss = round(entry_price + risk_amount, precision)
+        # SELL: Stop loss MUST be strictly ABOVE entry price with adequate safety cushion
+        if stop_loss <= entry_price or stop_loss < entry_price + 0.5:
+            stop_loss = round(entry_price + min_effective_risk, precision)
+
         # Every TP must be strictly below entry
         corrected_tps = []
         for i, tp in enumerate(tp_levels):
             if tp >= entry_price:
-                tp = round(entry_price - risk_amount - pip_step * i, precision)
+                tp = round(entry_price - min_effective_risk - pip_step * i, precision)
             corrected_tps.append(tp)
         tp_levels = corrected_tps
         tp1 = tp_levels[0]
         tp2 = tp_levels[min(3, len(tp_levels) - 1)]
+
         # Zones for SELL: Z1 = current price, Z2-5 go UP (better short prices)
-        for i, z in enumerate(entry_zones):
-            if i > 0 and z <= entry_price:
+        for i in range(1, len(entry_zones)):
+            if entry_zones[i] <= entry_price:
                 entry_zones[i] = round(entry_price + zone_step * i, precision)
 
     elif signal_type == "BUY/LONG":
-        # SL must be strictly below entry
-        if stop_loss >= entry_price:
-            stop_loss = round(entry_price - risk_amount, precision)
+        # BUY: Stop loss MUST be strictly BELOW entry price with adequate safety cushion
+        if stop_loss >= entry_price or stop_loss > entry_price - 0.5:
+            stop_loss = round(entry_price - min_effective_risk, precision)
+
         # Every TP must be strictly above entry
         corrected_tps = []
         for i, tp in enumerate(tp_levels):
             if tp <= entry_price:
-                tp = round(entry_price + risk_amount + pip_step * i, precision)
+                tp = round(entry_price + min_effective_risk + pip_step * i, precision)
             corrected_tps.append(tp)
         tp_levels = corrected_tps
         tp1 = tp_levels[0]
         tp2 = tp_levels[min(3, len(tp_levels) - 1)]
+
         # Zones for BUY: Z1 = current price, Z2-5 go DOWN (better buy prices)
-        for i, z in enumerate(entry_zones):
-            if i > 0 and z >= entry_price:
+        for i in range(1, len(entry_zones)):
+            if entry_zones[i] >= entry_price:
                 entry_zones[i] = round(entry_price - zone_step * i, precision)
 
     return {

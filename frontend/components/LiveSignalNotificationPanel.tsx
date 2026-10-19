@@ -131,6 +131,38 @@ export default function LiveSignalNotificationPanel({
         const incoming_zones: number[] = a.trade_params.entry_zones || [];
         const incoming_tp_levels: number[] = a.trade_params.tp_levels || [];
 
+        const isGoldSymbol = symbol.toUpperCase().includes('XAU') || symbol.toUpperCase().includes('GOLD');
+        const minRiskBuffer = isGoldSymbol ? 3.5 : (a.latest_price > 10 ? a.latest_price * 0.005 : 0.001);
+
+        // Strict directional check: ensure SL and TPs never contradict trade direction
+        let effectiveSL = a.trade_params.stop_loss;
+        if (isSell && (effectiveSL <= a.latest_price || effectiveSL <= a.trade_params.entry)) {
+          effectiveSL = Number((Math.max(a.latest_price, a.trade_params.entry) + minRiskBuffer).toFixed(precision));
+        } else if (isBuy && (effectiveSL >= a.latest_price || effectiveSL >= a.trade_params.entry)) {
+          effectiveSL = Number((Math.min(a.latest_price, a.trade_params.entry) - minRiskBuffer).toFixed(precision));
+        }
+
+        let effectiveTpLevels = incoming_tp_levels.map((tp, i) => {
+          const mult = (i + 1) * 1.0;
+          if (isSell && tp >= a.trade_params.entry) {
+            return Number((a.trade_params.entry - minRiskBuffer * mult).toFixed(precision));
+          }
+          if (isBuy && tp <= a.trade_params.entry) {
+            return Number((a.trade_params.entry + minRiskBuffer * mult).toFixed(precision));
+          }
+          return tp;
+        });
+
+        let effectiveTp1 = a.trade_params.tp1;
+        let effectiveTp2 = a.trade_params.tp2;
+        if (isSell) {
+          if (effectiveTp1 >= a.trade_params.entry) effectiveTp1 = Number((a.trade_params.entry - minRiskBuffer).toFixed(precision));
+          if (effectiveTp2 >= a.trade_params.entry) effectiveTp2 = Number((a.trade_params.entry - minRiskBuffer * 2).toFixed(precision));
+        } else if (isBuy) {
+          if (effectiveTp1 <= a.trade_params.entry) effectiveTp1 = Number((a.trade_params.entry + minRiskBuffer).toFixed(precision));
+          if (effectiveTp2 <= a.trade_params.entry) effectiveTp2 = Number((a.trade_params.entry + minRiskBuffer * 2).toFixed(precision));
+        }
+
         const prevFrozen = frozenRef.current;
         const directionChanged = !prevFrozen || prevFrozen.signal_type !== a.signal_type;
 
@@ -138,10 +170,10 @@ export default function LiveSignalNotificationPanel({
           signal_type: a.signal_type,
           entry: a.trade_params.entry,
           entry_zones: incoming_zones,
-          stop_loss: a.trade_params.stop_loss,
-          tp1: a.trade_params.tp1,
-          tp2: a.trade_params.tp2,
-          tp_levels: incoming_tp_levels,
+          stop_loss: effectiveSL,
+          tp1: effectiveTp1,
+          tp2: effectiveTp2,
+          tp_levels: effectiveTpLevels,
         };
         frozenRef.current = latestParams;
         setFrozenParams(latestParams);
@@ -159,10 +191,10 @@ export default function LiveSignalNotificationPanel({
           notifMsg = `Trading resumes on Monday starting with the Asia market. Signal Navigator is disabled for non-crypto assets.`;
         } else if (isBuy) {
           notifTitle = `🟢 BUY NOW! [${timeframe.toUpperCase()}] ENTRY FOR ${symbol}`;
-          notifMsg = `Bullish Demand on ${timeframe} timeframe at $${a.latest_price.toFixed(precision)}. Stop Loss: $${a.trade_params.stop_loss.toFixed(precision)}`;
+          notifMsg = `Bullish Demand on ${timeframe} timeframe at $${a.latest_price.toFixed(precision)}. Stop Loss: $${effectiveSL.toFixed(precision)}`;
         } else if (isSell) {
           notifTitle = `🔴 SELL NOW! [${timeframe.toUpperCase()}] SHORT FOR ${symbol}`;
-          notifMsg = `Bearish Rejection / Downtrend on ${timeframe} timeframe at $${a.latest_price.toFixed(precision)}. Stop Loss: $${a.trade_params.stop_loss.toFixed(precision)}`;
+          notifMsg = `Bearish Rejection / Downtrend on ${timeframe} timeframe at $${a.latest_price.toFixed(precision)}. Stop Loss: $${effectiveSL.toFixed(precision)}`;
         } else {
           notifTitle = `⏸️ MARKET STANDBY [${timeframe.toUpperCase()}] FOR ${symbol}`;
           notifMsg = `Consolidation on ${timeframe}. Monitoring market for high-probability setups.`;
@@ -177,10 +209,10 @@ export default function LiveSignalNotificationPanel({
           message: notifMsg,
           entry: a.trade_params.entry,
           entry_zones: incoming_zones,
-          stop_loss: a.trade_params.stop_loss,
-          tp1: a.trade_params.tp1,
-          tp2: a.trade_params.tp2,
-          tp_levels: incoming_tp_levels,
+          stop_loss: effectiveSL,
+          tp1: effectiveTp1,
+          tp2: effectiveTp2,
+          tp_levels: effectiveTpLevels,
           rationale: a.trade_params.rationale,
         };
 
@@ -213,10 +245,43 @@ export default function LiveSignalNotificationPanel({
   // Use frozen params for display (constant); fall back to latest notif while loading
   const displayEntry = frozenParams?.entry ?? latestNotif?.entry ?? 0;
   const displayEntryZones = frozenParams?.entry_zones ?? latestNotif?.entry_zones ?? [];
-  const displaySL = frozenParams?.stop_loss ?? latestNotif?.stop_loss ?? 0;
-  const displayTpLevels = frozenParams?.tp_levels ?? latestNotif?.tp_levels ?? [];
-  const displayTp1 = frozenParams?.tp1 ?? latestNotif?.tp1 ?? 0;
-  const displayTp2 = frozenParams?.tp2 ?? latestNotif?.tp2 ?? 0;
+  const rawSL = frozenParams?.stop_loss ?? latestNotif?.stop_loss ?? 0;
+  const rawTpLevels = frozenParams?.tp_levels ?? latestNotif?.tp_levels ?? [];
+  const rawTp1 = frozenParams?.tp1 ?? latestNotif?.tp1 ?? 0;
+  const rawTp2 = frozenParams?.tp2 ?? latestNotif?.tp2 ?? 0;
+
+  const isSellTrade = latestNotif?.type === 'SELL_NOW' || frozenParams?.signal_type === 'SELL/SHORT';
+  const isBuyTrade = latestNotif?.type === 'BUY_NOW' || frozenParams?.signal_type === 'BUY/LONG';
+  const isGold = symbol.toUpperCase().includes('XAU') || symbol.toUpperCase().includes('GOLD');
+  const buffer = isGold ? 3.5 : (displayEntry > 10 ? displayEntry * 0.005 : 0.001);
+
+  let displaySL = rawSL;
+  if (isSellTrade && displayEntry > 0 && displaySL <= displayEntry) {
+    displaySL = Number((displayEntry + buffer).toFixed(precision));
+  } else if (isBuyTrade && displayEntry > 0 && displaySL >= displayEntry) {
+    displaySL = Number((displayEntry - buffer).toFixed(precision));
+  }
+
+  const displayTpLevels = rawTpLevels.map((tp, i) => {
+    const mult = (i + 1) * 1.0;
+    if (isSellTrade && displayEntry > 0 && tp >= displayEntry) {
+      return Number((displayEntry - buffer * mult).toFixed(precision));
+    }
+    if (isBuyTrade && displayEntry > 0 && tp <= displayEntry) {
+      return Number((displayEntry + buffer * mult).toFixed(precision));
+    }
+    return tp;
+  });
+
+  let displayTp1 = rawTp1;
+  let displayTp2 = rawTp2;
+  if (isSellTrade && displayEntry > 0) {
+    if (displayTp1 >= displayEntry) displayTp1 = Number((displayEntry - buffer).toFixed(precision));
+    if (displayTp2 >= displayEntry) displayTp2 = Number((displayEntry - buffer * 2).toFixed(precision));
+  } else if (isBuyTrade && displayEntry > 0) {
+    if (displayTp1 <= displayEntry) displayTp1 = Number((displayEntry + buffer).toFixed(precision));
+    if (displayTp2 <= displayEntry) displayTp2 = Number((displayEntry + buffer * 2).toFixed(precision));
+  }
 
   // TP chip colors cycling green → teal → blue → purple
   const tpColors = [

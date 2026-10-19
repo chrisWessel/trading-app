@@ -666,11 +666,27 @@ export default function TradingChart({
   const hasDirectionalSignal = isSellSignal || isBuySignal;
 
   // Use the raw backend SL/TP directly — the backend already enforces directional
-  // correctness (SELL SL > entry, BUY SL < entry).  Re-computing here with
-  // defaultRisk fallbacks produced different values from the left-panel sidebar,
-  // causing the "SL $4164.92 vs $4190" mismatch.
-  const stopLossPrice = (Number.isFinite(rawStopLoss) && rawStopLoss > 0) ? rawStopLoss : 0;
-  const takeProfitPrice = (Number.isFinite(rawTakeProfit) && rawTakeProfit > 0) ? rawTakeProfit : 0;
+  // correctness (SELL SL > entry, BUY SL < entry).
+  let stopLossPrice = (Number.isFinite(rawStopLoss) && rawStopLoss > 0) ? rawStopLoss : 0;
+  let takeProfitPrice = (Number.isFinite(rawTakeProfit) && rawTakeProfit > 0) ? rawTakeProfit : 0;
+
+  // Strict directional safety clamp:
+  const minRiskBuffer = isGoldSymbol ? 3.5 : (signalEntryPrice > 10 ? signalEntryPrice * 0.005 : 0.001);
+  if (isSellSignal && signalEntryPrice > 0) {
+    if (stopLossPrice <= signalEntryPrice) {
+      stopLossPrice = Number((signalEntryPrice + minRiskBuffer).toFixed(precision));
+    }
+    if (takeProfitPrice >= signalEntryPrice && takeProfitPrice > 0) {
+      takeProfitPrice = Number((signalEntryPrice - minRiskBuffer * 1.5).toFixed(precision));
+    }
+  } else if (isBuySignal && signalEntryPrice > 0) {
+    if (stopLossPrice >= signalEntryPrice && stopLossPrice > 0) {
+      stopLossPrice = Number((signalEntryPrice - minRiskBuffer).toFixed(precision));
+    }
+    if (takeProfitPrice <= signalEntryPrice && takeProfitPrice > 0) {
+      takeProfitPrice = Number((signalEntryPrice + minRiskBuffer * 1.5).toFixed(precision));
+    }
+  }
 
   // ── Fetch algo market structure analysis from backend ──
   const fetchAlgoAnalysis = useCallback(async () => {
