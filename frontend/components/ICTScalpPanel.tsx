@@ -441,8 +441,58 @@ function buildChartLines(a: IctAnalysis): IctChartLine[] {
   const lines: IctChartLine[] = [];
 
   if (a.asia_range) {
-    lines.push({ price: a.asia_range.high, color: '#f59e0b', title: 'ASIA HIGH', lineWidth: 2, lineStyle: 2 });
-    lines.push({ price: a.asia_range.low, color: '#f59e0b', title: 'ASIA LOW', lineWidth: 2, lineStyle: 2 });
+    lines.push({
+      price: a.asia_range.high,
+      color: '#f43f5e',
+      title: `🔴 ASIA HIGH ${a.asia_range.high.toFixed(2)} (Buy-Side Liquidity Pool)`,
+      lineWidth: 2,
+      lineStyle: 2,
+    });
+    lines.push({
+      price: a.asia_range.low,
+      color: '#10b981',
+      title: `🟢 ASIA LOW ${a.asia_range.low.toFixed(2)} (Sell-Side Liquidity Pool)`,
+      lineWidth: 2,
+      lineStyle: 2,
+    });
+    lines.push({
+      price: a.asia_range.midpoint,
+      color: '#eab308',
+      title: `🟡 ASIA 50% EQ ${a.asia_range.midpoint.toFixed(2)} (Equilibrium)`,
+      lineWidth: 1,
+      lineStyle: 1,
+    });
+  }
+
+  if (a.midnight_open_price) {
+    lines.push({
+      price: a.midnight_open_price,
+      color: '#f97316',
+      title: `🟠 MIDNIGHT OPEN ${a.midnight_open_price.toFixed(2)} (00:00 ET Anchor)`,
+      lineWidth: 2,
+      lineStyle: 2,
+    });
+  }
+
+  if (a.htf) {
+    if (a.htf.previous_day_high) {
+      lines.push({
+        price: a.htf.previous_day_high,
+        color: '#a855f7',
+        title: `🟣 PDH ${a.htf.previous_day_high.toFixed(2)} (Prev Day High — Major DOL)`,
+        lineWidth: 2,
+        lineStyle: 0,
+      });
+    }
+    if (a.htf.previous_day_low) {
+      lines.push({
+        price: a.htf.previous_day_low,
+        color: '#06b6d4',
+        title: `🔵 PDL ${a.htf.previous_day_low.toFixed(2)} (Prev Day Low — Major DOL)`,
+        lineWidth: 2,
+        lineStyle: 0,
+      });
+    }
   }
 
   // The raid boundary and the structure it broke are the two levels the London
@@ -451,7 +501,7 @@ function buildChartLines(a: IctAnalysis): IctChartLine[] {
     lines.push({
       price: a.raid.level,
       color: '#fb923c',
-      title: a.raid.side === 'BUY_SIDE' ? 'ASIA HIGH RAIDED' : 'ASIA LOW RAIDED',
+      title: a.raid.side === 'BUY_SIDE' ? `⚠️ ASIA HIGH RAIDED ${a.raid.level.toFixed(2)} (Judas Sweep)` : `⚠️ ASIA LOW RAIDED ${a.raid.level.toFixed(2)} (Judas Sweep)`,
       lineWidth: 2,
       lineStyle: 3,
     });
@@ -461,7 +511,7 @@ function buildChartLines(a: IctAnalysis): IctChartLine[] {
     lines.push({
       price: a.mss.broken_level,
       color: a.mss.confirmed ? '#22d3ee' : '#64748b',
-      title: a.mss.confirmed ? 'MSS BROKEN' : 'MSS LEVEL',
+      title: a.mss.confirmed ? `✅ MSS BROKEN ${a.mss.broken_level.toFixed(2)} (Structure Shift)` : `⏳ MSS LEVEL ${a.mss.broken_level.toFixed(2)} (Awaiting Break)`,
       lineWidth: a.mss.confirmed ? 2 : 1,
       lineStyle: 4,
     });
@@ -472,14 +522,14 @@ function buildChartLines(a: IctAnalysis): IctChartLine[] {
     lines.push({
       price: z.zone_bottom,
       color: z.direction === 'LONG' ? '#34d399' : '#fb7185',
-      title: `${z.kind} ENTRY`,
+      title: `${z.kind} ENTRY BOTTOM ${z.zone_bottom.toFixed(2)}`,
       lineWidth: 2,
       lineStyle: 0,
     });
     lines.push({
       price: z.zone_top,
       color: z.direction === 'LONG' ? '#34d399' : '#fb7185',
-      title: `${z.kind} ENTRY`,
+      title: `${z.kind} ENTRY TOP ${z.zone_top.toFixed(2)}`,
       lineWidth: 2,
       lineStyle: 0,
     });
@@ -490,7 +540,7 @@ function buildChartLines(a: IctAnalysis): IctChartLine[] {
     lines.push({
       price: a.ny_scenario.unreached_htf_target,
       color: '#38bdf8',
-      title: 'HTF DOL TARGET',
+      title: `🎯 HTF DOL TARGET ${a.ny_scenario.unreached_htf_target.toFixed(2)}`,
       lineWidth: 2,
       lineStyle: 2,
     });
@@ -500,7 +550,7 @@ function buildChartLines(a: IctAnalysis): IctChartLine[] {
     lines.push({
       price: a.sweep.level,
       color: '#a855f7',
-      title: a.sweep.side === 'BUY_SIDE' ? 'SWEPT HIGHS' : 'SWEPT LOWS',
+      title: a.sweep.side === 'BUY_SIDE' ? `SWEPT HIGHS ${a.sweep.level.toFixed(2)}` : `SWEPT LOWS ${a.sweep.level.toFixed(2)}`,
       lineWidth: 1,
       lineStyle: 3,
     });
@@ -510,14 +560,14 @@ function buildChartLines(a: IctAnalysis): IctChartLine[] {
     lines.push({
       price: g.zone_bottom,
       color: g.direction === 'LONG' ? '#34d399' : '#fb7185',
-      title: `IFVG ${g.zone_bottom}`,
+      title: `IFVG ${g.zone_bottom.toFixed(2)}`,
       lineWidth: 1,
       lineStyle: 1,
     });
     lines.push({
       price: g.zone_top,
       color: g.direction === 'LONG' ? '#34d399' : '#fb7185',
-      title: `IFVG ${g.zone_top}`,
+      title: `IFVG ${g.zone_top.toFixed(2)}`,
       lineWidth: 1,
       lineStyle: 1,
     });
@@ -527,33 +577,28 @@ function buildChartLines(a: IctAnalysis): IctChartLine[] {
     lines.push({
       price: g.bottom,
       color: '#64748b',
-      title: `FVG ${g.direction === 'BULLISH' ? '↑' : '↓'}`,
+      title: `FVG ${g.direction === 'BULLISH' ? '↑' : '↓'} ${g.bottom.toFixed(2)}`,
       lineWidth: 1,
       lineStyle: 2,
     });
     lines.push({
       price: g.top,
       color: '#64748b',
-      title: `FVG ${g.direction === 'BULLISH' ? '↑' : '↓'}`,
+      title: `FVG ${g.direction === 'BULLISH' ? '↑' : '↓'} ${g.top.toFixed(2)}`,
       lineWidth: 1,
       lineStyle: 2,
     });
   });
 
-  (a.liquidity_levels || []).slice(-6).forEach((l) => {
+  (a.liquidity_levels || []).slice(-4).forEach((l) => {
     lines.push({
       price: l.price,
       color: l.side === 'BUY_SIDE' ? '#38bdf8' : '#fb923c',
-      title: l.type === 'EQUAL_HIGHS' ? 'EQ HIGHS' : 'EQ LOWS',
+      title: l.type === 'EQUAL_HIGHS' ? `EQ HIGHS ${l.price.toFixed(2)}` : `EQ LOWS ${l.price.toFixed(2)}`,
       lineWidth: 1,
       lineStyle: 3,
     });
   });
-
-  if (a.htf) {
-    if (a.htf.previous_day_high) lines.push({ price: a.htf.previous_day_high, color: '#94a3b8', title: 'PDH', lineWidth: 1, lineStyle: 1 });
-    if (a.htf.previous_day_low) lines.push({ price: a.htf.previous_day_low, color: '#94a3b8', title: 'PDL', lineWidth: 1, lineStyle: 1 });
-  }
 
   // De-duplicate by price so we never stack identical lines on the axis.
   const seen = new Set<number>();
@@ -579,6 +624,8 @@ export default function ICTScalpPanel({ symbol, timeframe, onPublish }: Props) {
   const [copiedAudit, setCopiedAudit] = useState(false);
   const [auditing, setAuditing] = useState(false);
   const [showExplanation, setShowExplanation] = useState(true);
+  const [copiedLevels, setCopiedLevels] = useState(false);
+  const [copiedField, setCopiedField] = useState<string | null>(null);
 
   const fetchAnalysis = useCallback(async () => {
     try {
@@ -730,6 +777,36 @@ export default function ICTScalpPanel({ symbol, timeframe, onPublish }: Props) {
     setTimeout(() => setCopiedAudit(false), 2000);
   };
 
+  const handleCopyAllLevels = () => {
+    if (!data) return;
+    const parts: string[] = [
+      `ICT AUTO-MARKED LEVELS (${symbol} · ${session.name} SESSION):`,
+    ];
+    if (asia) {
+      parts.push(`- Asia High (Buy-Side Liquidity Pool): ${asia.high}`);
+      parts.push(`- Asia Low (Sell-Side Liquidity Pool): ${asia.low}`);
+      parts.push(`- Asia 50% Equilibrium (Fair Value Divider): ${asia.midpoint} (Span: ${asia.range_points} pts)`);
+    }
+    if (data.midnight_open_price) {
+      parts.push(`- Midnight Open (00:00 ET True Day Open): ${data.midnight_open_price}`);
+    }
+    if (htf?.previous_day_high) {
+      parts.push(`- Previous Day High (PDH / DOL): ${htf.previous_day_high}`);
+    }
+    if (htf?.previous_day_low) {
+      parts.push(`- Previous Day Low (PDL / DOL): ${htf.previous_day_low}`);
+    }
+    navigator.clipboard.writeText(parts.join('\n'));
+    setCopiedLevels(true);
+    setTimeout(() => setCopiedLevels(false), 2000);
+  };
+
+  const handleCopySingleLevel = (label: string, price: number) => {
+    navigator.clipboard.writeText(price.toString());
+    setCopiedField(label);
+    setTimeout(() => setCopiedField(null), 1500);
+  };
+
   return (
     <div className="space-y-3 font-mono">
 
@@ -760,6 +837,16 @@ export default function ICTScalpPanel({ symbol, timeframe, onPublish }: Props) {
         </div>
         <p className="mt-2.5 text-xs text-slate-300">{session.guidance}</p>
 
+        {/* Autonomous Chart Marking confirmation pill */}
+        <div className="mt-2.5 flex flex-wrap items-center gap-2 px-3 py-2 rounded-lg bg-amber-950/40 border border-amber-800/60 text-xs">
+          <span className="font-bold text-amber-400 flex items-center gap-1.5">
+            <Crosshair className="w-3.5 h-3.5 text-amber-400" /> Auto-Marked Chart Active:
+          </span>
+          <span className="text-slate-300">
+            Levels are drawn on the TradingView chart above: Asia High (🔴 <span className="font-black text-rose-300">{asia?.high ?? '--'}</span>), Asia Low (🟢 <span className="font-black text-emerald-300">{asia?.low ?? '--'}</span>), 50% EQ (🟡 <span className="font-black text-amber-300">{asia?.midpoint ?? '--'}</span>).
+          </span>
+        </div>
+
         {!isLive && nextKz.label && (
           <div className="mt-3 flex flex-wrap items-center gap-2 px-3 py-2 rounded-lg bg-slate-950/70 border border-slate-800">
             <Timer className="w-4 h-4 text-amber-400" />
@@ -781,6 +868,237 @@ export default function ICTScalpPanel({ symbol, timeframe, onPublish }: Props) {
             </span>
           </div>
         )}
+      </div>
+
+      {/* ── AUTONOMOUSLY MARKED LEVELS & INSTITUTIONAL ROADMAP (WHERE & WHY) ─── */}
+      <div className="bg-slate-900/95 border border-amber-600/50 rounded-xl p-4 shadow-xl space-y-3.5">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 pb-3">
+          <div className="flex items-center gap-2.5">
+            <div className="p-2 rounded-lg bg-amber-950/80 border border-amber-600 text-amber-300">
+              <Crosshair className="w-5 h-5 text-amber-400" />
+            </div>
+            <div>
+              <div className="text-sm font-black text-white uppercase tracking-wider flex items-center gap-2">
+                System Auto-Marked Levels &amp; Institutional Roadmap
+                <span className="text-[10px] bg-emerald-950 text-emerald-300 border border-emerald-600/70 px-2 py-0.5 rounded-full font-bold flex items-center gap-1">
+                  <CheckCircle2 className="w-3 h-3 text-emerald-400" /> Auto-Drawn on Chart Above
+                </span>
+              </div>
+              <div className="text-[11px] text-slate-400">
+                You do NOT need to mark levels manually. The engine identifies and projects Asia boundaries, 50% Equilibrium, Midnight Open, and HTF pools directly on TradingView.
+              </div>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={handleCopyAllLevels}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-bold text-slate-200 transition"
+            >
+              {copiedLevels ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5 text-slate-400" />}
+              {copiedLevels ? 'Copied All Coordinates!' : 'Copy All Levels'}
+            </button>
+          </div>
+        </div>
+
+        {/* Live Equilibrium & Premium/Discount Bar */}
+        {asia && (
+          <div className="bg-slate-950/80 border border-slate-800 rounded-lg p-3 space-y-2">
+            <div className="flex flex-wrap items-center justify-between text-xs gap-2">
+              <div className="flex items-center gap-2">
+                <span className="text-slate-400 font-bold uppercase text-[10px]">Consolidation State:</span>
+                <span className={`px-2 py-0.5 rounded font-black text-xs ${
+                  data.current_price > asia.midpoint
+                    ? 'bg-rose-950/80 text-rose-300 border border-rose-800'
+                    : 'bg-emerald-950/80 text-emerald-300 border border-emerald-800'
+                }`}>
+                  {data.current_price > asia.midpoint ? '🔥 PREMIUM ZONE (Above 50% EQ)' : '💎 DISCOUNT ZONE (Below 50% EQ)'}
+                </span>
+                <span className="text-[11px] text-slate-400 font-mono">
+                  Current Price: <strong className="text-white">{data.current_price}</strong>
+                </span>
+              </div>
+              <div className="text-[11px] text-slate-400 font-mono">
+                Asia Range: <span className="text-amber-300 font-bold">{asia.range_points} pts</span> · {asia.complete ? 'Locked (19:00–02:00 ET)' : 'Actively Accumulating'}
+              </div>
+            </div>
+
+            {/* Visual range bar */}
+            <div className="relative pt-3 pb-1">
+              <div className="h-3 w-full bg-slate-800 rounded-full overflow-hidden flex">
+                <div className="h-full bg-emerald-900/50 border-r border-amber-400/80 flex items-center justify-start pl-2 text-[9px] text-emerald-300 font-bold" style={{ width: '50%' }}>
+                  DISCOUNT (Smart Money Buys)
+                </div>
+                <div className="h-full bg-rose-900/50 flex items-center justify-end pr-2 text-[9px] text-rose-300 font-bold" style={{ width: '50%' }}>
+                  PREMIUM (Smart Money Sells)
+                </div>
+              </div>
+              <div className="flex justify-between items-center text-[10px] text-slate-400 mt-1 font-mono">
+                <span className="text-emerald-400 font-bold">🟢 Asia Low: {asia.low}</span>
+                <span className="text-amber-300 font-black">🟡 50% Equilibrium: {asia.midpoint}</span>
+                <span className="text-rose-400 font-bold">🔴 Asia High: {asia.high}</span>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* 4 Cards: Exact Levels, Where & Why */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-2.5">
+          {/* Card 1: Asia High */}
+          <div className="bg-slate-950/90 border border-rose-900/50 rounded-xl p-3 space-y-2 flex flex-col justify-between">
+            <div>
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-black text-rose-400 flex items-center gap-1.5">
+                  🔴 ASIA HIGH
+                </span>
+                <span className={`text-[9px] px-1.5 py-0.5 rounded font-bold ${
+                  asia?.high_swept ? 'bg-rose-950 text-rose-300 border border-rose-800' : 'bg-slate-800 text-slate-400'
+                }`}>
+                  {asia?.high_swept ? 'SWEPT / RAIDED' : 'UNSWEPT POOL'}
+                </span>
+              </div>
+              <div className="mt-1 flex items-baseline justify-between">
+                <span className="text-lg font-black text-white font-mono">{asia?.high ?? '--'}</span>
+                {asia && (
+                  <button
+                    type="button"
+                    onClick={() => handleCopySingleLevel('Asia High', asia.high)}
+                    className="text-[10px] text-slate-400 hover:text-slate-200 underline font-mono"
+                  >
+                    {copiedField === 'Asia High' ? 'Copied' : 'Copy'}
+                  </button>
+                )}
+              </div>
+              <div className="text-[10px] text-rose-300/80 font-bold uppercase mt-1">WHERE WE MARK IT:</div>
+              <p className="text-[11px] text-slate-300 leading-snug">
+                Highest wick printed between 19:00 ET and 02:00 ET. Automatically plotted with a red dashed line.
+              </p>
+              <div className="text-[10px] text-rose-300/80 font-bold uppercase mt-2">WHY WE MARK IT (ICT REASON):</div>
+              <p className="text-[11px] text-slate-400 leading-snug">
+                Retail traders place buy-stop orders above this peak. London algorithms engineer a Judas Swing wick through this level to trigger buy-stops and engineer liquidity to fill institutional short positions.
+              </p>
+            </div>
+            <div className="pt-2 border-t border-slate-800/80 text-[10.5px] text-amber-300 font-semibold leading-tight">
+              ⚡ Action: Wait for London (02:00–05:00 ET) to wick above, close back inside, then enter SHORT on MSS.
+            </div>
+          </div>
+
+          {/* Card 2: Asia Low */}
+          <div className="bg-slate-950/90 border border-emerald-900/50 rounded-xl p-3 space-y-2 flex flex-col justify-between">
+            <div>
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-black text-emerald-400 flex items-center gap-1.5">
+                  🟢 ASIA LOW
+                </span>
+                <span className={`text-[9px] px-1.5 py-0.5 rounded font-bold ${
+                  asia?.low_swept ? 'bg-emerald-950 text-emerald-300 border border-emerald-800' : 'bg-slate-800 text-slate-400'
+                }`}>
+                  {asia?.low_swept ? 'SWEPT / RAIDED' : 'UNSWEPT POOL'}
+                </span>
+              </div>
+              <div className="mt-1 flex items-baseline justify-between">
+                <span className="text-lg font-black text-white font-mono">{asia?.low ?? '--'}</span>
+                {asia && (
+                  <button
+                    type="button"
+                    onClick={() => handleCopySingleLevel('Asia Low', asia.low)}
+                    className="text-[10px] text-slate-400 hover:text-slate-200 underline font-mono"
+                  >
+                    {copiedField === 'Asia Low' ? 'Copied' : 'Copy'}
+                  </button>
+                )}
+              </div>
+              <div className="text-[10px] text-emerald-300/80 font-bold uppercase mt-1">WHERE WE MARK IT:</div>
+              <p className="text-[11px] text-slate-300 leading-snug">
+                Lowest wick printed between 19:00 ET and 02:00 ET. Automatically plotted with a green dashed line.
+              </p>
+              <div className="text-[10px] text-emerald-300/80 font-bold uppercase mt-2">WHY WE MARK IT (ICT REASON):</div>
+              <p className="text-[11px] text-slate-400 leading-snug">
+                Retail sell-stop loss orders pool below this floor. London drives price down to engineer liquidity and fill large institutional buy blocks at discount prices.
+              </p>
+            </div>
+            <div className="pt-2 border-t border-slate-800/80 text-[10.5px] text-amber-300 font-semibold leading-tight">
+              ⚡ Action: Wait for London to wick below, reclaim with an energetic candle, then enter LONG on MSS.
+            </div>
+          </div>
+
+          {/* Card 3: 50% Equilibrium */}
+          <div className="bg-slate-950/90 border border-amber-900/50 rounded-xl p-3 space-y-2 flex flex-col justify-between">
+            <div>
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-black text-amber-300 flex items-center gap-1.5">
+                  🟡 ASIA 50% EQUILIBRIUM
+                </span>
+                <span className="text-[9px] bg-amber-950 text-amber-300 border border-amber-800 px-1.5 py-0.5 rounded font-bold">
+                  FAIR VALUE
+                </span>
+              </div>
+              <div className="mt-1 flex items-baseline justify-between">
+                <span className="text-lg font-black text-white font-mono">{asia?.midpoint ?? '--'}</span>
+                {asia && (
+                  <button
+                    type="button"
+                    onClick={() => handleCopySingleLevel('Equilibrium', asia.midpoint)}
+                    className="text-[10px] text-slate-400 hover:text-slate-200 underline font-mono"
+                  >
+                    {copiedField === 'Equilibrium' ? 'Copied' : 'Copy'}
+                  </button>
+                )}
+              </div>
+              <div className="text-[10px] text-amber-300/80 font-bold uppercase mt-1">WHERE WE MARK IT:</div>
+              <p className="text-[11px] text-slate-300 leading-snug">
+                (Asia High + Asia Low) / 2. Plotted as a yellow dotted horizontal line.
+              </p>
+              <div className="text-[10px] text-amber-300/80 font-bold uppercase mt-2">WHY WE MARK IT (ICT REASON):</div>
+              <p className="text-[11px] text-slate-400 leading-snug">
+                Separates Premium from Discount. Institutional algorithms never buy above 50% or sell below 50%. This line prevents you from chasing trades into the middle of the range.
+              </p>
+            </div>
+            <div className="pt-2 border-t border-slate-800/80 text-[10.5px] text-amber-300 font-semibold leading-tight">
+              ⚡ Action: Never open scalps near the 50% line. Wait for price to reach an extreme boundary before trading.
+            </div>
+          </div>
+
+          {/* Card 4: Midnight Open & HTF DOL */}
+          <div className="bg-slate-950/90 border border-indigo-900/50 rounded-xl p-3 space-y-2 flex flex-col justify-between">
+            <div>
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-black text-indigo-300 flex items-center gap-1.5">
+                  🟠 MIDNIGHT &amp; HTF DOL
+                </span>
+                <span className="text-[9px] bg-indigo-950 text-indigo-300 border border-indigo-800 px-1.5 py-0.5 rounded font-bold">
+                  TRUE DAY OPEN
+                </span>
+              </div>
+              <div className="mt-1 flex items-baseline justify-between">
+                <span className="text-lg font-black text-white font-mono">
+                  {data.midnight_open_price ?? anchors?.midnight_open_et ?? '--'}
+                </span>
+                {data.midnight_open_price && (
+                  <button
+                    type="button"
+                    onClick={() => handleCopySingleLevel('Midnight Open', data.midnight_open_price!)}
+                    className="text-[10px] text-slate-400 hover:text-slate-200 underline font-mono"
+                  >
+                    {copiedField === 'Midnight Open' ? 'Copied' : 'Copy'}
+                  </button>
+                )}
+              </div>
+              <div className="text-[10px] text-indigo-300/80 font-bold uppercase mt-1">WHERE WE MARK IT:</div>
+              <p className="text-[11px] text-slate-300 leading-snug">
+                The opening tick at 00:00 ET (06:00 CAT) plus PDH ({htf?.previous_day_high ?? '--'}) &amp; PDL ({htf?.previous_day_low ?? '--'}).
+              </p>
+              <div className="text-[10px] text-indigo-300/80 font-bold uppercase mt-2">WHY WE MARK IT (ICT REASON):</div>
+              <p className="text-[11px] text-slate-400 leading-snug">
+                ICT True Day Anchor: Bullish days open, drop below midnight (Judas discount trap), then rally. Bearish days rally above midnight first, then collapse.
+              </p>
+            </div>
+            <div className="pt-2 border-t border-slate-800/80 text-[10.5px] text-amber-300 font-semibold leading-tight">
+              ⚡ Action: Look for London to expand away from Midnight Open toward PDH or PDL as the primary target.
+            </div>
+          </div>
+        </div>
       </div>
 
       {/* ── SESSION TIMETABLE ─────────────────────────────────────────────── */}

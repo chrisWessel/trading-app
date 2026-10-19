@@ -262,7 +262,7 @@ def classify_session(now_et: dt.datetime) -> Dict[str, Any]:
     elif name == "NEW YORK":
         guidance = "NY REVERSAL WINDOW — London reached its DOL; look for exhaustion and reversal."
     elif name == "ASIA":
-        guidance = "ASIA ACCUMULATION — do not trade. Mark the Asia range; wait for the London sweep."
+        guidance = "ASIA ACCUMULATION — do not trade. System has auto-marked the Asia Range & Key Levels on your chart above. Wait for the London Judas sweep."
     else:
         guidance = "OUTSIDE KILLZONES — stand aside and wait for London or New York."
 
