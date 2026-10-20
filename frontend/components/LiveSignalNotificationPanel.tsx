@@ -280,8 +280,8 @@ export default function LiveSignalNotificationPanel({
   const rawTp1 = analysis?.trade_params?.tp1 ?? latestNotif?.tp1 ?? frozenParams?.tp1 ?? 0;
   const rawTp2 = analysis?.trade_params?.tp2 ?? latestNotif?.tp2 ?? frozenParams?.tp2 ?? 0;
 
-  const isSellTrade = latestNotif?.type === 'SELL_NOW' || frozenParams?.signal_type === 'SELL/SHORT';
-  const isBuyTrade = latestNotif?.type === 'BUY_NOW' || frozenParams?.signal_type === 'BUY/LONG';
+  const isSellTrade = (analysis?.signal_type === 'SELL/SHORT') || (!analysis && (latestNotif?.type === 'SELL_NOW' || frozenParams?.signal_type === 'SELL/SHORT'));
+  const isBuyTrade = (analysis?.signal_type === 'BUY/LONG') || (!analysis && (latestNotif?.type === 'BUY_NOW' || frozenParams?.signal_type === 'BUY/LONG'));
   const isGold = symbol.toUpperCase().includes('XAU') || symbol.toUpperCase().includes('GOLD');
   const buffer = isGold ? 3.5 : (displayEntry > 10 ? displayEntry * 0.005 : 0.001);
 
@@ -500,17 +500,17 @@ export default function LiveSignalNotificationPanel({
               <span className="px-2.5 py-1 bg-slate-700 text-white font-extrabold text-xs rounded-lg flex items-center gap-1">
                 <Clock className="w-4 h-4" /> MARKETS CLOSED
               </span>
-            ) : latestNotif.type === 'BUY_NOW' ? (
+            ) : (analysis?.signal_type === 'BUY/LONG' || (!analysis && latestNotif.type === 'BUY_NOW')) ? (
               <span className="px-2.5 py-1 bg-emerald-600 text-white font-extrabold text-xs rounded-lg animate-pulse flex items-center gap-1">
-                <ArrowUpRight className="w-4 h-4" /> BUY NOW [{latestNotif.timeframe.toUpperCase()}]
+                <ArrowUpRight className="w-4 h-4" /> BUY NOW [{timeframe.toUpperCase()}]
               </span>
-            ) : latestNotif.type === 'SELL_NOW' ? (
+            ) : (analysis?.signal_type === 'SELL/SHORT' || (!analysis && latestNotif.type === 'SELL_NOW')) ? (
               <span className="px-2.5 py-1 bg-rose-600 text-white font-extrabold text-xs rounded-lg animate-pulse flex items-center gap-1">
-                <ArrowDownRight className="w-4 h-4" /> SELL NOW [{latestNotif.timeframe.toUpperCase()}]
+                <ArrowDownRight className="w-4 h-4" /> SELL NOW [{timeframe.toUpperCase()}]
               </span>
             ) : (
               <span className="px-2.5 py-1 bg-amber-600 text-white font-extrabold text-xs rounded-lg flex items-center gap-1">
-                <Clock className="w-4 h-4" /> STANDBY [{latestNotif.timeframe.toUpperCase()}]
+                <Clock className="w-4 h-4" /> STANDBY [{timeframe.toUpperCase()}]
               </span>
             )}
             <span className="text-[11px] text-slate-300 font-bold flex items-center gap-1">
@@ -520,8 +520,24 @@ export default function LiveSignalNotificationPanel({
           </div>
 
           <div>
-            <h3 className="text-xs font-bold text-white leading-snug">{latestNotif.title}</h3>
-            <p className="text-[11px] text-slate-300 mt-1 leading-snug">{latestNotif.message}</p>
+            <h3 className="text-xs font-bold text-white leading-snug">
+              {latestNotif.type === 'CLOSED'
+                ? latestNotif.title
+                : analysis?.signal_type === 'BUY/LONG'
+                ? `🟢 BUY NOW! [${timeframe.toUpperCase()}] ENTRY FOR ${symbol}`
+                : analysis?.signal_type === 'SELL/SHORT'
+                ? `🔴 SELL NOW! [${timeframe.toUpperCase()}] SHORT FOR ${symbol}`
+                : `⏸️ MARKET STANDBY [${timeframe.toUpperCase()}] FOR ${symbol}`}
+            </h3>
+            <p className="text-[11px] text-slate-300 mt-1 leading-snug">
+              {latestNotif.type === 'CLOSED'
+                ? latestNotif.message
+                : analysis?.signal_type === 'BUY/LONG'
+                ? `Bullish Demand on ${timeframe} timeframe at $${displayEntry.toFixed(precision)}. Stop Loss: $${displaySL.toFixed(precision)}`
+                : analysis?.signal_type === 'SELL/SHORT'
+                ? `Bearish Rejection / Downtrend on ${timeframe} timeframe at $${displayEntry.toFixed(precision)}. Stop Loss: $${displaySL.toFixed(precision)}`
+                : `Consolidation on ${timeframe}. Monitoring market for high-probability setups.`}
+            </p>
           </div>
 
           {/* Trade Parameters — FROZEN (constant across polls) */}
