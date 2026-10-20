@@ -75,6 +75,7 @@ class SignalCheckRequest(BaseModel):
     account_balance: Optional[float] = Field(default=0.0)
     lot_size: Optional[float] = Field(default=0.0)
     risk_percent: Optional[float] = Field(default=0.0)
+    current_price: Optional[float] = Field(default=None)
 
 def fetch_market_news(symbol: str = "XAU/USD") -> Dict[str, Any]:
     yahoo_ticker = backend.engine.map_symbol_to_yahoo_ticker(symbol)
@@ -284,7 +285,8 @@ def get_orderbook(
 
 @app.post("/api/signals/check")
 def check_signals(req: SignalCheckRequest):
-    cache_key = f"{req.symbol.upper()}:{req.timeframe}:{req.account_balance}:{req.lot_size}:{req.risk_percent}"
+    req_price = float(req.current_price) if req.current_price and req.current_price > 0 else None
+    cache_key = f"{req.symbol.upper()}:{req.timeframe}:{req.account_balance}:{req.lot_size}:{req.risk_percent}:{req_price or 0.0}"
     with SIGNAL_CACHE_LOCK:
         now = time.monotonic()
         cached = SIGNAL_CACHE.get(cache_key)
@@ -296,7 +298,8 @@ def check_signals(req: SignalCheckRequest):
                 timeframe=req.timeframe,
                 account_balance=float(req.account_balance or 0.0),
                 lot_size=float(req.lot_size or 0.0),
-                risk_percent=float(req.risk_percent or 0.0)
+                risk_percent=float(req.risk_percent or 0.0),
+                current_price=req_price
             )
             SIGNAL_CACHE[cache_key] = (time.monotonic(), analysis)
     telegram_res = None

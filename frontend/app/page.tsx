@@ -106,12 +106,24 @@ export default function DashboardPage() {
       }
 
       const normalizedSymbol = symbol.toUpperCase();
-      if (normalizedSymbol.includes('XAU') || normalizedSymbol.includes('GOLD')) return;
+      const isGold = normalizedSymbol.includes('XAU') || normalizedSymbol.includes('GOLD');
 
-      // 2. Public Spot Feed Fallback (Binance API for crypto)
+      // 2. Public Spot Feed Fallback (Kraken / Binance with browser CORS support)
       try {
+        if (isGold) {
+          const kRes = await fetch('https://api.kraken.com/0/public/Ticker?pair=PAXGUSD');
+          if (kRes.ok) {
+            const kData = await kRes.json();
+            const p = parseFloat(kData?.result?.PAXGUSD?.c?.[0]);
+            if (p > 2000) {
+              setCurrentPrice(p);
+              return;
+            }
+          }
+        }
+
         const symUpper = symbol.toUpperCase().replace('/', '').replace('_', '');
-        let binanceSym = 'PAXGUSDT';
+        let binanceSym = isGold ? 'PAXGUSDT' : 'BTCUSDT';
         if (symUpper.includes('BTC')) binanceSym = 'BTCUSDT';
         else if (symUpper.includes('ETH')) binanceSym = 'ETHUSDT';
         else if (symUpper.includes('SOL')) binanceSym = 'SOLUSDT';
@@ -380,6 +392,7 @@ export default function DashboardPage() {
           <LiveSignalNotificationPanel
             symbol={symbol}
             timeframe={timeframe}
+            currentPrice={currentPrice}
             onExecuteTradeParams={handleAutoFillTrade}
           />
         </div>

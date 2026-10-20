@@ -384,8 +384,8 @@ def fetch_tradingview_live_quote(symbol: str) -> Optional[float]:
         if now - UNIVERSAL_PRICE_TIMESTAMPS[clean] < 4.0:
             return LAST_KNOWN_TV_QUOTE[clean]
 
-    # Try fast timeout first (2.5s), fallback to 5s
-    for attempt_timeout in [2.5, 5.0]:
+    # Try fast timeout first (2.5s), fallback to 4s
+    for attempt_timeout in [2.5, 4.0]:
         try:
             r = requests.post(
                 endpoint,
@@ -405,38 +405,47 @@ def fetch_tradingview_live_quote(symbol: str) -> Optional[float]:
                         return val
         except Exception:
             continue
-    return LAST_KNOWN_TV_QUOTE.get(clean)
+    # Do NOT return a stale quote if it's older than 15s; return None so live fallback can run
+    if clean in LAST_KNOWN_TV_QUOTE and clean in UNIVERSAL_PRICE_TIMESTAMPS:
+        if now - UNIVERSAL_PRICE_TIMESTAMPS[clean] < 15.0:
+            return LAST_KNOWN_TV_QUOTE[clean]
+    return None
 
-def _fetch_yahoo_gold_spot() -> Optional[float]:
-    """Emergency fallback: fetch gold futures GC=F from Yahoo Finance.
-    Only used when TradingView scanner is unreachable (e.g., on Vercel).
-    GC=F tracks spot gold closely (within ~$1-2), far better than using
-    a stale $2,400 hardcode when gold is actually at $4,120+.
+def fetch_spot_gold_live() -> Optional[float]:
+    """High-reliability live spot gold (XAU/USD) fallback.
+    Fetches real-time physical gold spot quotes (1 troy oz) within pennies of OANDA:XAUUSD.
+    NEVER uses COMEX futures (GC=F) which trades at an arbitrary $15-25 contango spread!
     """
+    # 1. Bitfinex Tether Gold (tXAUT:USD) — 1 troy oz physical gold spot, live 24/7
     try:
-        import yfinance as yf
-        t = yf.Ticker("GC=F")
-        hist = t.history(period="1d", interval="1m")
-        if hist is not None and not hist.empty:
-            return float(hist['Close'].iloc[-1])
-    except Exception:
-        pass
-    # Also try direct Yahoo v8 API as final fallback
-    try:
-        r = requests.get(
-            "https://query1.finance.yahoo.com/v8/finance/chart/GC=F?interval=1m&range=1d",
-            headers={"User-Agent": "Mozilla/5.0"},
-            timeout=5.0
-        )
+        r = requests.get('https://api-pub.bitfinex.com/v2/ticker/tXAUT:USD', timeout=3.0)
         if r.status_code == 200:
-            data = r.json()
-            closes = data.get("chart", {}).get("result", [{}])[0].get("indicators", {}).get("quote", [{}])[0].get("close", [])
-            # Walk backwards to find the last non-None close
-            for c in reversed(closes):
-                if c is not None and float(c) > 2000:
-                    return float(c)
+            val = float(r.json()[6])  # LAST_PRICE
+            if val > 2000:
+                return round(val, 2)
     except Exception:
         pass
+
+    # 2. Kraken PAXGUSD — 1 troy oz physical gold spot
+    try:
+        r = requests.get('https://api.kraken.com/0/public/Ticker?pair=PAXGUSD', timeout=3.0)
+        if r.status_code == 200:
+            val = float(r.json()['result']['PAXGUSD']['c'][0])
+            if val > 2000:
+                return round(val, 2)
+    except Exception:
+        pass
+
+    # 3. Binance PAXGUSDT — 1 troy oz physical gold spot
+    try:
+        r = requests.get('https://api.binance.com/api/v3/ticker/price?symbol=PAXGUSDT', timeout=3.0)
+        if r.status_code == 200:
+            val = float(r.json()['price'])
+            if val > 2000:
+                return round(val, 2)
+    except Exception:
+        pass
+
     return None
 
 def get_synchronized_live_price(symbol: str) -> float:
@@ -453,27 +462,22 @@ def get_synchronized_live_price(symbol: str) -> float:
         UNIVERSAL_PRICE_TIMESTAMPS[clean] = now
         return p
 
+    # 2. If recent universal hub price is fresh (< 6 seconds), use it
     if clean in UNIVERSAL_PRICE_HUB and clean in UNIVERSAL_PRICE_TIMESTAMPS:
-        if now - UNIVERSAL_PRICE_TIMESTAMPS[clean] < PRICE_HUB_TTL_SECONDS and UNIVERSAL_PRICE_HUB[clean] > 0:
+        if now - UNIVERSAL_PRICE_TIMESTAMPS[clean] < 6.0 and UNIVERSAL_PRICE_HUB[clean] > 0:
             return UNIVERSAL_PRICE_HUB[clean]
 
-    if clean in LAST_KNOWN_TV_QUOTE and LAST_KNOWN_TV_QUOTE[clean] > 0:
-        _, precision = get_asset_base_config(symbol)
-        return round(LAST_KNOWN_TV_QUOTE[clean], precision)
-
-    # 2. For gold — Yahoo GC=F futures as emergency fallback (NOT PAXG!)
-    #    This only fires if TradingView scanner failed (e.g., blocked on Vercel serverless)
+    # 3. Spot gold live fallback: Bitfinex/Kraken/Binance 1oz physical spot
     if is_gold:
-        yf_gold = _fetch_yahoo_gold_spot()
-        if yf_gold and yf_gold > 2000:
-            p = round(yf_gold, 2)
+        sg_p = fetch_spot_gold_live()
+        if sg_p and sg_p > 2000:
+            p = round(sg_p, 2)
             LAST_KNOWN_TV_QUOTE[clean] = p
             UNIVERSAL_PRICE_HUB[clean] = p
             UNIVERSAL_PRICE_TIMESTAMPS[clean] = now
-            print(f"[GOLD FALLBACK] Yahoo GC=F -> ${p:.2f}")
             return p
 
-    # 3. Market real OHLCV fallback (NEVER for gold — gold is TradingView OANDA only)
+    # 4. Market real OHLCV fallback (for forex / crypto)
     if not is_gold:
         real_df = fetch_real_ohlcv_from_market(symbol=symbol, timeframe="1m", limit=5)
         if real_df is not None and not real_df.empty:
@@ -481,6 +485,12 @@ def get_synchronized_live_price(symbol: str) -> float:
             UNIVERSAL_PRICE_HUB[clean] = p
             UNIVERSAL_PRICE_TIMESTAMPS[clean] = now
             return p
+
+    # 5. Check if recent LAST_KNOWN_TV_QUOTE is still under 30s
+    if clean in LAST_KNOWN_TV_QUOTE and clean in UNIVERSAL_PRICE_TIMESTAMPS:
+        if now - UNIVERSAL_PRICE_TIMESTAMPS[clean] < 30.0 and LAST_KNOWN_TV_QUOTE[clean] > 0:
+            _, precision = get_asset_base_config(symbol)
+            return round(LAST_KNOWN_TV_QUOTE[clean], precision)
 
     base_price, precision = get_asset_base_config(symbol)
     UNIVERSAL_PRICE_HUB[clean] = base_price
@@ -887,7 +897,8 @@ def calculate_supply_demand_zones(df: pd.DataFrame, precision: int = 2) -> Dict[
 
 def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m",
                                account_balance: float = 0.0, lot_size: float = 0.0,
-                               risk_percent: float = 0.0) -> Dict[str, Any]:
+                               risk_percent: float = 0.0,
+                               current_price: Optional[float] = None) -> Dict[str, Any]:
     """
     Institutional Multi-Timeframe Signal Recommendation Engine.
     Dynamically evaluates Average True Range (ATR) volatility and market structure per timeframe.
@@ -897,17 +908,25 @@ def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m",
         account_balance: Account size in USD (e.g. 500.0)
         lot_size: Trading lot size (e.g. 0.01, 0.1, 1.0)
         risk_percent: Max % of account to risk per trade (e.g. 2.0)
+        current_price: Live spot price from chart to ensure 100% synchronization
     """
+    clean_sym = clean_symbol_string(symbol)
+    if current_price and current_price > 0:
+        latest_price = round(current_price, 2 if (latest_price_is_high := current_price > 10) else 4)
+        UNIVERSAL_PRICE_HUB[clean_sym] = latest_price
+        UNIVERSAL_PRICE_TIMESTAMPS[clean_sym] = time.time()
+    else:
+        latest_price = get_synchronized_live_price(symbol)
+
     df = fetch_ohlcv(symbol=symbol, timeframe=timeframe, limit=100)
     data_source = df.attrs.get('data_source', 'unknown')
-    if any(k in clean_symbol_string(symbol) for k in ['XAU', 'GOLD']):
+    if any(k in clean_sym for k in ['XAU', 'GOLD']):
         data_source = 'TradingView (OANDA:XAUUSD)'
     support, resistance, df = calculate_support_resistance(df)
     
     df['vol_ma_10'] = df['volume'].rolling(window=10, min_periods=1).mean()
     
     latest_candle = df.iloc[-1]
-    latest_price = get_synchronized_live_price(symbol)
     latest_low = float(latest_candle['low'])
     latest_high = float(latest_candle['high'])
     latest_vol = float(latest_candle['volume'])
@@ -1152,9 +1171,9 @@ def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m",
             contract_size = 100.0
             risk_dollars = account_balance * (risk_percent / 100.0)
             custom_sl_dist = risk_dollars / (lot_size * contract_size)
-            # Bound within safe limits: never exceed max_sl for this timeframe!
-            # E.g. on 5m chart, max_sl is $6.00-$8.00 so SL is never $20+ away
-            min_effective_risk = max(min_sl_distance, min(round(custom_sl_dist, precision), max_sl_distance))
+            # Bound within safe limits: minimum $1.00, maximum max_sl for this timeframe!
+            # E.g. on 5m chart, max_sl is $6.00 so SL is never $20+ away
+            min_effective_risk = max(1.0, min(round(custom_sl_dist, precision), max_sl_distance))
         else:
             # Standard adaptive risk: ATR bounded between min_sl and max_sl
             calculated_risk = min(max(atr * 1.0, min_sl_distance), max_sl_distance)
@@ -1175,9 +1194,12 @@ def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m",
             min_effective_risk = max(risk_amount, atr * 1.5, 2.0 if entry_price > 10.0 else 0.0015)
 
     # Re-sync entry_price with live ticking spot quote right before finalizing trade parameters
-    synced_now = get_synchronized_live_price(symbol)
-    if synced_now and synced_now > 0:
-        entry_price = synced_now
+    if current_price and current_price > 0:
+        entry_price = round(current_price, precision)
+    else:
+        synced_now = get_synchronized_live_price(symbol)
+        if synced_now and synced_now > 0:
+            entry_price = synced_now
 
     # Calculate initial TP offset: TP1 starts close to entry for quick profit taking!
     tp1_base_offset = max(round(min_effective_risk * tp1_ratio, precision), pip_step)
@@ -1193,12 +1215,15 @@ def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m",
         else:
             structural_sl = entry_price + min_effective_risk
 
-        stop_loss = round(structural_sl, precision)
+        # STRICT SAFETY: Stop loss must be strictly ABOVE max_entry and entry_price
+        stop_loss = round(max(structural_sl, max_entry + 0.3, entry_price + min_effective_risk), precision)
         risk_dist = round(abs(stop_loss - entry_price), precision)
 
         # 7 Take Profit levels: strictly BELOW entry price (taking profit as market falls)
         # TP1 starts close (tp1_base_offset), subsequent levels scale smoothly
         tp_levels = [round(entry_price - tp1_base_offset - (pip_step * i), precision) for i in range(7)]
+        # Enforce that all TPs are strictly below entry_price
+        tp_levels = [tp if tp < entry_price else round(entry_price - (pip_step * (i + 1)), precision) for i, tp in enumerate(tp_levels)]
         tp1 = tp_levels[0]
         tp2 = tp_levels[3]
 
@@ -1215,12 +1240,15 @@ def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m",
         else:
             structural_sl = entry_price - min_effective_risk
 
-        stop_loss = round(structural_sl, precision)
+        # STRICT SAFETY: Stop loss must be strictly BELOW min_entry and entry_price
+        stop_loss = round(min(structural_sl, min_entry - 0.3, entry_price - min_effective_risk), precision)
         risk_dist = round(abs(entry_price - stop_loss), precision)
 
         # 7 Take Profit levels: strictly ABOVE entry price (taking profit as market rises)
         # TP1 starts close (tp1_base_offset), subsequent levels scale smoothly
         tp_levels = [round(entry_price + tp1_base_offset + (pip_step * i), precision) for i in range(7)]
+        # Enforce that all TPs are strictly above entry_price
+        tp_levels = [tp if tp > entry_price else round(entry_price + (pip_step * (i + 1)), precision) for i, tp in enumerate(tp_levels)]
         tp1 = tp_levels[0]
         tp2 = tp_levels[3]
 

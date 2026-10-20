@@ -66,12 +66,14 @@ interface FrozenParams {
 interface LiveSignalNotificationPanelProps {
   symbol: string;
   timeframe: string;
+  currentPrice?: number;
   onExecuteTradeParams?: (params: { signal_type: string; entry: number; stop_loss: number; tp1: number; tp2: number; tp_levels: number[]; entry_zones: number[] }) => void;
 }
 
 export default function LiveSignalNotificationPanel({
   symbol,
   timeframe,
+  currentPrice,
   onExecuteTradeParams,
 }: LiveSignalNotificationPanelProps) {
   const [analysis, setAnalysis] = useState<SignalAnalysis | null>(null);
@@ -107,7 +109,8 @@ export default function LiveSignalNotificationPanel({
           force_dispatch: false,
           account_balance: accountBalance,
           lot_size: lotSize,
-          risk_percent: riskPercent
+          risk_percent: riskPercent,
+          current_price: currentPrice && currentPrice > 0 ? currentPrice : undefined
         }),
       });
       if (res.ok) {
@@ -191,29 +194,11 @@ export default function LiveSignalNotificationPanel({
           tp_levels: effectiveTpLevels,
         };
 
-        // When the live price moves away from frozen entry by more than 0.3%,
-        // refresh the frozen anchor so entry zones and TPs match the current live candle!
-        const entryDrift = prevFrozen && prevFrozen.entry > 0
-          ? Math.abs(a.trade_params.entry - prevFrozen.entry) / prevFrozen.entry
-          : 0;
-
-        if (directionChanged || entryDrift > 0.001) {
-          frozenRef.current = latestParams;
-          setFrozenParams(latestParams);
-          if (directionChanged) {
-            setSelectedTpIndex(0); // reset chip selection only on direction flip
-          }
-        } else {
-          // Keep entry locked to prevent microscopic jitter, but update live zones and targets
-          setFrozenParams(prev => prev ? {
-            ...prev,
-            stop_loss: effectiveSL,
-            tp1: effectiveTp1,
-            tp2: effectiveTp2,
-            tp_levels: effectiveTpLevels,
-          } : latestParams);
+        frozenRef.current = latestParams;
+        setFrozenParams(latestParams);
+        if (directionChanged) {
+          setSelectedTpIndex(0); // reset chip selection only on direction flip
         }
-
 
         let notifTitle = '';
         let notifMsg = '';
@@ -250,8 +235,9 @@ export default function LiveSignalNotificationPanel({
 
         setNotifications((prev) => {
           const top = prev[0];
-          if (top && top.type === notifType && top.title === notifTitle && top.timeframe === timeframe) {
-            return [{ ...top, time_harare: harareTime }, ...prev.slice(1)];
+          // If the direction/timeframe is the same, keep active card fresh with new live prices
+          if (top && top.type === notifType && top.timeframe === timeframe) {
+            return [{ ...newNotif, id: top.id }, ...prev.slice(1)];
           }
           return [newNotif, ...prev.filter(n => n.timeframe === timeframe).slice(0, 49)];
         });
@@ -290,13 +276,13 @@ export default function LiveSignalNotificationPanel({
   let displaySL = rawSL;
   if (isSellTrade && displayEntry > 0) {
     const maxZone = displayEntryZones.length > 0 ? Math.max(...displayEntryZones, displayEntry) : displayEntry;
-    if (displaySL <= maxZone) {
-      displaySL = Number((maxZone + buffer).toFixed(precision));
+    if (displaySL <= maxZone || displaySL <= displayEntry) {
+      displaySL = Number((Math.max(maxZone, displayEntry) + buffer).toFixed(precision));
     }
   } else if (isBuyTrade && displayEntry > 0) {
     const minZone = displayEntryZones.length > 0 ? Math.min(...displayEntryZones, displayEntry) : displayEntry;
-    if (displaySL >= minZone) {
-      displaySL = Number((minZone - buffer).toFixed(precision));
+    if (displaySL >= minZone || displaySL >= displayEntry) {
+      displaySL = Number((Math.min(minZone, displayEntry) - buffer).toFixed(precision));
     }
   }
 
