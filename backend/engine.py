@@ -258,9 +258,53 @@ def map_symbol_to_yahoo_ticker(symbol: str) -> Optional[str]:
     return "GC=F"
 
 def get_asset_base_config(symbol: str) -> Tuple[float, int]:
+    """Returns (fallback_base_price, decimal_precision) for a symbol.
+    The base_price is ONLY used when ALL live feeds fail. It should be kept
+    reasonably close to current market price so that the simulated candles
+    and signal parameters are not absurdly wrong while awaiting a live quote.
+    """
     clean = clean_symbol_string(symbol)
+    # ── Check LAST_KNOWN_TV_QUOTE first so we never use a stale hardcode
+    #    when we already got a recent live quote in this process lifetime.
+    tv_cached = LAST_KNOWN_TV_QUOTE.get(clean)
+    if tv_cached and tv_cached > 0:
+        # Determine precision from symbol type
+        if "XAU" in clean or "GOLD" in clean or "PAXG" in clean:
+            return tv_cached, 2
+        elif "JPY" in clean:
+            return tv_cached, 2
+        elif any(x in clean for x in ["BTC"]):
+            return tv_cached, 2
+        elif any(x in clean for x in ["ETH", "SOL"]):
+            return tv_cached, 2
+        elif any(x in clean for x in ["REXT"]):
+            return tv_cached, 4
+        elif is_forex_symbol(symbol):
+            return tv_cached, 4
+        else:
+            return tv_cached, 2
+
+    # ── Also check UNIVERSAL_PRICE_HUB for any recently synchronized price
+    hub_val = UNIVERSAL_PRICE_HUB.get(clean, 0.0)
+    if hub_val > 0:
+        if "XAU" in clean or "GOLD" in clean or "PAXG" in clean:
+            return hub_val, 2
+        elif "JPY" in clean:
+            return hub_val, 2
+        elif is_forex_symbol(symbol):
+            return hub_val, 4
+        elif any(x in clean for x in ["BTC"]):
+            return hub_val, 2
+        elif any(x in clean for x in ["ETH", "SOL"]):
+            return hub_val, 2
+        elif any(x in clean for x in ["REXT"]):
+            return hub_val, 4
+        else:
+            return hub_val, 2
+
+    # ── Hardcoded fallbacks: kept close to Oct-2026 market prices ──
     if "XAU" in clean or "GOLD" in clean or "PAXG" in clean:
-        return 2400.00, 2
+        return 4120.00, 2
     elif "JPY" in clean:
         return 152.50, 2
     elif "EUR" in clean:
@@ -334,28 +378,63 @@ def fetch_tradingview_live_quote(symbol: str) -> Optional[float]:
     if not tv_symbols or not endpoint:
         return LAST_KNOWN_TV_QUOTE.get(clean)
 
+    # Try twice: first with 4s timeout, retry with 8s if first fails
+    for attempt_timeout in [4.0, 8.0]:
+        try:
+            r = requests.post(
+                endpoint,
+                json={'symbols': {'tickers': tv_symbols}, 'columns': ['close']},
+                headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'},
+                timeout=attempt_timeout
+            )
+            if r.status_code == 200:
+                data = r.json().get('data', [])
+                for row in data:
+                    d = row.get('d', [])
+                    if d and d[0] is not None and float(d[0]) > 0:
+                        val = float(d[0])
+                        LAST_KNOWN_TV_QUOTE[clean] = val
+                        return val
+        except Exception:
+            continue
+    return LAST_KNOWN_TV_QUOTE.get(clean)
+
+def _fetch_yahoo_gold_spot() -> Optional[float]:
+    """Emergency fallback: fetch gold futures GC=F from Yahoo Finance.
+    Only used when TradingView scanner is unreachable (e.g., on Vercel).
+    GC=F tracks spot gold closely (within ~$1-2), far better than using
+    a stale $2,400 hardcode when gold is actually at $4,120+.
+    """
     try:
-        r = requests.post(
-            endpoint,
-            json={'symbols': {'tickers': tv_symbols}, 'columns': ['close']},
-            headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'},
-            timeout=4.0
-        )
-        if r.status_code == 200:
-            data = r.json().get('data', [])
-            for row in data:
-                d = row.get('d', [])
-                if d and d[0] is not None and float(d[0]) > 0:
-                    val = float(d[0])
-                    LAST_KNOWN_TV_QUOTE[clean] = val
-                    return val
+        import yfinance as yf
+        t = yf.Ticker("GC=F")
+        hist = t.history(period="1d", interval="1m")
+        if hist is not None and not hist.empty:
+            return float(hist['Close'].iloc[-1])
     except Exception:
         pass
-    return LAST_KNOWN_TV_QUOTE.get(clean)
+    # Also try direct Yahoo v8 API as final fallback
+    try:
+        r = requests.get(
+            "https://query1.finance.yahoo.com/v8/finance/chart/GC=F?interval=1m&range=1d",
+            headers={"User-Agent": "Mozilla/5.0"},
+            timeout=5.0
+        )
+        if r.status_code == 200:
+            data = r.json()
+            closes = data.get("chart", {}).get("result", [{}])[0].get("indicators", {}).get("quote", [{}])[0].get("close", [])
+            # Walk backwards to find the last non-None close
+            for c in reversed(closes):
+                if c is not None and float(c) > 2000:
+                    return float(c)
+    except Exception:
+        pass
+    return None
 
 def get_synchronized_live_price(symbol: str) -> float:
     clean = clean_symbol_string(symbol)
     now = time.time()
+    is_gold = any(k in clean for k in ['XAU', 'GOLD'])
 
     # 1. TradingView scanner quote for exact chart synchronization (especially OANDA:XAUUSD)
     tv_p = fetch_tradingview_live_quote(symbol)
@@ -374,8 +453,20 @@ def get_synchronized_live_price(symbol: str) -> float:
         _, precision = get_asset_base_config(symbol)
         return round(LAST_KNOWN_TV_QUOTE[clean], precision)
 
-    # 2. Market real OHLCV fallback (NEVER for gold — gold is TradingView OANDA only)
-    if not any(k in clean for k in ['XAU', 'GOLD']):
+    # 2. For gold — Yahoo GC=F futures as emergency fallback (NOT PAXG!)
+    #    This only fires if TradingView scanner failed (e.g., blocked on Vercel serverless)
+    if is_gold:
+        yf_gold = _fetch_yahoo_gold_spot()
+        if yf_gold and yf_gold > 2000:
+            p = round(yf_gold, 2)
+            LAST_KNOWN_TV_QUOTE[clean] = p
+            UNIVERSAL_PRICE_HUB[clean] = p
+            UNIVERSAL_PRICE_TIMESTAMPS[clean] = now
+            print(f"[GOLD FALLBACK] Yahoo GC=F -> ${p:.2f}")
+            return p
+
+    # 3. Market real OHLCV fallback (NEVER for gold — gold is TradingView OANDA only)
+    if not is_gold:
         real_df = fetch_real_ohlcv_from_market(symbol=symbol, timeframe="1m", limit=5)
         if real_df is not None and not real_df.empty:
             p = float(real_df['close'].iloc[-1])
