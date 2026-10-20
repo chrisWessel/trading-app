@@ -980,30 +980,29 @@ def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m",
     # Multi-Tier Trend-Aware Active Signal Logic
     cond_support_zone = (price_position_pct <= 45.0) or (latest_low <= support * 1.002)
     cond_resistance_zone = (price_position_pct >= 55.0) or (latest_high >= resistance * 0.998)
-    cond_bullish_obi = (obi_score >= 0.02)
-    cond_bearish_obi = (obi_score <= -0.02)
+    obi_available = orderbook_data.get('data_source', 'unavailable') != 'unavailable'
+    cond_bullish_obi = (obi_score >= 0.02) if obi_available else False
+    cond_bearish_obi = (obi_score <= -0.02) if obi_available else False
 
-    # ── STRICT TREND-DIRECTION SIGNAL FILTER ─────────────────────────────────
-    # Rule: "The trend is your friend."
-    #   DOWNTREND → only SELL/SHORT signals are allowed.
-    #   UPTREND   → only BUY/LONG  signals are allowed.
-    #   REVERSAL_UP / REVERSAL_DOWN → Reversal in progress, halt counter-trend signals!
-    #   RANGEBOUND → use OBI/support-resistance but still require confirmation.
-    # This prevents the system from fighting the market direction.
+    # ── TREND-DIRECTION SIGNAL FILTER ─────────────────────────────────────────
+    # DOWNTREND → SELL/SHORT.   UPTREND → BUY/LONG.
+    # REVERSAL_UP / REVERSAL_DOWN → transition; only confirm with zone or OBI.
+    # RANGEBOUND → price position alone is enough when OBI is unavailable.
+    # The trader ALWAYS has the final discretion — we must give a direction.
 
     if trend == "REVERSAL_UP":
         # Price is bouncing back up with higher lows! Do NOT sell into a reversal.
         if cond_support_zone or obi_score >= 0.02:
             signal_type = "BUY/LONG"
         else:
-            signal_type = "NEUTRAL"
+            signal_type = "BUY/LONG"  # Reversal already confirmed by higher lows
 
     elif trend == "REVERSAL_DOWN":
         # Price is rejecting downward with lower highs! Do NOT buy into a reversal.
         if cond_resistance_zone or obi_score <= -0.02:
             signal_type = "SELL/SHORT"
         else:
-            signal_type = "NEUTRAL"
+            signal_type = "SELL/SHORT"  # Reversal already confirmed by lower highs
 
     elif trend == "DOWNTREND":
         # Market is falling — only allow SELL. Never issue a BUY against a downtrend.
@@ -1013,17 +1012,33 @@ def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m",
         # Market is rising — only allow BUY. Never issue a SELL against an uptrend.
         signal_type = "BUY/LONG"
 
-    else:  # RANGEBOUND — use OBI and support/resistance for direction
-        if cond_support_zone and cond_bullish_obi:
+    else:  # RANGEBOUND — use price position, OBI, and support/resistance
+        if cond_support_zone and (cond_bullish_obi or not obi_available):
+            # Near support — buy if OBI agrees or OBI is simply unavailable
             signal_type = "BUY/LONG"
-        elif cond_resistance_zone and cond_bearish_obi:
+        elif cond_resistance_zone and (cond_bearish_obi or not obi_available):
+            # Near resistance — sell if OBI agrees or OBI is simply unavailable
             signal_type = "SELL/SHORT"
-        elif obi_score >= 0.05:
+        elif obi_available and obi_score >= 0.05:
             signal_type = "BUY/LONG"
-        elif obi_score <= -0.05:
+        elif obi_available and obi_score <= -0.05:
+            signal_type = "SELL/SHORT"
+        elif price_position_pct <= 30.0:
+            # Deep near support — lean BUY even without OBI
+            signal_type = "BUY/LONG"
+        elif price_position_pct >= 70.0:
+            # Deep near resistance — lean SELL even without OBI
             signal_type = "SELL/SHORT"
         else:
-            signal_type = "NEUTRAL"  # Genuine indecision — do not trade
+            # True mid-range AND no OBI — pick direction from close momentum
+            if len(df) >= 4:
+                last_closes = df['close'].values[-4:]
+                if last_closes[-1] > last_closes[0]:
+                    signal_type = "BUY/LONG"
+                else:
+                    signal_type = "SELL/SHORT"
+            else:
+                signal_type = "BUY/LONG" if price_position_pct < 50 else "SELL/SHORT"
 
     if data_source == 'SIMULATED':
         signal_type = "NEUTRAL"
