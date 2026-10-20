@@ -272,13 +272,13 @@ export default function LiveSignalNotificationPanel({
 
   const latestNotif = notifications[0];
 
-  // Use frozen params for display (constant); fall back to latest notif while loading
-  const displayEntry = frozenParams?.entry ?? latestNotif?.entry ?? 0;
-  const displayEntryZones = frozenParams?.entry_zones ?? latestNotif?.entry_zones ?? [];
-  const rawSL = frozenParams?.stop_loss ?? latestNotif?.stop_loss ?? 0;
-  const rawTpLevels = frozenParams?.tp_levels ?? latestNotif?.tp_levels ?? [];
-  const rawTp1 = frozenParams?.tp1 ?? latestNotif?.tp1 ?? 0;
-  const rawTp2 = frozenParams?.tp2 ?? latestNotif?.tp2 ?? 0;
+  // Use live backend params as the single source of truth; fall back to frozen or latestNotif
+  const displayEntry = analysis?.trade_params?.entry ?? latestNotif?.entry ?? frozenParams?.entry ?? 0;
+  const displayEntryZones = analysis?.trade_params?.entry_zones ?? latestNotif?.entry_zones ?? frozenParams?.entry_zones ?? [];
+  const rawSL = analysis?.trade_params?.stop_loss ?? latestNotif?.stop_loss ?? frozenParams?.stop_loss ?? 0;
+  const rawTpLevels = analysis?.trade_params?.tp_levels ?? latestNotif?.tp_levels ?? frozenParams?.tp_levels ?? [];
+  const rawTp1 = analysis?.trade_params?.tp1 ?? latestNotif?.tp1 ?? frozenParams?.tp1 ?? 0;
+  const rawTp2 = analysis?.trade_params?.tp2 ?? latestNotif?.tp2 ?? frozenParams?.tp2 ?? 0;
 
   const isSellTrade = latestNotif?.type === 'SELL_NOW' || frozenParams?.signal_type === 'SELL/SHORT';
   const isBuyTrade = latestNotif?.type === 'BUY_NOW' || frozenParams?.signal_type === 'BUY/LONG';
