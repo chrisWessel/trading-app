@@ -1137,8 +1137,9 @@ def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m",
             contract_size = 100.0
             risk_dollars = account_balance * (risk_percent / 100.0)
             custom_sl_dist = risk_dollars / (lot_size * contract_size)
-            # Bound within safe limits
-            min_effective_risk = max(min_sl_distance, round(custom_sl_dist, precision))
+            # Bound within safe limits: never exceed max_sl for this timeframe!
+            # E.g. on 5m chart, max_sl is $6.00-$8.00 so SL is never $20+ away
+            min_effective_risk = max(min_sl_distance, min(round(custom_sl_dist, precision), max_sl_distance))
         else:
             # Standard adaptive risk: ATR bounded between min_sl and max_sl
             calculated_risk = min(max(atr * 1.0, min_sl_distance), max_sl_distance)
@@ -1154,7 +1155,7 @@ def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m",
             contract_size = 100000.0 if is_forex_symbol(symbol) else 1.0
             risk_dollars = account_balance * (risk_percent / 100.0)
             custom_sl_dist = risk_dollars / (lot_size * contract_size)
-            min_effective_risk = max(min_sl_distance, round(custom_sl_dist, precision))
+            min_effective_risk = max(min_sl_distance, min(round(custom_sl_dist, precision), min_sl_distance * 3.0))
         else:
             min_effective_risk = max(risk_amount, atr * 1.5, 2.0 if entry_price > 10.0 else 0.0015)
 
