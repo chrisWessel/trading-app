@@ -256,10 +256,16 @@ export default function LiveSignalNotificationPanel({
   const buffer = isGold ? 3.5 : (displayEntry > 10 ? displayEntry * 0.005 : 0.001);
 
   let displaySL = rawSL;
-  if (isSellTrade && displayEntry > 0 && displaySL <= displayEntry) {
-    displaySL = Number((displayEntry + buffer).toFixed(precision));
-  } else if (isBuyTrade && displayEntry > 0 && displaySL >= displayEntry) {
-    displaySL = Number((displayEntry - buffer).toFixed(precision));
+  if (isSellTrade && displayEntry > 0) {
+    const maxZone = displayEntryZones.length > 0 ? Math.max(...displayEntryZones, displayEntry) : displayEntry;
+    if (displaySL <= maxZone) {
+      displaySL = Number((maxZone + buffer).toFixed(precision));
+    }
+  } else if (isBuyTrade && displayEntry > 0) {
+    const minZone = displayEntryZones.length > 0 ? Math.min(...displayEntryZones, displayEntry) : displayEntry;
+    if (displaySL >= minZone) {
+      displaySL = Number((minZone - buffer).toFixed(precision));
+    }
   }
 
   const displayTpLevels = rawTpLevels.map((tp, i) => {

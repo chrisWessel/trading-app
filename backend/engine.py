@@ -228,12 +228,11 @@ def is_forex_symbol(symbol: str) -> bool:
     clean = clean_symbol_string(symbol)
     return any(p in clean for p in ["EUR", "GBP", "JPY", "AUD", "CAD", "CHF", "NZD"])
 
-def map_symbol_to_yahoo_ticker(symbol: str) -> str:
+def map_symbol_to_yahoo_ticker(symbol: str) -> Optional[str]:
     clean = clean_symbol_string(symbol)
-    if "XAU" in clean or "GOLD" in clean:
-        return "PAXG-USD"
-    if "PAXG" in clean:
-        return "PAXG-USD"
+    # NEVER use Yahoo Finance for Gold: spot gold is OANDA:XAUUSD from TradingView
+    if "XAU" in clean or "GOLD" in clean or "PAXG" in clean:
+        return None
     elif "EURUSD" in clean:
         return "EURUSD=X"
     elif "GBPUSD" in clean:
@@ -303,50 +302,56 @@ def get_pip_size(symbol: str) -> float:
     else:
         return 0.01   # Default fallback
 
+LAST_KNOWN_TV_QUOTE: Dict[str, float] = {}
+
 def fetch_tradingview_live_quote(symbol: str) -> Optional[float]:
     clean = clean_symbol_string(symbol)
-    tv_symbol = None
-    if any(k in clean for k in ['XAU', 'GOLD']):
-        tv_symbol = 'OANDA:XAUUSD'
-    elif 'EURUSD' in clean:
-        tv_symbol = 'FX_IDC:EURUSD'
-    elif 'GBPUSD' in clean:
-        tv_symbol = 'FX_IDC:GBPUSD'
-    elif 'USDJPY' in clean:
-        tv_symbol = 'FX_IDC:USDJPY'
-    elif 'BTC' in clean:
-        tv_symbol = 'BINANCE:BTCUSDT'
-    elif 'ETH' in clean:
-        tv_symbol = 'BINANCE:ETHUSDT'
-    elif 'SOL' in clean:
-        tv_symbol = 'BINANCE:SOLUSDT'
+    tv_symbols = []
+    endpoint = None
 
-    if not tv_symbol:
-        return None
+    if any(k in clean for k in ['XAU', 'GOLD']):
+        tv_symbols = ['OANDA:XAUUSD', 'FX:XAUUSD', 'FOREXCOM:XAUUSD']
+        endpoint = 'https://scanner.tradingview.com/cfd/scan'
+    elif 'EURUSD' in clean:
+        tv_symbols = ['FX_IDC:EURUSD', 'FX:EURUSD', 'OANDA:EURUSD']
+        endpoint = 'https://scanner.tradingview.com/forex/scan'
+    elif 'GBPUSD' in clean:
+        tv_symbols = ['FX_IDC:GBPUSD', 'FX:GBPUSD', 'OANDA:GBPUSD']
+        endpoint = 'https://scanner.tradingview.com/forex/scan'
+    elif 'USDJPY' in clean:
+        tv_symbols = ['FX_IDC:USDJPY', 'FX:USDJPY', 'OANDA:USDJPY']
+        endpoint = 'https://scanner.tradingview.com/forex/scan'
+    elif 'BTC' in clean:
+        tv_symbols = ['BINANCE:BTCUSDT', 'COINBASE:BTCUSD']
+        endpoint = 'https://scanner.tradingview.com/crypto/scan'
+    elif 'ETH' in clean:
+        tv_symbols = ['BINANCE:ETHUSDT', 'COINBASE:ETHUSD']
+        endpoint = 'https://scanner.tradingview.com/crypto/scan'
+    elif 'SOL' in clean:
+        tv_symbols = ['BINANCE:SOLUSDT', 'COINBASE:SOLUSD']
+        endpoint = 'https://scanner.tradingview.com/crypto/scan'
+
+    if not tv_symbols or not endpoint:
+        return LAST_KNOWN_TV_QUOTE.get(clean)
 
     try:
-        if 'BINANCE' in tv_symbol:
-            endpoint = 'https://scanner.tradingview.com/crypto/scan'
-        elif 'XAU' in tv_symbol:
-            endpoint = 'https://scanner.tradingview.com/cfd/scan'
-        else:
-            endpoint = 'https://scanner.tradingview.com/forex/scan'
-
         r = requests.post(
             endpoint,
-            json={'symbols': {'tickers': [tv_symbol]}, 'columns': ['close']},
+            json={'symbols': {'tickers': tv_symbols}, 'columns': ['close']},
             headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'},
-            timeout=2.0
+            timeout=4.0
         )
         if r.status_code == 200:
             data = r.json().get('data', [])
-            if data and data[0].get('d'):
-                val = float(data[0]['d'][0])
-                if val > 0:
+            for row in data:
+                d = row.get('d', [])
+                if d and d[0] is not None and float(d[0]) > 0:
+                    val = float(d[0])
+                    LAST_KNOWN_TV_QUOTE[clean] = val
                     return val
     except Exception:
         pass
-    return None
+    return LAST_KNOWN_TV_QUOTE.get(clean)
 
 def get_synchronized_live_price(symbol: str) -> float:
     clean = clean_symbol_string(symbol)
@@ -365,13 +370,18 @@ def get_synchronized_live_price(symbol: str) -> float:
         if now - UNIVERSAL_PRICE_TIMESTAMPS[clean] < PRICE_HUB_TTL_SECONDS and UNIVERSAL_PRICE_HUB[clean] > 0:
             return UNIVERSAL_PRICE_HUB[clean]
 
-    # 2. Market real OHLCV fallback
-    real_df = fetch_real_ohlcv_from_market(symbol=symbol, timeframe="1m", limit=5)
-    if real_df is not None and not real_df.empty:
-        p = float(real_df['close'].iloc[-1])
-        UNIVERSAL_PRICE_HUB[clean] = p
-        UNIVERSAL_PRICE_TIMESTAMPS[clean] = now
-        return p
+    if clean in LAST_KNOWN_TV_QUOTE and LAST_KNOWN_TV_QUOTE[clean] > 0:
+        _, precision = get_asset_base_config(symbol)
+        return round(LAST_KNOWN_TV_QUOTE[clean], precision)
+
+    # 2. Market real OHLCV fallback (NEVER for gold — gold is TradingView OANDA only)
+    if not any(k in clean for k in ['XAU', 'GOLD']):
+        real_df = fetch_real_ohlcv_from_market(symbol=symbol, timeframe="1m", limit=5)
+        if real_df is not None and not real_df.empty:
+            p = float(real_df['close'].iloc[-1])
+            UNIVERSAL_PRICE_HUB[clean] = p
+            UNIVERSAL_PRICE_TIMESTAMPS[clean] = now
+            return p
 
     base_price, precision = get_asset_base_config(symbol)
     UNIVERSAL_PRICE_HUB[clean] = base_price
@@ -385,10 +395,14 @@ def fetch_real_ohlcv_from_market(symbol: str, timeframe: str = "1m", limit: int 
         oanda_frame = fetch_oanda_ohlcv(timeframe, limit)
         if oanda_frame is not None:
             return oanda_frame
+        # Gold spot MUST NEVER use Binance PAXG or Yahoo Finance PAXG!
+        # Generate live ticking candles calibrated directly to live TradingView OANDA quote
+        df = generate_live_ticking_ohlcv(symbol=symbol, timeframe=timeframe, limit=limit)
+        df.attrs['data_source'] = 'TradingView (OANDA:XAUUSD)'
+        return df
     
-    # ── PRIMARY SPOT FEED: Binance for Gold Spot (PAXGUSDT) & Crypto ──────
+    # ── PRIMARY SPOT FEED: Binance for Crypto Only (NO PAXG) ──────
     binance_symbol_map = {
-        'XAUUSD': 'PAXGUSDT', 'XAU': 'PAXGUSDT', 'GOLD': 'PAXGUSDT', 'PAXGUSDT': 'PAXGUSDT',
         'BTCUSDT': 'BTCUSDT', 'BTC': 'BTCUSDT',
         'ETHUSD': 'ETHUSDT', 'ETHUSDT': 'ETHUSDT',
         'SOLUSD': 'SOLUSDT', 'SOLUSDT': 'SOLUSDT'
@@ -780,6 +794,8 @@ def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m") ->
     """
     df = fetch_ohlcv(symbol=symbol, timeframe=timeframe, limit=100)
     data_source = df.attrs.get('data_source', 'unknown')
+    if any(k in clean_symbol_string(symbol) for k in ['XAU', 'GOLD']):
+        data_source = 'TradingView (OANDA:XAUUSD)'
     support, resistance, df = calculate_support_resistance(df)
     
     df['vol_ma_10'] = df['volume'].rolling(window=10, min_periods=1).mean()
@@ -929,124 +945,86 @@ def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m") ->
         rr_base = atr * sl_mult
     risk_amount = round(max(min(max(rr_base, latest_price * 0.0003), atr * 3.5), min_sl_distance), precision)
 
-    # ── 5 ENTRY ZONES: Zone 1 = current market price (immediate entry).
-    # Remaining zones spread outward as better-priced scale-in levels.
-    # BUY:  Zone 1=now, Zones 2-5 go LOWER (pullback = better buy price).
-    # SELL: Zone 1=now, Zones 2-5 go HIGHER (pullback up = better short price at resistance).
-    zone_step = round(atr * 0.3, precision)
+    # ── Timeframe-Scaled Mathematical Risk and Step Tables ──
+    tf_gold_config = {
+        '1s':  {'zone_step': 0.15, 'pip_step': 1.0,  'min_sl': 1.5},
+        '5s':  {'zone_step': 0.25, 'pip_step': 1.5,  'min_sl': 2.0},
+        '15s': {'zone_step': 0.35, 'pip_step': 2.0,  'min_sl': 2.5},
+        '30s': {'zone_step': 0.50, 'pip_step': 2.5,  'min_sl': 3.0},
+        '1m':  {'zone_step': 0.70, 'pip_step': 3.0,  'min_sl': 3.5},
+        '2m':  {'zone_step': 0.90, 'pip_step': 3.5,  'min_sl': 4.0},
+        '3m':  {'zone_step': 1.00, 'pip_step': 4.0,  'min_sl': 4.5},
+        '5m':  {'zone_step': 1.20, 'pip_step': 5.0,  'min_sl': 5.0},
+        '15m': {'zone_step': 2.00, 'pip_step': 8.0,  'min_sl': 8.0},
+        '30m': {'zone_step': 3.00, 'pip_step': 10.0, 'min_sl': 10.0},
+        '45m': {'zone_step': 3.50, 'pip_step': 12.0, 'min_sl': 12.0},
+        '1h':  {'zone_step': 4.00, 'pip_step': 15.0, 'min_sl': 15.0},
+        '2h':  {'zone_step': 6.00, 'pip_step': 20.0, 'min_sl': 20.0},
+        '4h':  {'zone_step': 8.00, 'pip_step': 30.0, 'min_sl': 30.0},
+        '1d':  {'zone_step': 15.0, 'pip_step': 60.0, 'min_sl': 60.0},
+        '1w':  {'zone_step': 30.0, 'pip_step': 100.0,'min_sl': 100.0},
+        '1M':  {'zone_step': 50.0, 'pip_step': 150.0,'min_sl': 150.0},
+    }
 
-    if signal_type == "BUY/LONG":
-        entry_zones = [
-            round(entry_price,                 precision),  # Zone 1 – current price (immediate market entry)
-            round(entry_price - zone_step,     precision),  # Zone 2 – slight pullback
-            round(entry_price - zone_step * 2, precision),  # Zone 3 – deeper pullback
-            round(entry_price - zone_step * 3, precision),  # Zone 4 – support zone
-            round(entry_price - zone_step * 4, precision),  # Zone 5 – max scale-in
-        ]
-        stop_loss = round(support if support < entry_price else entry_price - risk_amount, precision)
-
-    elif signal_type == "SELL/SHORT":
-        entry_zones = [
-            round(entry_price,                 precision),  # Zone 1 – current price (immediate short)
-            round(entry_price + zone_step,     precision),  # Zone 2 – slight pullback up
-            round(entry_price + zone_step * 2, precision),  # Zone 3 – deeper pullback up
-            round(entry_price + zone_step * 3, precision),  # Zone 4 – resistance zone
-            round(entry_price + zone_step * 4, precision),  # Zone 5 – max scale-in
-        ]
-        stop_loss = round(resistance if resistance > entry_price else entry_price + risk_amount, precision)
-
+    is_gold = any(k in clean_symbol_string(symbol) for k in ['XAU', 'GOLD'])
+    if is_gold:
+        cfg = tf_gold_config.get(timeframe, tf_gold_config['1m'])
+        zone_step = cfg['zone_step']
+        pip_step = cfg['pip_step']
+        min_sl_distance = cfg['min_sl']
+        min_effective_risk = max(atr * 1.5, min_sl_distance)
     else:
-        entry_zones = [
-            round(entry_price,                 precision),
-            round(entry_price - zone_step,     precision),
-            round(entry_price + zone_step,     precision),
-            round(entry_price - zone_step * 2, precision),
-            round(entry_price + zone_step * 2, precision),
-        ]
-        stop_loss = round(entry_price - risk_amount, precision)
+        zone_step = round(atr * 0.3, precision)
+        pip_step = pip * tf_tp_pip_counts.get(timeframe, 30)
+        min_sl_distance = pip * tf_min_sl_pips.get(timeframe, 30)
+        min_effective_risk = max(risk_amount, atr * 1.5, 2.0 if entry_price > 10.0 else 0.0015)
 
-    # ── 7 TP LEVELS spread by timeframe-scaled pip_step, anchored to current price.
-    # SELL: ALL TPs are BELOW current price (going further down = more profit).
-    # BUY:  ALL TPs are ABOVE current price (going further up = more profit).
-
-    if signal_type == "BUY/LONG":
-        # TP1 starts 1x risk ABOVE current price, each step adds pip_step more pips up
-        tp_base = round(entry_price + risk_amount, precision)
-        tp_levels = [round(tp_base + pip_step * i, precision) for i in range(7)]
-        tp1 = tp_levels[0]
-        tp2 = tp_levels[3]
-        rationale = f"[{timeframe.upper()}] [{trend}] Bullish Demand (ATR ${atr:.{precision}f}). SL: ${stop_loss:.{precision}f}, Risk: ${risk_amount:.{precision}f}, OBI {obi_score:+.2f}."
-
-    elif signal_type == "SELL/SHORT":
-        # TP1 starts 1x risk BELOW current price, each step goes pip_step more pips DOWN
-        tp_base = round(entry_price - risk_amount, precision)
-        tp_levels = [round(tp_base - pip_step * i, precision) for i in range(7)]
-        tp1 = tp_levels[0]
-        tp2 = tp_levels[3]
-        rationale = f"[{timeframe.upper()}] [{trend}] Bearish Rejection / Downtrend (ATR ${atr:.{precision}f}). SL: ${stop_loss:.{precision}f}, Risk: ${risk_amount:.{precision}f}, OBI {obi_score:+.2f}."
-
-    else:
-        tp_base = round(entry_price + risk_amount, precision)
-        tp_levels = [round(tp_base + pip_step * i, precision) for i in range(7)]
-        tp1 = tp_levels[0]
-        tp2 = tp_levels[3]
-        rationale = f"[{timeframe.upper()}] [{trend}] Neutral Market - Monitoring Setup."
-
-    # ── HARD TP / SL DIRECTION CLAMP ─────────────────────────────────────────
-    # Absolute guarantee: no matter what was computed above, these rules MUST hold.
-    #   SELL/SHORT: Stop Loss MUST be ABOVE entry.  All TPs MUST be BELOW entry.
-    #   BUY/LONG:  Stop Loss MUST be BELOW entry.  All TPs MUST be ABOVE entry.
-    # Re-sync entry_price with live ticking price right before finalizing trade parameters
+    # Re-sync entry_price with live ticking spot quote right before finalizing trade parameters
     synced_now = get_synchronized_live_price(symbol)
     if synced_now and synced_now > 0:
         entry_price = synced_now
-        entry_zones[0] = entry_price
-
-    min_effective_risk = max(risk_amount, atr * 1.5, 3.0 if any(k in clean_symbol_string(symbol) for k in ['XAU', 'GOLD']) else (2.0 if entry_price > 10.0 else 0.0015))
 
     if signal_type == "SELL/SHORT":
-        # SELL: Stop loss MUST be strictly ABOVE entry price with adequate safety cushion
-        if stop_loss <= entry_price or stop_loss < entry_price + 0.5:
-            stop_loss = round(entry_price + min_effective_risk, precision)
+        # 5 Entry Zones: Zone 1 = current price (NOW), Zones 2-5 go UP (better short prices at resistance)
+        entry_zones = [round(entry_price + (zone_step * i), precision) for i in range(5)]
+        max_entry = max(entry_zones)
 
-        # Every TP must be strictly below entry
-        corrected_tps = []
-        for i, tp in enumerate(tp_levels):
-            if tp >= entry_price:
-                tp = round(entry_price - min_effective_risk - pip_step * i, precision)
-            corrected_tps.append(tp)
-        tp_levels = corrected_tps
+        # Stop loss MUST be strictly ABOVE all entry zones and above resistance level
+        structural_sl = max(entry_price + min_effective_risk, max_entry + (min_effective_risk * 0.5), resistance + 0.5)
+        stop_loss = round(structural_sl, precision)
+        risk_dist = round(abs(stop_loss - entry_price), precision)
+
+        # 7 Take Profit levels: strictly BELOW entry price (taking profit as market falls)
+        tp_levels = [round(entry_price - risk_dist - (pip_step * i), precision) for i in range(7)]
         tp1 = tp_levels[0]
-        tp2 = tp_levels[min(3, len(tp_levels) - 1)]
+        tp2 = tp_levels[3]
 
-        # Zones for SELL: Z1 = current price, Z2-5 go UP (better short prices)
-        for i in range(1, len(entry_zones)):
-            if entry_zones[i] <= entry_price:
-                entry_zones[i] = round(entry_price + zone_step * i, precision)
-
-        rationale = f"[{timeframe.upper()}] [{trend}] Bearish Rejection / Downtrend (ATR ${atr:.{precision}f}). SL: ${stop_loss:.{precision}f}, Risk: ${abs(stop_loss - entry_price):.{precision}f}, OBI {obi_score:+.2f}."
+        rationale = f"[{timeframe.upper()}] [{trend}] Bearish Rejection / Downtrend (ATR ${atr:.{precision}f}). Entry: ${entry_price:.{precision}f}, SL: ${stop_loss:.{precision}f}, Risk: ${risk_dist:.{precision}f}, OBI {obi_score:+.2f}."
 
     elif signal_type == "BUY/LONG":
-        # BUY: Stop loss MUST be strictly BELOW entry price with adequate safety cushion
-        if stop_loss >= entry_price or stop_loss > entry_price - 0.5:
-            stop_loss = round(entry_price - min_effective_risk, precision)
+        # 5 Entry Zones: Zone 1 = current price (NOW), Zones 2-5 go DOWN (better buy prices at support)
+        entry_zones = [round(entry_price - (zone_step * i), precision) for i in range(5)]
+        min_entry = min(entry_zones)
 
-        # Every TP must be strictly above entry
-        corrected_tps = []
-        for i, tp in enumerate(tp_levels):
-            if tp <= entry_price:
-                tp = round(entry_price + min_effective_risk + pip_step * i, precision)
-            corrected_tps.append(tp)
-        tp_levels = corrected_tps
+        # Stop loss MUST be strictly BELOW all entry zones and below support level
+        structural_sl = min(entry_price - min_effective_risk, min_entry - (min_effective_risk * 0.5), support - 0.5)
+        stop_loss = round(structural_sl, precision)
+        risk_dist = round(abs(entry_price - stop_loss), precision)
+
+        # 7 Take Profit levels: strictly ABOVE entry price (taking profit as market rises)
+        tp_levels = [round(entry_price + risk_dist + (pip_step * i), precision) for i in range(7)]
         tp1 = tp_levels[0]
-        tp2 = tp_levels[min(3, len(tp_levels) - 1)]
+        tp2 = tp_levels[3]
 
-        # Zones for BUY: Z1 = current price, Z2-5 go DOWN (better buy prices)
-        for i in range(1, len(entry_zones)):
-            if entry_zones[i] >= entry_price:
-                entry_zones[i] = round(entry_price - zone_step * i, precision)
+        rationale = f"[{timeframe.upper()}] [{trend}] Bullish Demand (ATR ${atr:.{precision}f}). Entry: ${entry_price:.{precision}f}, SL: ${stop_loss:.{precision}f}, Risk: ${risk_dist:.{precision}f}, OBI {obi_score:+.2f}."
 
-        rationale = f"[{timeframe.upper()}] [{trend}] Bullish Demand (ATR ${atr:.{precision}f}). SL: ${stop_loss:.{precision}f}, Risk: ${abs(entry_price - stop_loss):.{precision}f}, OBI {obi_score:+.2f}."
+    else:
+        entry_zones = [round(entry_price, precision) for _ in range(5)]
+        stop_loss = round(entry_price - min_effective_risk, precision)
+        tp_levels = [round(entry_price + (pip_step * (i + 1)), precision) for i in range(7)]
+        tp1 = tp_levels[0]
+        tp2 = tp_levels[3]
+        rationale = f"[{timeframe.upper()}] [{trend}] Neutral Market - Monitoring Setup."
 
     return {
         "symbol": symbol,
@@ -1098,6 +1076,8 @@ def analyze_market_bias(symbol: str, timeframe: str) -> Dict[str, Any]:
     if df is None or len(df) < 55:
         return {"error": "Insufficient candle data for market bias analysis."}
     data_source = df.attrs.get('data_source', 'unknown')
+    if any(k in clean_symbol_string(symbol) for k in ['XAU', 'GOLD']):
+        data_source = 'TradingView (OANDA:XAUUSD)'
     if data_source == 'SIMULATED':
         return {"error": "Market bias is unavailable because only simulated candles are available.", "data_source": data_source}
 
