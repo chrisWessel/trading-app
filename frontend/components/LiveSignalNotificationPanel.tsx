@@ -188,11 +188,28 @@ export default function LiveSignalNotificationPanel({
           tp2: effectiveTp2,
           tp_levels: effectiveTpLevels,
         };
-        frozenRef.current = latestParams;
-        setFrozenParams(latestParams);
 
-        if (directionChanged) {
-          setSelectedTpIndex(0); // reset chip selection only on direction flip
+        // When the live price moves away from frozen entry by more than 0.3%,
+        // refresh the frozen anchor so entry zones and TPs match the current live candle!
+        const entryDrift = prevFrozen && prevFrozen.entry > 0
+          ? Math.abs(a.trade_params.entry - prevFrozen.entry) / prevFrozen.entry
+          : 0;
+
+        if (directionChanged || entryDrift > 0.003) {
+          frozenRef.current = latestParams;
+          setFrozenParams(latestParams);
+          if (directionChanged) {
+            setSelectedTpIndex(0); // reset chip selection only on direction flip
+          }
+        } else {
+          // Keep entry locked to prevent microscopic jitter, but update live zones and targets
+          setFrozenParams(prev => prev ? {
+            ...prev,
+            stop_loss: effectiveSL,
+            tp1: effectiveTp1,
+            tp2: effectiveTp2,
+            tp_levels: effectiveTpLevels,
+          } : latestParams);
         }
 
 
@@ -394,9 +411,9 @@ export default function LiveSignalNotificationPanel({
                 <input
                   type="number"
                   value={accountBalance}
-                  onChange={(e) => setAccountBalance(Math.max(10, Number(e.target.value) || 0))}
+                  onChange={(e) => setAccountBalance(Math.max(1, Number(e.target.value) || 0))}
                   className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-white font-mono text-[11px]"
-                  step="50"
+                  placeholder="e.g. 100"
                 />
               </div>
 

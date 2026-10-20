@@ -1090,25 +1090,26 @@ def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m",
     risk_amount = round(max(min(max(rr_base, latest_price * 0.0003), atr * 3.5), min_sl_distance), precision)
 
     # ── Timeframe-Scaled Mathematical Risk and Step Tables ──
-    # Cap max SL distance so intraday trades don't use absurd stop losses ($28+ is way too wide for 5m)
+    # Cap max SL distance so intraday trades don't use absurd stop losses
+    # tp1_ratio: TP1 starts close to entry (0.5x to 1.0x risk_dist) so realistic profits are locked quickly
     tf_gold_config = {
-        '1s':  {'zone_step': 0.15, 'pip_step': 0.5,  'min_sl': 1.0, 'max_sl': 2.0},
-        '5s':  {'zone_step': 0.25, 'pip_step': 0.8,  'min_sl': 1.5, 'max_sl': 3.0},
-        '15s': {'zone_step': 0.35, 'pip_step': 1.2,  'min_sl': 1.8, 'max_sl': 3.5},
-        '30s': {'zone_step': 0.50, 'pip_step': 1.5,  'min_sl': 2.0, 'max_sl': 4.0},
-        '1m':  {'zone_step': 0.60, 'pip_step': 2.0,  'min_sl': 2.5, 'max_sl': 5.0},
-        '2m':  {'zone_step': 0.80, 'pip_step': 2.5,  'min_sl': 3.0, 'max_sl': 6.0},
-        '3m':  {'zone_step': 1.00, 'pip_step': 3.0,  'min_sl': 3.5, 'max_sl': 7.0},
-        '5m':  {'zone_step': 1.00, 'pip_step': 3.5,  'min_sl': 4.0, 'max_sl': 8.0},
-        '15m': {'zone_step': 1.50, 'pip_step': 5.0,  'min_sl': 6.0, 'max_sl': 12.0},
-        '30m': {'zone_step': 2.00, 'pip_step': 6.0,  'min_sl': 8.0, 'max_sl': 16.0},
-        '45m': {'zone_step': 2.50, 'pip_step': 8.0,  'min_sl': 9.0, 'max_sl': 18.0},
-        '1h':  {'zone_step': 3.00, 'pip_step': 10.0, 'min_sl': 10.0,'max_sl': 22.0},
-        '2h':  {'zone_step': 4.00, 'pip_step': 12.0, 'min_sl': 12.0,'max_sl': 28.0},
-        '4h':  {'zone_step': 6.00, 'pip_step': 15.0, 'min_sl': 15.0,'max_sl': 35.0},
-        '1d':  {'zone_step': 10.0, 'pip_step': 25.0, 'min_sl': 25.0,'max_sl': 60.0},
-        '1w':  {'zone_step': 20.0, 'pip_step': 50.0, 'min_sl': 50.0,'max_sl': 120.0},
-        '1M':  {'zone_step': 35.0, 'pip_step': 80.0, 'min_sl': 80.0,'max_sl': 200.0},
+        '1s':  {'zone_step': 0.15, 'pip_step': 0.4,  'min_sl': 1.0, 'max_sl': 2.0,  'tp1_ratio': 0.5},
+        '5s':  {'zone_step': 0.25, 'pip_step': 0.5,  'min_sl': 1.5, 'max_sl': 3.0,  'tp1_ratio': 0.5},
+        '15s': {'zone_step': 0.35, 'pip_step': 0.8,  'min_sl': 1.8, 'max_sl': 3.5,  'tp1_ratio': 0.6},
+        '30s': {'zone_step': 0.50, 'pip_step': 1.0,  'min_sl': 2.0, 'max_sl': 4.0,  'tp1_ratio': 0.6},
+        '1m':  {'zone_step': 0.50, 'pip_step': 1.2,  'min_sl': 2.0, 'max_sl': 4.0,  'tp1_ratio': 0.6},
+        '2m':  {'zone_step': 0.60, 'pip_step': 1.5,  'min_sl': 2.5, 'max_sl': 5.0,  'tp1_ratio': 0.6},
+        '3m':  {'zone_step': 0.80, 'pip_step': 1.8,  'min_sl': 3.0, 'max_sl': 6.0,  'tp1_ratio': 0.7},
+        '5m':  {'zone_step': 1.00, 'pip_step': 2.0,  'min_sl': 3.0, 'max_sl': 6.0,  'tp1_ratio': 0.7},
+        '15m': {'zone_step': 1.50, 'pip_step': 3.0,  'min_sl': 4.0, 'max_sl': 8.0,  'tp1_ratio': 0.8},
+        '30m': {'zone_step': 2.00, 'pip_step': 4.0,  'min_sl': 5.0, 'max_sl': 10.0, 'tp1_ratio': 0.8},
+        '45m': {'zone_step': 2.50, 'pip_step': 5.0,  'min_sl': 6.0, 'max_sl': 12.0, 'tp1_ratio': 0.8},
+        '1h':  {'zone_step': 3.00, 'pip_step': 6.0,  'min_sl': 8.0, 'max_sl': 15.0, 'tp1_ratio': 0.9},
+        '2h':  {'zone_step': 4.00, 'pip_step': 8.0,  'min_sl': 10.0,'max_sl': 20.0, 'tp1_ratio': 1.0},
+        '4h':  {'zone_step': 6.00, 'pip_step': 12.0, 'min_sl': 12.0,'max_sl': 25.0, 'tp1_ratio': 1.0},
+        '1d':  {'zone_step': 10.0, 'pip_step': 20.0, 'min_sl': 20.0,'max_sl': 50.0, 'tp1_ratio': 1.0},
+        '1w':  {'zone_step': 20.0, 'pip_step': 40.0, 'min_sl': 40.0,'max_sl': 100.0,'tp1_ratio': 1.0},
+        '1M':  {'zone_step': 35.0, 'pip_step': 60.0, 'min_sl': 60.0,'max_sl': 150.0,'tp1_ratio': 1.0},
     }
 
     is_gold = any(k in clean_symbol_string(symbol) for k in ['XAU', 'GOLD'])
@@ -1118,6 +1119,7 @@ def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m",
         pip_step = cfg['pip_step']
         min_sl_distance = cfg['min_sl']
         max_sl_distance = cfg['max_sl']
+        tp1_ratio = cfg.get('tp1_ratio', 0.6)
         
         # If user specified account sizing and lot size, calculate exact stop loss distance for 1-3% risk
         # For Gold (100 oz contract): 1.00 lot = $100 per $1 move, 0.01 lot = $1 per $1 move
@@ -1137,6 +1139,7 @@ def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m",
         zone_step = round(atr * 0.3, precision)
         pip_step = pip * tf_tp_pip_counts.get(timeframe, 30)
         min_sl_distance = pip * tf_min_sl_pips.get(timeframe, 30)
+        tp1_ratio = 0.8
         
         # Forex / crypto lot size risk calculation if provided
         if account_balance > 0 and lot_size > 0 and risk_percent > 0:
@@ -1152,14 +1155,15 @@ def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m",
     if synced_now and synced_now > 0:
         entry_price = synced_now
 
+    # Calculate initial TP offset: TP1 starts close to entry for quick profit taking!
+    tp1_base_offset = max(round(min_effective_risk * tp1_ratio, precision), pip_step)
+
     if signal_type == "SELL/SHORT":
         # 5 Entry Zones: Zone 1 = current price (NOW), Zones 2-5 go UP (better short prices at resistance)
         entry_zones = [round(entry_price + (zone_step * i), precision) for i in range(5)]
         max_entry = max(entry_zones)
 
         # Stop loss strictly ABOVE all entry zones. Never allow resistance far away to blow out the SL!
-        # If resistance is nearby (within 1.2 * min_effective_risk), we can place it just above resistance.
-        # Otherwise, cap it tightly at entry_price + min_effective_risk!
         if resistance > entry_price and (resistance - entry_price) <= (min_effective_risk * 1.2):
             structural_sl = max(entry_price + min_effective_risk, resistance + 0.3)
         else:
@@ -1169,8 +1173,8 @@ def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m",
         risk_dist = round(abs(stop_loss - entry_price), precision)
 
         # 7 Take Profit levels: strictly BELOW entry price (taking profit as market falls)
-        # TP1 matches 1:1 Risk-Reward ratio
-        tp_levels = [round(entry_price - risk_dist - (pip_step * i), precision) for i in range(7)]
+        # TP1 starts close (tp1_base_offset), subsequent levels scale smoothly
+        tp_levels = [round(entry_price - tp1_base_offset - (pip_step * i), precision) for i in range(7)]
         tp1 = tp_levels[0]
         tp2 = tp_levels[3]
 
@@ -1191,7 +1195,8 @@ def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m",
         risk_dist = round(abs(entry_price - stop_loss), precision)
 
         # 7 Take Profit levels: strictly ABOVE entry price (taking profit as market rises)
-        tp_levels = [round(entry_price + risk_dist + (pip_step * i), precision) for i in range(7)]
+        # TP1 starts close (tp1_base_offset), subsequent levels scale smoothly
+        tp_levels = [round(entry_price + tp1_base_offset + (pip_step * i), precision) for i in range(7)]
         tp1 = tp_levels[0]
         tp2 = tp_levels[3]
 
