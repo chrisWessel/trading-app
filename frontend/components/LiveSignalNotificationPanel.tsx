@@ -82,6 +82,8 @@ export default function LiveSignalNotificationPanel({
   
   // Risk management parameters: customizable Lot Size, Risk %, and Account Balance
   const [accountBalance, setAccountBalance] = useState<number>(1000);
+  // balanceInput is a raw string so the user can freely clear & type any amount
+  const [balanceInput, setBalanceInput] = useState<string>('1000');
   const [lotSize, setLotSize] = useState<number>(0.01);
   const [riskPercent, setRiskPercent] = useState<number>(2.0); // default 2%
   const [showRiskConfig, setShowRiskConfig] = useState<boolean>(false);
@@ -195,7 +197,7 @@ export default function LiveSignalNotificationPanel({
           ? Math.abs(a.trade_params.entry - prevFrozen.entry) / prevFrozen.entry
           : 0;
 
-        if (directionChanged || entryDrift > 0.003) {
+        if (directionChanged || entryDrift > 0.001) {
           frozenRef.current = latestParams;
           setFrozenParams(latestParams);
           if (directionChanged) {
@@ -409,9 +411,24 @@ export default function LiveSignalNotificationPanel({
               <div>
                 <label className="text-[9px] text-slate-400 block mb-0.5">Balance ($)</label>
                 <input
-                  type="number"
-                  value={accountBalance}
-                  onChange={(e) => setAccountBalance(Math.max(1, Number(e.target.value) || 0))}
+                  type="text"
+                  inputMode="decimal"
+                  value={balanceInput}
+                  onChange={(e) => {
+                    const raw = e.target.value.replace(/[^0-9.]/g, '');
+                    setBalanceInput(raw);
+                    const num = parseFloat(raw);
+                    if (!isNaN(num) && num >= 1) setAccountBalance(num);
+                  }}
+                  onBlur={() => {
+                    const num = parseFloat(balanceInput);
+                    if (isNaN(num) || num < 1) {
+                      setBalanceInput(String(accountBalance));
+                    } else {
+                      setAccountBalance(num);
+                      setBalanceInput(String(num));
+                    }
+                  }}
                   className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-white font-mono text-[11px]"
                   placeholder="e.g. 100"
                 />
