@@ -877,11 +877,18 @@ def calculate_supply_demand_zones(df: pd.DataFrame, precision: int = 2) -> Dict[
             
     return {"supply": supply_zones[::-1], "demand": demand_zones[::-1]}
 
-def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m") -> Dict[str, Any]:
+def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m",
+                               account_balance: float = 0.0, lot_size: float = 0.0,
+                               risk_percent: float = 0.0) -> Dict[str, Any]:
     """
     Institutional Multi-Timeframe Signal Recommendation Engine.
     Dynamically evaluates Average True Range (ATR) volatility and market structure per timeframe.
     Targeting 80%+ win rate with optimal Risk-to-Reward parameters.
+
+    Risk management params (optional):
+        account_balance: Account size in USD (e.g. 500.0)
+        lot_size: Trading lot size (e.g. 0.01, 0.1, 1.0)
+        risk_percent: Max % of account to risk per trade (e.g. 2.0)
     """
     df = fetch_ohlcv(symbol=symbol, timeframe=timeframe, limit=100)
     data_source = df.attrs.get('data_source', 'unknown')
@@ -931,6 +938,37 @@ def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m") ->
     else:
         trend = "RANGEBOUND"
 
+    # ── SHORT-TERM MOMENTUM & TREND REVERSAL DETECTION ──────────────────────
+    # Check the last 5 candles for reversal patterns that override the longer-term trend.
+    # If price was falling but last 3+ candles make higher lows → bullish reversal
+    # If price was rising but last 3+ candles make lower highs → bearish reversal
+    recent_n = min(5, len(df) - 1)
+    recent_candles = df.iloc[-(recent_n + 1):]  # last 5+1 candles for comparison
+
+    if len(recent_candles) >= 4:
+        recent_lows = recent_candles['low'].values[-4:]   # last 4 candle lows
+        recent_highs = recent_candles['high'].values[-4:]  # last 4 candle highs
+        recent_closes = recent_candles['close'].values[-4:]
+
+        # Count consecutive higher lows (bullish pressure building)
+        higher_lows = sum(1 for i in range(1, len(recent_lows)) if recent_lows[i] > recent_lows[i-1])
+        # Count consecutive lower highs (bearish pressure building)
+        lower_highs = sum(1 for i in range(1, len(recent_highs)) if recent_highs[i] < recent_highs[i-1])
+        # Short-term close direction: are recent closes trending up or down?
+        close_rising = recent_closes[-1] > recent_closes[0]
+        close_change_pct = (recent_closes[-1] - recent_closes[0]) / recent_closes[0] * 100
+
+        # Reversal override: if 2+ of last 3 candles make higher lows AND closes are rising
+        # while the longer-term SMA says DOWNTREND, the market is reversing — go NEUTRAL
+        if trend == "DOWNTREND" and higher_lows >= 2 and close_rising:
+            trend = "REVERSAL_UP"  # short-term bullish reversal detected
+        elif trend == "UPTREND" and lower_highs >= 2 and not close_rising:
+            trend = "REVERSAL_DOWN"  # short-term bearish reversal detected
+    else:
+        higher_lows = 0
+        lower_highs = 0
+        close_change_pct = 0.0
+
     # Multi-Tier Trend-Aware Active Signal Logic
     cond_support_zone = (price_position_pct <= 45.0) or (latest_low <= support * 1.002)
     cond_resistance_zone = (price_position_pct >= 55.0) or (latest_high >= resistance * 0.998)
@@ -941,10 +979,25 @@ def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m") ->
     # Rule: "The trend is your friend."
     #   DOWNTREND → only SELL/SHORT signals are allowed.
     #   UPTREND   → only BUY/LONG  signals are allowed.
+    #   REVERSAL_UP / REVERSAL_DOWN → Reversal in progress, halt counter-trend signals!
     #   RANGEBOUND → use OBI/support-resistance but still require confirmation.
     # This prevents the system from fighting the market direction.
 
-    if trend == "DOWNTREND":
+    if trend == "REVERSAL_UP":
+        # Price is bouncing back up with higher lows! Do NOT sell into a reversal.
+        if cond_support_zone or obi_score >= 0.02:
+            signal_type = "BUY/LONG"
+        else:
+            signal_type = "NEUTRAL"
+
+    elif trend == "REVERSAL_DOWN":
+        # Price is rejecting downward with lower highs! Do NOT buy into a reversal.
+        if cond_resistance_zone or obi_score <= -0.02:
+            signal_type = "SELL/SHORT"
+        else:
+            signal_type = "NEUTRAL"
+
+    elif trend == "DOWNTREND":
         # Market is falling — only allow SELL. Never issue a BUY against a downtrend.
         signal_type = "SELL/SHORT"
 
@@ -1037,24 +1090,25 @@ def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m") ->
     risk_amount = round(max(min(max(rr_base, latest_price * 0.0003), atr * 3.5), min_sl_distance), precision)
 
     # ── Timeframe-Scaled Mathematical Risk and Step Tables ──
+    # Cap max SL distance so intraday trades don't use absurd stop losses ($28+ is way too wide for 5m)
     tf_gold_config = {
-        '1s':  {'zone_step': 0.15, 'pip_step': 1.0,  'min_sl': 1.5},
-        '5s':  {'zone_step': 0.25, 'pip_step': 1.5,  'min_sl': 2.0},
-        '15s': {'zone_step': 0.35, 'pip_step': 2.0,  'min_sl': 2.5},
-        '30s': {'zone_step': 0.50, 'pip_step': 2.5,  'min_sl': 3.0},
-        '1m':  {'zone_step': 0.70, 'pip_step': 3.0,  'min_sl': 3.5},
-        '2m':  {'zone_step': 0.90, 'pip_step': 3.5,  'min_sl': 4.0},
-        '3m':  {'zone_step': 1.00, 'pip_step': 4.0,  'min_sl': 4.5},
-        '5m':  {'zone_step': 1.20, 'pip_step': 5.0,  'min_sl': 5.0},
-        '15m': {'zone_step': 2.00, 'pip_step': 8.0,  'min_sl': 8.0},
-        '30m': {'zone_step': 3.00, 'pip_step': 10.0, 'min_sl': 10.0},
-        '45m': {'zone_step': 3.50, 'pip_step': 12.0, 'min_sl': 12.0},
-        '1h':  {'zone_step': 4.00, 'pip_step': 15.0, 'min_sl': 15.0},
-        '2h':  {'zone_step': 6.00, 'pip_step': 20.0, 'min_sl': 20.0},
-        '4h':  {'zone_step': 8.00, 'pip_step': 30.0, 'min_sl': 30.0},
-        '1d':  {'zone_step': 15.0, 'pip_step': 60.0, 'min_sl': 60.0},
-        '1w':  {'zone_step': 30.0, 'pip_step': 100.0,'min_sl': 100.0},
-        '1M':  {'zone_step': 50.0, 'pip_step': 150.0,'min_sl': 150.0},
+        '1s':  {'zone_step': 0.15, 'pip_step': 0.5,  'min_sl': 1.0, 'max_sl': 2.0},
+        '5s':  {'zone_step': 0.25, 'pip_step': 0.8,  'min_sl': 1.5, 'max_sl': 3.0},
+        '15s': {'zone_step': 0.35, 'pip_step': 1.2,  'min_sl': 1.8, 'max_sl': 3.5},
+        '30s': {'zone_step': 0.50, 'pip_step': 1.5,  'min_sl': 2.0, 'max_sl': 4.0},
+        '1m':  {'zone_step': 0.60, 'pip_step': 2.0,  'min_sl': 2.5, 'max_sl': 5.0},
+        '2m':  {'zone_step': 0.80, 'pip_step': 2.5,  'min_sl': 3.0, 'max_sl': 6.0},
+        '3m':  {'zone_step': 1.00, 'pip_step': 3.0,  'min_sl': 3.5, 'max_sl': 7.0},
+        '5m':  {'zone_step': 1.00, 'pip_step': 3.5,  'min_sl': 4.0, 'max_sl': 8.0},
+        '15m': {'zone_step': 1.50, 'pip_step': 5.0,  'min_sl': 6.0, 'max_sl': 12.0},
+        '30m': {'zone_step': 2.00, 'pip_step': 6.0,  'min_sl': 8.0, 'max_sl': 16.0},
+        '45m': {'zone_step': 2.50, 'pip_step': 8.0,  'min_sl': 9.0, 'max_sl': 18.0},
+        '1h':  {'zone_step': 3.00, 'pip_step': 10.0, 'min_sl': 10.0,'max_sl': 22.0},
+        '2h':  {'zone_step': 4.00, 'pip_step': 12.0, 'min_sl': 12.0,'max_sl': 28.0},
+        '4h':  {'zone_step': 6.00, 'pip_step': 15.0, 'min_sl': 15.0,'max_sl': 35.0},
+        '1d':  {'zone_step': 10.0, 'pip_step': 25.0, 'min_sl': 25.0,'max_sl': 60.0},
+        '1w':  {'zone_step': 20.0, 'pip_step': 50.0, 'min_sl': 50.0,'max_sl': 120.0},
+        '1M':  {'zone_step': 35.0, 'pip_step': 80.0, 'min_sl': 80.0,'max_sl': 200.0},
     }
 
     is_gold = any(k in clean_symbol_string(symbol) for k in ['XAU', 'GOLD'])
@@ -1063,12 +1117,35 @@ def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m") ->
         zone_step = cfg['zone_step']
         pip_step = cfg['pip_step']
         min_sl_distance = cfg['min_sl']
-        min_effective_risk = max(atr * 1.5, min_sl_distance)
+        max_sl_distance = cfg['max_sl']
+        
+        # If user specified account sizing and lot size, calculate exact stop loss distance for 1-3% risk
+        # For Gold (100 oz contract): 1.00 lot = $100 per $1 move, 0.01 lot = $1 per $1 move
+        # risk_dollars = account_balance * (risk_percent / 100)
+        # allowed_sl_distance = risk_dollars / (lot_size * 100)
+        if account_balance > 0 and lot_size > 0 and risk_percent > 0:
+            contract_size = 100.0
+            risk_dollars = account_balance * (risk_percent / 100.0)
+            custom_sl_dist = risk_dollars / (lot_size * contract_size)
+            # Bound within safe limits
+            min_effective_risk = max(min_sl_distance, round(custom_sl_dist, precision))
+        else:
+            # Standard adaptive risk: ATR bounded between min_sl and max_sl
+            calculated_risk = min(max(atr * 1.0, min_sl_distance), max_sl_distance)
+            min_effective_risk = calculated_risk
     else:
         zone_step = round(atr * 0.3, precision)
         pip_step = pip * tf_tp_pip_counts.get(timeframe, 30)
         min_sl_distance = pip * tf_min_sl_pips.get(timeframe, 30)
-        min_effective_risk = max(risk_amount, atr * 1.5, 2.0 if entry_price > 10.0 else 0.0015)
+        
+        # Forex / crypto lot size risk calculation if provided
+        if account_balance > 0 and lot_size > 0 and risk_percent > 0:
+            contract_size = 100000.0 if is_forex_symbol(symbol) else 1.0
+            risk_dollars = account_balance * (risk_percent / 100.0)
+            custom_sl_dist = risk_dollars / (lot_size * contract_size)
+            min_effective_risk = max(min_sl_distance, round(custom_sl_dist, precision))
+        else:
+            min_effective_risk = max(risk_amount, atr * 1.5, 2.0 if entry_price > 10.0 else 0.0015)
 
     # Re-sync entry_price with live ticking spot quote right before finalizing trade parameters
     synced_now = get_synchronized_live_price(symbol)
@@ -1080,25 +1157,36 @@ def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m") ->
         entry_zones = [round(entry_price + (zone_step * i), precision) for i in range(5)]
         max_entry = max(entry_zones)
 
-        # Stop loss MUST be strictly ABOVE all entry zones and above resistance level
-        structural_sl = max(entry_price + min_effective_risk, max_entry + (min_effective_risk * 0.5), resistance + 0.5)
+        # Stop loss strictly ABOVE all entry zones. Never allow resistance far away to blow out the SL!
+        # If resistance is nearby (within 1.2 * min_effective_risk), we can place it just above resistance.
+        # Otherwise, cap it tightly at entry_price + min_effective_risk!
+        if resistance > entry_price and (resistance - entry_price) <= (min_effective_risk * 1.2):
+            structural_sl = max(entry_price + min_effective_risk, resistance + 0.3)
+        else:
+            structural_sl = entry_price + min_effective_risk
+
         stop_loss = round(structural_sl, precision)
         risk_dist = round(abs(stop_loss - entry_price), precision)
 
         # 7 Take Profit levels: strictly BELOW entry price (taking profit as market falls)
+        # TP1 matches 1:1 Risk-Reward ratio
         tp_levels = [round(entry_price - risk_dist - (pip_step * i), precision) for i in range(7)]
         tp1 = tp_levels[0]
         tp2 = tp_levels[3]
 
-        rationale = f"[{timeframe.upper()}] [{trend}] Bearish Rejection / Downtrend (ATR ${atr:.{precision}f}). Entry: ${entry_price:.{precision}f}, SL: ${stop_loss:.{precision}f}, Risk: ${risk_dist:.{precision}f}, OBI {obi_score:+.2f}."
+        rationale = f"[{timeframe.upper()}] [{trend}] Bearish Rejection / Downtrend (Risk: ${risk_dist:.{precision}f}). Entry: ${entry_price:.{precision}f}, SL: ${stop_loss:.{precision}f}, OBI {obi_score:+.2f}."
 
     elif signal_type == "BUY/LONG":
         # 5 Entry Zones: Zone 1 = current price (NOW), Zones 2-5 go DOWN (better buy prices at support)
         entry_zones = [round(entry_price - (zone_step * i), precision) for i in range(5)]
         min_entry = min(entry_zones)
 
-        # Stop loss MUST be strictly BELOW all entry zones and below support level
-        structural_sl = min(entry_price - min_effective_risk, min_entry - (min_effective_risk * 0.5), support - 0.5)
+        # Stop loss strictly BELOW all entry zones. Never allow distant support to blow out the SL!
+        if support < entry_price and (entry_price - support) <= (min_effective_risk * 1.2):
+            structural_sl = min(entry_price - min_effective_risk, support - 0.3)
+        else:
+            structural_sl = entry_price - min_effective_risk
+
         stop_loss = round(structural_sl, precision)
         risk_dist = round(abs(entry_price - stop_loss), precision)
 
@@ -1107,7 +1195,7 @@ def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m") ->
         tp1 = tp_levels[0]
         tp2 = tp_levels[3]
 
-        rationale = f"[{timeframe.upper()}] [{trend}] Bullish Demand (ATR ${atr:.{precision}f}). Entry: ${entry_price:.{precision}f}, SL: ${stop_loss:.{precision}f}, Risk: ${risk_dist:.{precision}f}, OBI {obi_score:+.2f}."
+        rationale = f"[{timeframe.upper()}] [{trend}] Bullish Demand (Risk: ${risk_dist:.{precision}f}). Entry: ${entry_price:.{precision}f}, SL: ${stop_loss:.{precision}f}, OBI {obi_score:+.2f}."
 
     else:
         entry_zones = [round(entry_price, precision) for _ in range(5)]

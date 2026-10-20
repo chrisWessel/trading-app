@@ -79,6 +79,12 @@ export default function LiveSignalNotificationPanel({
   const [soundEnabled, setSoundEnabled] = useState<boolean>(true);
   const [showTpGuidance, setShowTpGuidance] = useState<boolean>(false);
   const [selectedTpIndex, setSelectedTpIndex] = useState<number>(0); // which TP level is highlighted
+  
+  // Risk management parameters: customizable Lot Size, Risk %, and Account Balance
+  const [accountBalance, setAccountBalance] = useState<number>(1000);
+  const [lotSize, setLotSize] = useState<number>(0.01);
+  const [riskPercent, setRiskPercent] = useState<number>(2.0); // default 2%
+  const [showRiskConfig, setShowRiskConfig] = useState<boolean>(false);
 
   // Frozen params — locked once per signal direction change.
   // This prevents SL/TP from jittering on every 3-second poll.
@@ -93,7 +99,14 @@ export default function LiveSignalNotificationPanel({
       const res = await fetch(`${API_BASE_URL}/api/signals/check`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ symbol, timeframe, force_dispatch: false }),
+        body: JSON.stringify({ 
+          symbol, 
+          timeframe, 
+          force_dispatch: false,
+          account_balance: accountBalance,
+          lot_size: lotSize,
+          risk_percent: riskPercent
+        }),
       });
       if (res.ok) {
         const data = await res.json();
@@ -230,7 +243,7 @@ export default function LiveSignalNotificationPanel({
   };
 
   useEffect(() => {
-    // Clear stale state when switching symbol or timeframe
+    // Clear stale state when switching symbol, timeframe, or risk settings
     setNotifications([]);
     frozenRef.current = null;
     setFrozenParams(null);
@@ -238,7 +251,7 @@ export default function LiveSignalNotificationPanel({
     fetchSignal();
     const interval = setInterval(fetchSignal, 8000);
     return () => clearInterval(interval);
-  }, [symbol, timeframe]);
+  }, [symbol, timeframe, accountBalance, lotSize, riskPercent]);
 
   const latestNotif = notifications[0];
 
@@ -330,6 +343,18 @@ export default function LiveSignalNotificationPanel({
           {/* Audio Toggle & TP Help */}
           <div className="flex items-center gap-1.5">
             <button
+              onClick={() => setShowRiskConfig(!showRiskConfig)}
+              className={`p-1.5 rounded-lg border text-[10px] font-bold transition flex items-center gap-1 ${
+                showRiskConfig
+                  ? 'bg-blue-600 border-blue-400 text-white'
+                  : 'bg-blue-950/80 border-blue-800 text-blue-300 hover:bg-blue-900'
+              }`}
+              title="Risk & Lot Size Management"
+            >
+              <Shield className="w-3 h-3" />
+              <span>Risk</span>
+            </button>
+            <button
               onClick={() => setShowTpGuidance(!showTpGuidance)}
               className="p-1.5 rounded-lg border border-amber-800 bg-amber-950 text-amber-300 text-[10px] font-bold transition hover:bg-amber-900"
               title="When to use TP1 vs TP7"
@@ -349,6 +374,78 @@ export default function LiveSignalNotificationPanel({
             </button>
           </div>
         </div>
+
+        {/* Risk & Lot Size Management Panel */}
+        {showRiskConfig && (
+          <div className="bg-slate-950 border border-blue-800/80 p-3 rounded-lg text-[10px] space-y-2.5 text-slate-300 font-sans">
+            <div className="font-bold text-blue-400 flex items-center justify-between">
+              <span className="flex items-center gap-1">
+                <Shield className="w-3.5 h-3.5 text-blue-400" />
+                <span>Risk & Lot Size Settings (1-3% Rule)</span>
+              </span>
+              <span className="text-[9px] text-slate-400 font-mono">
+                Max Loss: ${((accountBalance * riskPercent) / 100).toFixed(2)}
+              </span>
+            </div>
+
+            <div className="grid grid-cols-3 gap-2">
+              <div>
+                <label className="text-[9px] text-slate-400 block mb-0.5">Balance ($)</label>
+                <input
+                  type="number"
+                  value={accountBalance}
+                  onChange={(e) => setAccountBalance(Math.max(10, Number(e.target.value) || 0))}
+                  className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-white font-mono text-[11px]"
+                  step="50"
+                />
+              </div>
+
+              <div>
+                <label className="text-[9px] text-slate-400 block mb-0.5">Lot Size</label>
+                <select
+                  value={lotSize}
+                  onChange={(e) => setLotSize(Number(e.target.value))}
+                  className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-white font-mono text-[11px]"
+                >
+                  <option value={0.01}>0.01 (Micro)</option>
+                  <option value={0.02}>0.02</option>
+                  <option value={0.05}>0.05</option>
+                  <option value={0.10}>0.10 (Mini)</option>
+                  <option value={0.20}>0.20</option>
+                  <option value={0.50}>0.50</option>
+                  <option value={1.00}>1.00 (Standard)</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="text-[9px] text-slate-400 block mb-0.5">Risk %</label>
+                <div className="flex gap-1">
+                  {[1.0, 2.0, 3.0].map((pct) => (
+                    <button
+                      key={pct}
+                      type="button"
+                      onClick={() => setRiskPercent(pct)}
+                      className={`flex-1 py-1 rounded text-[10px] font-bold border ${
+                        riskPercent === pct
+                          ? 'bg-blue-600 border-blue-400 text-white'
+                          : 'bg-slate-900 border-slate-700 text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      {pct}%
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div className="text-[9px] text-slate-400 pt-1 border-t border-slate-800 flex justify-between">
+              <span>Risk: <strong>{riskPercent}%</strong> of ${accountBalance}</span>
+              <span className="text-emerald-400 font-mono">
+                SL auto-sizes to never exceed 1-3% account drawdown
+              </span>
+            </div>
+          </div>
+        )}
 
         {showTpGuidance && (
           <div className="bg-slate-950 border border-amber-800/80 p-3 rounded-lg text-[10px] space-y-1.5 text-slate-300 font-sans">
