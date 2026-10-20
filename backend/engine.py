@@ -23,7 +23,7 @@ ORDERBOOK_CACHE: Dict[str, Tuple[float, Dict[str, Any]]] = {}
 UNIVERSAL_PRICE_HUB: Dict[str, float] = {}
 UNIVERSAL_PRICE_TIMESTAMPS: Dict[str, float] = {}
 PRICE_HUB_TTL_SECONDS = 3.0
-CACHE_TTL_SECONDS = 1.0  # Ultra-fast memory cache TTL
+CACHE_TTL_SECONDS = 3.0  # Stable memory cache TTL for smooth frontend polling
 MT5_GOLD_SYMBOL = os.getenv("MT5_GOLD_SYMBOL", "XAUUSD")
 MT5_TERMINAL_PATH = os.getenv("MT5_TERMINAL_PATH", r"C:\Program Files\MetaTrader 5\terminal64.exe")
 MT5_LOGIN = os.getenv("MT5_LOGIN", "")
@@ -378,8 +378,13 @@ def fetch_tradingview_live_quote(symbol: str) -> Optional[float]:
     if not tv_symbols or not endpoint:
         return LAST_KNOWN_TV_QUOTE.get(clean)
 
-    # Try twice: first with 4s timeout, retry with 8s if first fails
-    for attempt_timeout in [4.0, 8.0]:
+    # Return cached live quote if fresh (< 4 seconds old) to avoid hammering the TV scanner
+    if clean in LAST_KNOWN_TV_QUOTE and clean in UNIVERSAL_PRICE_TIMESTAMPS:
+        if now - UNIVERSAL_PRICE_TIMESTAMPS[clean] < 4.0:
+            return LAST_KNOWN_TV_QUOTE[clean]
+
+    # Try fast timeout first (2.5s), fallback to 5s
+    for attempt_timeout in [2.5, 5.0]:
         try:
             r = requests.post(
                 endpoint,
@@ -394,6 +399,8 @@ def fetch_tradingview_live_quote(symbol: str) -> Optional[float]:
                     if d and d[0] is not None and float(d[0]) > 0:
                         val = float(d[0])
                         LAST_KNOWN_TV_QUOTE[clean] = val
+                        UNIVERSAL_PRICE_HUB[clean] = val
+                        UNIVERSAL_PRICE_TIMESTAMPS[clean] = now
                         return val
         except Exception:
             continue
