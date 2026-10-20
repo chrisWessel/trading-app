@@ -378,6 +378,7 @@ def fetch_tradingview_live_quote(symbol: str) -> Optional[float]:
     if not tv_symbols or not endpoint:
         return LAST_KNOWN_TV_QUOTE.get(clean)
 
+    now = time.time()
     # Return cached live quote if fresh (< 4 seconds old) to avoid hammering the TV scanner
     if clean in LAST_KNOWN_TV_QUOTE and clean in UNIVERSAL_PRICE_TIMESTAMPS:
         if now - UNIVERSAL_PRICE_TIMESTAMPS[clean] < 4.0:
