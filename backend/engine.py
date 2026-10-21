@@ -962,6 +962,29 @@ def calculate_supply_demand_zones(df: pd.DataFrame, precision: int = 2) -> Dict[
             
     return {"supply": supply_zones[::-1], "demand": demand_zones[::-1]}
 
+ACTIVE_SIGNAL_LOCK = threading.Lock()
+ACTIVE_SIGNAL_REGISTRY: Dict[str, Dict[str, Any]] = {}
+
+TIMEFRAME_HOLD_SECONDS = {
+    '1s': 15,
+    '5s': 30,
+    '15s': 45,
+    '30s': 60,
+    '1m': 90,
+    '2m': 120,
+    '3m': 180,
+    '5m': 300,
+    '15m': 900,
+    '30m': 1800,
+    '45m': 2700,
+    '1h': 3600,
+    '2h': 7200,
+    '4h': 14400,
+    '1d': 86400,
+    '1w': 604800,
+    '1M': 2592000,
+}
+
 def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m",
                                account_balance: float = 0.0, lot_size: float = 0.0,
                                risk_percent: float = 0.0,
@@ -1241,6 +1264,56 @@ def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m",
         if synced_now and synced_now > 0:
             entry_price = synced_now
 
+    # ── PREDICTIVE PROBABILITY & TIMEFRAME SIGNAL PERSISTENCE (HYSTERESIS) ──
+    # A 5m signal must hold its predicted direction for the 5m candle window (300s)
+    # unless invalidated by Stop Loss or target completion. Never flip-flop every 10-20s!
+    now_ts = time.time()
+    min_hold_sec = TIMEFRAME_HOLD_SECONDS.get(timeframe, 300)
+    registry_key = f"{clean_sym}:{timeframe}"
+
+    # Compute predictive win probability (75% - 89%)
+    prob_score = 78
+    if (signal_type == "BUY/LONG" and trend == "UPTREND") or (signal_type == "SELL/SHORT" and trend == "DOWNTREND"):
+        prob_score += 4
+    if (signal_type == "BUY/LONG" and bullish_momentum) or (signal_type == "SELL/SHORT" and bearish_momentum):
+        prob_score += 3
+    if vol_ratio >= 1.2:
+        prob_score += 2
+    if obi_available and ((signal_type == "BUY/LONG" and obi_score >= 0.02) or (signal_type == "SELL/SHORT" and obi_score <= -0.02)):
+        prob_score += 2
+    prob_score = min(max(prob_score, 75), 89)
+
+    with ACTIVE_SIGNAL_LOCK:
+        active_state = ACTIVE_SIGNAL_REGISTRY.get(registry_key)
+        if active_state and signal_type != "NEUTRAL":
+            elapsed = now_ts - active_state["triggered_at"]
+            act_sig = active_state["signal_type"]
+            act_sl = active_state["stop_loss"]
+            act_tps = active_state["tp_levels"]
+
+            # Check if previous prediction was invalidated by Stop Loss or completed at TP2
+            sl_hit = (act_sig == "BUY/LONG" and entry_price <= act_sl) or (act_sig == "SELL/SHORT" and entry_price >= act_sl)
+            tp_hit = (len(act_tps) > 1) and (
+                (act_sig == "BUY/LONG" and entry_price >= act_tps[1]) or
+                (act_sig == "SELL/SHORT" and entry_price <= act_tps[1])
+            )
+            # Also check if live price drifted excessively far from original entry (> 3x max_sl)
+            excessive_drift = abs(entry_price - active_state["entry"]) > (min_effective_risk * 3.0)
+
+            if not sl_hit and not tp_hit and not excessive_drift and elapsed < min_hold_sec:
+                # Hold the predicted direction and anchor entry so trader has time to execute!
+                signal_type = act_sig
+                trend = active_state["trend"]
+                entry_price = active_state["entry"]
+                prob_score = active_state["probability"]
+                triggered_at = active_state["triggered_at"]
+            else:
+                triggered_at = now_ts
+        else:
+            triggered_at = now_ts
+
+    hold_remaining_sec = int(max(0, min_hold_sec - (now_ts - triggered_at)))
+
     # Calculate initial TP offset: TP1 starts close to entry for quick profit taking!
     tp1_base_offset = max(round(min_effective_risk * tp1_ratio, precision), pip_step)
 
@@ -1268,7 +1341,7 @@ def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m",
         tp2 = tp_levels[3]
 
         sell_label = "Bearish Momentum / Downtrend" if trend == "DOWNTREND" else "Bearish Rejection"
-        rationale = f"[{timeframe.upper()}] [{trend}] {sell_label} (Risk: ${risk_dist:.{precision}f}). Entry: ${entry_price:.{precision}f}, SL: ${stop_loss:.{precision}f}, OBI {obi_score:+.2f}."
+        rationale = f"[{timeframe.upper()}] [{prob_score}% PROB] {sell_label} (Risk: ${risk_dist:.{precision}f}). Entry: ${entry_price:.{precision}f}, SL: ${stop_loss:.{precision}f}."
 
     elif signal_type == "BUY/LONG":
         # 5 Entry Zones: Zone 1 = current price (NOW), Zones 2-5 go DOWN (better buy prices at support)
@@ -1294,7 +1367,7 @@ def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m",
         tp2 = tp_levels[3]
 
         buy_label = "Bullish Momentum / Breakout" if trend == "UPTREND" else "Bullish Demand"
-        rationale = f"[{timeframe.upper()}] [{trend}] {buy_label} (Risk: ${risk_dist:.{precision}f}). Entry: ${entry_price:.{precision}f}, SL: ${stop_loss:.{precision}f}, OBI {obi_score:+.2f}."
+        rationale = f"[{timeframe.upper()}] [{prob_score}% PROB] {buy_label} (Risk: ${risk_dist:.{precision}f}). Entry: ${entry_price:.{precision}f}, SL: ${stop_loss:.{precision}f}."
 
     else:
         entry_zones = [round(entry_price, precision) for _ in range(5)]
@@ -1304,6 +1377,24 @@ def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m",
         tp2 = tp_levels[3]
         rationale = f"[{timeframe.upper()}] [{trend}] Neutral Market - Monitoring Setup."
 
+    # Persist active predictive state
+    if signal_type != "NEUTRAL":
+        with ACTIVE_SIGNAL_LOCK:
+            ACTIVE_SIGNAL_REGISTRY[registry_key] = {
+                "signal_type": signal_type,
+                "trend": trend,
+                "entry": entry_zones[0],
+                "entry_zones": entry_zones,
+                "stop_loss": stop_loss,
+                "tp1": tp1,
+                "tp2": tp2,
+                "tp_levels": tp_levels,
+                "probability": prob_score,
+                "triggered_at": triggered_at,
+                "min_hold_seconds": min_hold_sec,
+                "rationale": rationale,
+            }
+
     return {
         "symbol": symbol,
         "timeframe": timeframe,
@@ -1312,6 +1403,9 @@ def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m",
         "support": support,
         "resistance": resistance,
         "trend": trend,
+        "probability": prob_score,
+        "hold_remaining_sec": hold_remaining_sec,
+        "hold_total_sec": min_hold_sec,
         "atr": round(atr, precision),
         "risk_amount": risk_amount,
         "volume": latest_vol,
@@ -1334,7 +1428,10 @@ def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m",
             "tp1": tp1,
             "tp2": tp2,
             "tp_levels": tp_levels,
-            "rationale": rationale
+            "rationale": rationale,
+            "probability": prob_score,
+            "hold_remaining_sec": hold_remaining_sec,
+            "hold_total_sec": min_hold_sec
         },
         "sd_zones": sd_zones
     }

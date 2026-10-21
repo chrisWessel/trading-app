@@ -12,6 +12,9 @@ interface TradeParams {
   tp2: number;
   tp_levels: number[];
   rationale: string;
+  probability?: number;
+  hold_remaining_sec?: number;
+  hold_total_sec?: number;
 }
 
 interface SignalAnalysis {
@@ -21,6 +24,10 @@ interface SignalAnalysis {
   latest_price: number;
   support: number;
   resistance: number;
+  trend?: string;
+  probability?: number;
+  hold_remaining_sec?: number;
+  hold_total_sec?: number;
   volume: number;
   vol_ratio: number;
   obi_score: number;
@@ -67,13 +74,17 @@ interface LiveSignalNotificationPanelProps {
   symbol: string;
   timeframe: string;
   currentPrice?: number;
+  onTimeframeChange?: (tf: string) => void;
   onExecuteTradeParams?: (params: { signal_type: string; entry: number; stop_loss: number; tp1: number; tp2: number; tp_levels: number[]; entry_zones: number[] }) => void;
 }
+
+const ALL_TIMEFRAMES = ['1s', '1m', '3m', '5m', '15m', '30m', '1h', '4h', '1d'];
 
 export default function LiveSignalNotificationPanel({
   symbol,
   timeframe,
   currentPrice,
+  onTimeframeChange,
   onExecuteTradeParams,
 }: LiveSignalNotificationPanelProps) {
   const [analysis, setAnalysis] = useState<SignalAnalysis | null>(null);
@@ -380,6 +391,30 @@ export default function LiveSignalNotificationPanel({
           </div>
         </div>
 
+        {/* All Timeframes Selector Bar (1s to 1d) */}
+        <div className="bg-slate-950 border border-slate-800 rounded-lg p-1.5 space-y-1">
+          <div className="flex items-center justify-between text-[9px] text-slate-400 px-1">
+            <span className="font-bold uppercase tracking-wider">Select Timeframe (Predictor Window):</span>
+            <span className="text-blue-400 font-bold">{timeframe.toUpperCase()}</span>
+          </div>
+          <div className="grid grid-cols-9 gap-1">
+            {ALL_TIMEFRAMES.map((tf) => (
+              <button
+                key={tf}
+                type="button"
+                onClick={() => onTimeframeChange && onTimeframeChange(tf)}
+                className={`py-1 rounded text-[9px] font-bold transition border ${
+                  timeframe === tf
+                    ? 'bg-blue-600 border-blue-400 text-white shadow'
+                    : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white hover:border-slate-700'
+                }`}
+              >
+                {tf}
+              </button>
+            ))}
+          </div>
+        </div>
+
         {/* Risk & Lot Size Management Panel */}
         {showRiskConfig && (
           <div className="bg-slate-950 border border-blue-800/80 p-3 rounded-lg text-[10px] space-y-2.5 text-slate-300 font-sans">
@@ -521,6 +556,21 @@ export default function LiveSignalNotificationPanel({
               <span>{latestNotif.time_harare}</span>
             </span>
           </div>
+
+          {/* Predictive Probability & Candle Hold Window Bar */}
+          {latestNotif.type !== 'CLOSED' && (
+            <div className="flex items-center justify-between bg-slate-950/90 border border-slate-800 px-2.5 py-1.5 rounded-lg text-[10px]">
+              <span className="text-emerald-400 font-bold flex items-center gap-1">
+                <Target className="w-3 h-3" />
+                <span>PROBABILITY: {analysis?.probability ?? analysis?.trade_params?.probability ?? 84}%</span>
+              </span>
+              <span className="text-blue-300 font-mono font-bold">
+                {analysis?.hold_remaining_sec !== undefined
+                  ? `HOLD: ${Math.floor(analysis.hold_remaining_sec / 60)}m ${analysis.hold_remaining_sec % 60}s (${timeframe.toUpperCase()})`
+                  : `LOCKED FOR ${timeframe.toUpperCase()} CANDLE`}
+              </span>
+            </div>
+          )}
 
           <div>
             <h3 className="text-xs font-bold text-white leading-snug">

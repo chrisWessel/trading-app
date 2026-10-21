@@ -393,6 +393,7 @@ export default function DashboardPage() {
             symbol={symbol}
             timeframe={timeframe}
             currentPrice={currentPrice}
+            onTimeframeChange={(tf) => setTimeframe(tf)}
             onExecuteTradeParams={handleAutoFillTrade}
           />
         </div>
