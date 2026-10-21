@@ -31,6 +31,7 @@ from backend.telegram_bot import send_telegram_signal
 from backend.ws_stream import ws_router
 from backend import ict_engine
 from backend import news_engine
+from backend import strategies_engine
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -674,5 +675,55 @@ def get_news_strategy_analysis(
     with NEWS_CACHE_LOCK:
         NEWS_CACHE[cache_key] = (time.monotonic(), result)
     return result
+
+
+# ── 4 INSTITUTIONAL STRATEGIES ENGINE (DAILY SWEEP, S-TIER, A-TIER, B-TIER) ──
+
+STRATEGIES_CACHE_TTL_SECONDS = 2.0
+STRATEGIES_CACHE: Dict[str, Tuple[float, Dict[str, Any]]] = {}
+STRATEGIES_CACHE_LOCK = threading.Lock()
+
+
+@app.get("/api/strategies/analysis")
+def get_multi_strategies_analysis(
+    symbol: str = Query("XAU/USD", description="Trading symbol"),
+    timeframe: str = Query("5m", description="Chart timeframe"),
+):
+    """
+    Returns real-time institutional analysis, chart levels, WHEN TO TRADE & WHY,
+    and WHEN TO WAIT & WHY for all 4 requested strategies:
+      1. Daily Sweep & Swing Failure Pattern (SFP) — JadeCap (youtu.be/n2m1cF8T4bI)
+      2. S-Tier Strategy (Price Action + Volume Profile HVN/LVN + Footprint Order Flow) — Secret Mindset (youtu.be/G0YaMmqFKUM)
+      3. A-Tier Strategy (Market Structure BOS/CHoCH + Supply/Demand + Volume Truth + Market Profile TPO)
+      4. B-Tier Strategy (VWAP + Floor Pivot Points + 20/50/200 MA + Multi-Touch S/R + 14-Period ATR Risk Hero)
+    Synchronized with `analyze_signal_conditions` so BUY = BULLISH, SELL = BEARISH, and interval hold timers match.
+    """
+    cache_key = f"{symbol.upper()}:{timeframe}"
+    with STRATEGIES_CACHE_LOCK:
+        now = time.monotonic()
+        cached = STRATEGIES_CACHE.get(cache_key)
+        if cached and now - cached[0] < STRATEGIES_CACHE_TTL_SECONDS:
+            return cached[1]
+
+    df = fetch_ohlcv(symbol=symbol, timeframe=timeframe, limit=160)
+    df_daily = None
+    try:
+        df_daily = fetch_ohlcv(symbol=symbol, timeframe="1d", limit=15)
+    except Exception:
+        df_daily = None
+
+    sig_sync = analyze_signal_conditions(symbol=symbol, timeframe=timeframe)
+    result = strategies_engine.analyze_all_four_strategies(
+        symbol=symbol,
+        timeframe=timeframe,
+        df=df,
+        df_daily=df_daily,
+        sig_sync=sig_sync,
+    )
+
+    with STRATEGIES_CACHE_LOCK:
+        STRATEGIES_CACHE[cache_key] = (time.monotonic(), result)
+    return result
+
 
 

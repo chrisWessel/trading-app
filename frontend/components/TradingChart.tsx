@@ -7,9 +7,18 @@ import ICTScalpPanel, { type IctPublish } from '@/components/ICTScalpPanel';
 import SessionRibbon from '@/components/SessionRibbon';
 import NewsTradingPanel, { type NewsStrategyPublish } from '@/components/NewsTradingPanel';
 import CustomAlgorithmicChart from '@/components/CustomAlgorithmicChart';
+import StrategyTabsPanel, { type StrategyPublishPayload, type StrategyTierTabId } from '@/components/StrategyTabsPanel';
 
 
-export type ChartTabId = 'live_signals' | 'algo_market_structure' | 'ict_scalp' | 'news_trading';
+export type ChartTabId =
+  | 'live_signals'
+  | 'algo_market_structure'
+  | 'ict_scalp'
+  | 'news_trading'
+  | 'daily_sweep'
+  | 's_tier'
+  | 'a_tier'
+  | 'b_tier';
 
 interface TradingChartProps {
   symbol: string;
@@ -602,6 +611,14 @@ export default function TradingChart({
   const [algoTrend, setAlgoTrend] = useState<{ status: string; pivots: any[]; dataSource: string } | null>(null);
   const [ictData, setIctData] = useState<IctPublish | null>(null);
   const [newsData, setNewsData] = useState<NewsStrategyPublish | null>(null);
+  const [strategyTierData, setStrategyTierData] = useState<StrategyPublishPayload | null>(null);
+
+  const handleStrategyTierPublish = useCallback((pub: StrategyPublishPayload) => {
+    setStrategyTierData((prev) => {
+      if (prev && JSON.stringify(prev) === JSON.stringify(pub)) return prev;
+      return pub;
+    });
+  }, []);
 
   // Keep stable identities unless the values actually change, so the chart
   // price-line effects do not re-run (and redraw) on every render.
@@ -919,6 +936,10 @@ export default function TradingChart({
             { id: 'algo_market_structure', label: 'Algo Market Structure (Live Feed)' },
             { id: 'ict_scalp', label: '⚡ ICT Scalp (AMD Sessions)' },
             { id: 'news_trading', label: '📰 News Catalyst (Fair Price)' },
+            { id: 'daily_sweep', label: '🧹 Daily Sweep & SFP (JadeCap)' },
+            { id: 's_tier', label: '🏆 S-Tier (PA + Vol Profile + Footprint)' },
+            { id: 'a_tier', label: '💎 A-Tier (Structure + S&D + TPO)' },
+            { id: 'b_tier', label: '🛡️ B-Tier (VWAP + Pivots + MA + ATR)' },
           ].map((tab) => (
             <button
               key={tab.id}
@@ -1202,6 +1223,36 @@ export default function TradingChart({
             symbol={symbol}
             timeframe={timeframe}
             onPublish={handleNewsPublish}
+            onAutoFillTrade={onAutoFillTrade}
+          />
+        </div>
+      )}
+
+      {(activeTab === 'daily_sweep' ||
+        activeTab === 's_tier' ||
+        activeTab === 'a_tier' ||
+        activeTab === 'b_tier') && (
+        <div className="space-y-3">
+          <TVWidgetTab
+            symbol={symbol}
+            timeframe={timeframe}
+            tabId={`${activeTab}_tv`}
+            tradeLevels={
+              strategyTierData?.strategyId === activeTab
+                ? strategyTierData.tradeLevels
+                : null
+            }
+            extraLines={
+              strategyTierData?.strategyId === activeTab
+                ? strategyTierData.chartLines
+                : []
+            }
+          />
+          <StrategyTabsPanel
+            strategyId={activeTab as StrategyTierTabId}
+            symbol={symbol}
+            timeframe={timeframe}
+            onPublish={handleStrategyTierPublish}
             onAutoFillTrade={onAutoFillTrade}
           />
         </div>
