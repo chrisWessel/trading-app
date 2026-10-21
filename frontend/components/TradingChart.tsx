@@ -3,6 +3,12 @@
 import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { RefreshCw, Zap, ChevronDown, Clock, Radio, ArrowUpRight, ArrowDownRight, Shield, Target, AlertOctagon, Activity, ArrowRightLeft, TrendingUp, BarChart2, Monitor } from 'lucide-react';
 import { API_BASE_URL } from '@/lib/apiConfig';
+import {
+  fetchWithFastTimeout,
+  fetchBrowserLiveBars,
+  computeBrowserSignalAnalysis,
+  computeBrowserChartPivots,
+} from '@/lib/browserFallbackEngine';
 import ICTScalpPanel, { type IctPublish } from '@/components/ICTScalpPanel';
 import SessionRibbon from '@/components/SessionRibbon';
 import NewsTradingPanel, { type NewsStrategyPublish } from '@/components/NewsTradingPanel';
@@ -716,48 +722,74 @@ export default function TradingChart({
     }
   }
 
-  // ── Fetch algo market structure analysis from backend ──
+  // ── Fetch algo market structure analysis from backend (with instant browser fallback) ──
   const fetchAlgoAnalysis = useCallback(async () => {
     try {
-      const res = await fetch(`${API_BASE_URL}/api/chart-data?symbol=${encodeURIComponent(symbol)}&timeframe=${encodeURIComponent(timeframe)}&limit=200`);
-      if (!res.ok) return;
+      const res = await fetchWithFastTimeout(
+        `${API_BASE_URL}/api/chart-data?symbol=${encodeURIComponent(symbol)}&timeframe=${encodeURIComponent(timeframe)}&limit=200`,
+        2200
+      );
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       if (data.status === 'success') {
         setMarketDataSource(data.data_source || 'unknown');
         setAlgoTrend({ status: data.trend?.status || '', pivots: data.pivots || [], dataSource: data.data_source || 'unknown' });
       }
-    } catch { /* silent */ }
+    } catch {
+      try {
+        const { bars, source } = await fetchBrowserLiveBars(symbol, timeframe);
+        const computed = computeBrowserChartPivots(bars, source);
+        setMarketDataSource(computed.data_source || source);
+        setAlgoTrend({
+          status: computed.trend?.status || 'UPTREND',
+          pivots: computed.pivots || [],
+          dataSource: computed.data_source || source,
+        });
+      } catch {}
+    }
   }, [symbol, timeframe]);
 
   // ── Fetch signal data from backend (for overlay lines, NOT for chart candles) ──
   const fetchSignalData = useCallback(async () => {
+    let a: any = null;
     try {
-      const sigRes = await fetch(`${API_BASE_URL}/api/signals/check`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ symbol, timeframe }),
-      });
+      const sigRes = await fetchWithFastTimeout(
+        `${API_BASE_URL}/api/signals/check`,
+        2200,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ symbol, timeframe }),
+        }
+      );
       if (sigRes.ok) {
         const sigData = await sigRes.json();
-        if (sigData.analysis) {
-          setMarketDataSource(sigData.analysis.data_source || 'unknown');
-          setSignalType(sigData.analysis.signal_type);
-          setTradeParams(sigData.analysis.trade_params);
-          setLatestPrice(sigData.analysis.latest_price);
-          setSupportLevel(sigData.analysis.support);
-          setResistanceLevel(sigData.analysis.resistance);
-
-          if (onLatestDataUpdate) {
-            onLatestDataUpdate({
-              price: sigData.analysis.latest_price,
-              support: sigData.analysis.support,
-              resistance: sigData.analysis.resistance,
-            });
-          }
-        }
+        a = sigData.analysis;
       }
-    } catch (e) {
-      // Backend offline — signal overlays won't show but chart still works from TradingView
+    } catch {}
+
+    if (!a) {
+      try {
+        const { bars, source } = await fetchBrowserLiveBars(symbol, timeframe);
+        a = computeBrowserSignalAnalysis(symbol, timeframe, bars, source);
+      } catch {}
+    }
+
+    if (a) {
+      setMarketDataSource(a.data_source || 'unknown');
+      setSignalType(a.signal_type);
+      setTradeParams(a.trade_params);
+      setLatestPrice(a.latest_price);
+      setSupportLevel(a.support);
+      setResistanceLevel(a.resistance);
+
+      if (onLatestDataUpdate) {
+        onLatestDataUpdate({
+          price: a.latest_price,
+          support: a.support,
+          resistance: a.resistance,
+        });
+      }
     }
   }, [symbol, timeframe, onLatestDataUpdate]);
 

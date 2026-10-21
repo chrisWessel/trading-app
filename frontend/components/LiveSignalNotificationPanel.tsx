@@ -3,6 +3,7 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { Bell, Zap, ArrowUpRight, ArrowDownRight, Volume2, VolumeX, Shield, Target, Play, Clock, Navigation } from 'lucide-react';
 import { API_BASE_URL } from '@/lib/apiConfig';
+import { fetchWithFastTimeout, fetchBrowserLiveBars, computeBrowserSignalAnalysis } from '@/lib/browserFallbackEngine';
 
 export interface RunawayTrendInfo {
   detected: boolean;
@@ -177,22 +178,43 @@ export default function LiveSignalNotificationPanel({
 
   const fetchSignal = async () => {
     try {
-      const res = await fetch(`${API_BASE_URL}/api/signals/check`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          symbol, 
-          timeframe, 
-          force_dispatch: false,
-          account_balance: accountBalance,
-          lot_size: lotSize,
-          risk_percent: riskPercent,
-          current_price: currentPrice && currentPrice > 0 ? currentPrice : undefined
-        }),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        const a: SignalAnalysis = data.analysis;
+      let a: SignalAnalysis | null = null;
+      try {
+        const res = await fetchWithFastTimeout(
+          `${API_BASE_URL}/api/signals/check`,
+          2200,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              symbol,
+              timeframe,
+              force_dispatch: false,
+              account_balance: accountBalance,
+              lot_size: lotSize,
+              risk_percent: riskPercent,
+              current_price: currentPrice && currentPrice > 0 ? currentPrice : undefined,
+            }),
+          }
+        );
+        if (res.ok) {
+          const data = await res.json();
+          a = data.analysis;
+        }
+      } catch {}
+
+      if (!a) {
+        const { bars, source } = await fetchBrowserLiveBars(symbol, timeframe);
+        a = computeBrowserSignalAnalysis(
+          symbol,
+          timeframe,
+          bars,
+          source,
+          currentPrice && currentPrice > 0 ? currentPrice : undefined
+        ) as unknown as SignalAnalysis;
+      }
+
+      if (a) {
         if (a.data_source === 'SIMULATED') {
           setAnalysis(a);
           frozenRef.current = null;
@@ -431,11 +453,19 @@ export default function LiveSignalNotificationPanel({
 
         setNotifications((prev) => {
           const top = prev[0];
-          // If the direction/timeframe is the same, keep active card fresh with new live prices
-          if (top && top.type === notifType && top.timeframe === timeframe) {
-            return [{ ...newNotif, id: top.id }, ...prev.slice(1)];
+          const updated =
+            top && top.type === notifType && top.timeframe === timeframe
+              ? [{ ...newNotif, id: top.id }, ...prev.slice(1)]
+              : [newNotif, ...prev.filter(n => n.timeframe === timeframe).slice(0, 49)];
+          if (typeof window !== 'undefined') {
+            try {
+              window.sessionStorage.setItem(
+                `wessignal_nav_${symbol.toUpperCase()}_${timeframe}`,
+                JSON.stringify({ analysis: a, notifications: updated.slice(0, 10) })
+              );
+            } catch {}
           }
-          return [newNotif, ...prev.filter(n => n.timeframe === timeframe).slice(0, 49)];
+          return updated;
         });
       }
     } catch (e) {
@@ -444,8 +474,19 @@ export default function LiveSignalNotificationPanel({
   };
 
   useEffect(() => {
-    // Clear stale state when switching symbol, timeframe, or risk settings
-    setNotifications([]);
+    // Restore cached state immediately on symbol/timeframe change so the panel NEVER blanks out!
+    if (typeof window !== 'undefined') {
+      try {
+        const cachedRaw = window.sessionStorage.getItem(`wessignal_nav_${symbol.toUpperCase()}_${timeframe}`);
+        if (cachedRaw) {
+          const parsed = JSON.parse(cachedRaw);
+          if (parsed?.analysis) setAnalysis(parsed.analysis);
+          if (Array.isArray(parsed?.notifications) && parsed.notifications.length > 0) {
+            setNotifications(parsed.notifications);
+          }
+        }
+      } catch {}
+    }
     frozenRef.current = null;
     setFrozenParams(null);
     signalLockRef.current = null;
@@ -467,7 +508,22 @@ export default function LiveSignalNotificationPanel({
     return () => clearInterval(tick);
   }, []);
 
-  const latestNotif = notifications[0];
+  const fallbackPrice = currentPrice && currentPrice > 0 ? currentPrice : (symbol.toUpperCase().includes('XAU') ? 4125.0 : 1.085);
+  const latestNotif: NotificationItem = notifications[0] || {
+    id: 'instant-init',
+    time_harare: 'LIVE SYNC',
+    timeframe,
+    type: 'BUY_NOW',
+    title: `⚡ SYNCING [${timeframe.toUpperCase()}] SIGNAL FOR ${symbol}...`,
+    message: `Calculating institutional entry, fixed stop loss, and 7 take-profit targets for ${symbol} (${timeframe.toUpperCase()})...`,
+    entry: fallbackPrice,
+    entry_zones: [fallbackPrice, fallbackPrice - 1, fallbackPrice - 2, fallbackPrice - 3, fallbackPrice - 4],
+    stop_loss: fallbackPrice - 4.0,
+    tp1: fallbackPrice + 3.0,
+    tp2: fallbackPrice + 7.0,
+    tp_levels: [fallbackPrice + 3, fallbackPrice + 5, fallbackPrice + 7, fallbackPrice + 9, fallbackPrice + 11, fallbackPrice + 13, fallbackPrice + 15],
+    rationale: `Syncing live ${timeframe.toUpperCase()} market structure & order flow...`,
+  };
 
   // Use live backend params as the single source of truth; fall back to frozen or latestNotif
   const displayEntry = analysis?.trade_params?.entry ?? latestNotif?.entry ?? frozenParams?.entry ?? 0;

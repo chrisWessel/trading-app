@@ -287,7 +287,7 @@ def get_orderbook(
 @app.post("/api/signals/check")
 def check_signals(req: SignalCheckRequest):
     req_price = float(req.current_price) if req.current_price and req.current_price > 0 else None
-    cache_key = f"{req.symbol.upper()}:{req.timeframe}:{req.account_balance}:{req.lot_size}:{req.risk_percent}:{req_price or 0.0}"
+    cache_key = f"{req.symbol.upper()}:{req.timeframe}:{req.account_balance}:{req.lot_size}:{req.risk_percent}"
     with SIGNAL_CACHE_LOCK:
         now = time.monotonic()
         cached = SIGNAL_CACHE.get(cache_key)
@@ -485,11 +485,11 @@ def get_chart_data(symbol: str = Query("XAU/USD"), timeframe: str = Query("5m"),
 # The strategy is execution-driven on the 1-minute, so this endpoint always
 # pulls 1m candles regardless of the timeframe the chart is displaying.
 
-ICT_CACHE_TTL_SECONDS = 2.5
+ICT_CACHE_TTL_SECONDS = 4.0
 ICT_CACHE: Dict[str, Tuple[float, Dict[str, Any]]] = {}
 ICT_CACHE_LOCK = threading.Lock()
-ICT_1M_LIMIT = 1200          # ~20h, enough to cover an Asia session
-ICT_DAILY_LIMIT = 30
+ICT_1M_LIMIT = 400
+ICT_DAILY_LIMIT = 20
 
 
 @app.get("/api/ict/analysis")
@@ -679,7 +679,7 @@ def get_news_strategy_analysis(
 
 # ── 4 INSTITUTIONAL STRATEGIES ENGINE (DAILY SWEEP, S-TIER, A-TIER, B-TIER) ──
 
-STRATEGIES_CACHE_TTL_SECONDS = 2.0
+STRATEGIES_CACHE_TTL_SECONDS = 4.0
 STRATEGIES_CACHE: Dict[str, Tuple[float, Dict[str, Any]]] = {}
 STRATEGIES_CACHE_LOCK = threading.Lock()
 

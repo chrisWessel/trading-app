@@ -4,6 +4,11 @@ import React, { useEffect, useRef, useState } from 'react';
 import { createChart, ColorType, IChartApi, SeriesMarker, Time } from 'lightweight-charts';
 import { Loader2, TrendingUp, TrendingDown, Minus } from 'lucide-react';
 import { API_BASE_URL } from '@/lib/apiConfig';
+import {
+  fetchWithFastTimeout,
+  fetchBrowserLiveBars,
+  computeBrowserChartPivots,
+} from '@/lib/browserFallbackEngine';
 
 interface CustomChartProps {
   symbol: string;
@@ -50,18 +55,28 @@ export default function CustomAlgorithmicChart({ symbol, timeframe, tabId, trade
       try {
         if (isInitialLoad) setLoading(true);
         setError(null);
-        
-        const res = await fetch(`${API_BASE_URL}/api/chart-data?symbol=${encodeURIComponent(symbol)}&timeframe=${encodeURIComponent(timeframe)}&limit=200`);
-        if (!res.ok) throw new Error("Failed to fetch chart data");
-        const data = await res.json();
-        
+
+        let data: any = null;
+        try {
+          const res = await fetchWithFastTimeout(
+            `${API_BASE_URL}/api/chart-data?symbol=${encodeURIComponent(symbol)}&timeframe=${encodeURIComponent(timeframe)}&limit=200`,
+            2200
+          );
+          if (res.ok) {
+            data = await res.json();
+          }
+        } catch {}
+
+        if (!data || data.status !== 'success') {
+          const { bars, source } = await fetchBrowserLiveBars(symbol, timeframe);
+          data = computeBrowserChartPivots(bars, source);
+        }
+
         if (!isMounted) return;
 
-        const normalizedSymbol = symbol.toUpperCase().replace(/[^A-Z0-9]/g, '');
-        const isGold = ['XAUUSD', 'XAU', 'GOLD'].includes(normalizedSymbol);
         const source = data.data_source || 'unknown';
         setDataSource(source);
-         if (data.status === 'success') {
+        if (data.status === 'success') {
           if (data.trend) setTrend(data.trend);
           renderChart(data.candles, data.pivots, isInitialLoad);
         } else {

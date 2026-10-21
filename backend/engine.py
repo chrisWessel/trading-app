@@ -18,12 +18,15 @@ except (ImportError, OSError):
     mt5 = None
 
 # High-Performance Memory Caches & Ultra-Fast Single Source of Truth
+HTTP_SESSION = requests.Session()
+HTTP_SESSION.headers.update({'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'})
 OHLCV_CACHE: Dict[str, Tuple[float, pd.DataFrame]] = {}
 ORDERBOOK_CACHE: Dict[str, Tuple[float, Dict[str, Any]]] = {}
+FAST_SIGNAL_CACHE: Dict[str, Tuple[float, Dict[str, Any]]] = {}
 UNIVERSAL_PRICE_HUB: Dict[str, float] = {}
 UNIVERSAL_PRICE_TIMESTAMPS: Dict[str, float] = {}
-PRICE_HUB_TTL_SECONDS = 3.0
-CACHE_TTL_SECONDS = 3.0  # Stable memory cache TTL for smooth frontend polling
+PRICE_HUB_TTL_SECONDS = 5.0
+CACHE_TTL_SECONDS = 6.0  # Stable memory cache TTL for ultra-fast multi-panel frontend polling
 MT5_GOLD_SYMBOL = os.getenv("MT5_GOLD_SYMBOL", "XAUUSD")
 MT5_TERMINAL_PATH = os.getenv("MT5_TERMINAL_PATH", r"C:\Program Files\MetaTrader 5\terminal64.exe")
 MT5_LOGIN = os.getenv("MT5_LOGIN", "")
@@ -379,35 +382,32 @@ def fetch_tradingview_live_quote(symbol: str) -> Optional[float]:
         return LAST_KNOWN_TV_QUOTE.get(clean)
 
     now = time.time()
-    # Return cached live quote if fresh (< 4 seconds old) to avoid hammering the TV scanner
+    # Return cached live quote if fresh (< 5 seconds old) to avoid hammering the TV scanner
     if clean in LAST_KNOWN_TV_QUOTE and clean in UNIVERSAL_PRICE_TIMESTAMPS:
-        if now - UNIVERSAL_PRICE_TIMESTAMPS[clean] < 4.0:
+        if now - UNIVERSAL_PRICE_TIMESTAMPS[clean] < 5.0:
             return LAST_KNOWN_TV_QUOTE[clean]
 
-    # Try fast timeout first (2.5s), fallback to 4s
-    for attempt_timeout in [2.5, 4.0]:
-        try:
-            r = requests.post(
-                endpoint,
-                json={'symbols': {'tickers': tv_symbols}, 'columns': ['close']},
-                headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'},
-                timeout=attempt_timeout
-            )
-            if r.status_code == 200:
-                data = r.json().get('data', [])
-                for row in data:
-                    d = row.get('d', [])
-                    if d and d[0] is not None and float(d[0]) > 0:
-                        val = float(d[0])
-                        LAST_KNOWN_TV_QUOTE[clean] = val
-                        UNIVERSAL_PRICE_HUB[clean] = val
-                        UNIVERSAL_PRICE_TIMESTAMPS[clean] = now
-                        return val
-        except Exception:
-            continue
-    # Do NOT return a stale quote if it's older than 15s; return None so live fallback can run
+    try:
+        r = HTTP_SESSION.post(
+            endpoint,
+            json={'symbols': {'tickers': tv_symbols}, 'columns': ['close']},
+            timeout=1.6
+        )
+        if r.status_code == 200:
+            data = r.json().get('data', [])
+            for row in data:
+                d = row.get('d', [])
+                if d and d[0] is not None and float(d[0]) > 0:
+                    val = float(d[0])
+                    LAST_KNOWN_TV_QUOTE[clean] = val
+                    UNIVERSAL_PRICE_HUB[clean] = val
+                    UNIVERSAL_PRICE_TIMESTAMPS[clean] = now
+                    return val
+    except Exception:
+        pass
+    # Return recent quote if under 20s so we never block
     if clean in LAST_KNOWN_TV_QUOTE and clean in UNIVERSAL_PRICE_TIMESTAMPS:
-        if now - UNIVERSAL_PRICE_TIMESTAMPS[clean] < 15.0:
+        if now - UNIVERSAL_PRICE_TIMESTAMPS[clean] < 20.0:
             return LAST_KNOWN_TV_QUOTE[clean]
     return None
 
@@ -418,7 +418,7 @@ def fetch_spot_gold_live() -> Optional[float]:
     """
     # 1. Bitfinex Tether Gold (tXAUT:USD) — 1 troy oz physical gold spot, live 24/7
     try:
-        r = requests.get('https://api-pub.bitfinex.com/v2/ticker/tXAUT:USD', timeout=3.0)
+        r = HTTP_SESSION.get('https://api-pub.bitfinex.com/v2/ticker/tXAUT:USD', timeout=1.6)
         if r.status_code == 200:
             val = float(r.json()[6])  # LAST_PRICE
             if val > 2000:
@@ -428,7 +428,7 @@ def fetch_spot_gold_live() -> Optional[float]:
 
     # 2. Kraken PAXGUSD — 1 troy oz physical gold spot
     try:
-        r = requests.get('https://api.kraken.com/0/public/Ticker?pair=PAXGUSD', timeout=3.0)
+        r = HTTP_SESSION.get('https://api.kraken.com/0/public/Ticker?pair=PAXGUSD', timeout=1.6)
         if r.status_code == 200:
             val = float(r.json()['result']['PAXGUSD']['c'][0])
             if val > 2000:
@@ -438,7 +438,7 @@ def fetch_spot_gold_live() -> Optional[float]:
 
     # 3. Binance PAXGUSDT — 1 troy oz physical gold spot
     try:
-        r = requests.get('https://api.binance.com/api/v3/ticker/price?symbol=PAXGUSDT', timeout=3.0)
+        r = HTTP_SESSION.get('https://api.binance.com/api/v3/ticker/price?symbol=PAXGUSDT', timeout=1.6)
         if r.status_code == 200:
             val = float(r.json()['price'])
             if val > 2000:
@@ -511,7 +511,7 @@ def fetch_real_gold_candles(timeframe: str = "1m", limit: int = 100) -> Optional
     }
     interval = tf_map.get(timeframe, 1)
     try:
-        r = requests.get(f'https://api.kraken.com/0/public/OHLC?pair=PAXGUSD&interval={interval}', timeout=4.0)
+        r = HTTP_SESSION.get(f'https://api.kraken.com/0/public/OHLC?pair=PAXGUSD&interval={interval}', timeout=2.0)
         if r.status_code == 200:
             bars = r.json().get('result', {}).get('PAXGUSD', [])
             if bars:
@@ -539,7 +539,7 @@ def fetch_real_gold_candles(timeframe: str = "1m", limit: int = 100) -> Optional
     }
     b_int = b_map.get(timeframe, '1m')
     try:
-        r = requests.get(f'https://api.binance.com/api/v3/klines?symbol=PAXGUSDT&interval={b_int}&limit={limit}', timeout=4.0)
+        r = HTTP_SESSION.get(f'https://api.binance.com/api/v3/klines?symbol=PAXGUSDT&interval={b_int}&limit={limit}', timeout=2.0)
         if r.status_code == 200:
             bars = r.json()
             if bars:
@@ -815,7 +815,9 @@ def generate_live_ticking_ohlcv(symbol: str = "EUR/USD", timeframe: str = "1m", 
 
 def fetch_ohlcv(symbol: str = "EUR/USD", timeframe: str = "1m", limit: int = 100) -> pd.DataFrame:
     clean = clean_symbol_string(symbol)
-    cache_key = f"{clean}_{timeframe}_{limit}"
+    # Unified cache key by (symbol, timeframe) so limit=2, limit=100, limit=160, limit=200
+    # all share the exact same cached DataFrame in 0ms without duplicate external HTTP calls!
+    cache_key = f"{clean}_{timeframe}"
     now = time.time()
     
     synced_p = get_synchronized_live_price(symbol)
@@ -823,7 +825,7 @@ def fetch_ohlcv(symbol: str = "EUR/USD", timeframe: str = "1m", limit: int = 100
 
     if cache_key in OHLCV_CACHE:
         cached_time, cached_df = OHLCV_CACHE[cache_key]
-        if now - cached_time < CACHE_TTL_SECONDS:
+        if now - cached_time < CACHE_TTL_SECONDS and len(cached_df) >= min(limit, 30):
             df = cached_df.copy()
             if synced_p and synced_p > 0:
                 last_idx = df.index[-1]
@@ -832,16 +834,19 @@ def fetch_ohlcv(symbol: str = "EUR/USD", timeframe: str = "1m", limit: int = 100
                     df.at[last_idx, 'high'] = synced_p
                 if synced_p < float(df.at[last_idx, 'low']):
                     df.at[last_idx, 'low'] = synced_p
+            if len(df) > limit:
+                out = df.tail(limit).reset_index(drop=True)
+                out.attrs = df.attrs.copy()
+                return out
             return df
 
-    real_df = fetch_real_ohlcv_from_market(symbol=symbol, timeframe=timeframe, limit=limit)
+    fetch_limit = max(limit, 220)
+    real_df = fetch_real_ohlcv_from_market(symbol=symbol, timeframe=timeframe, limit=fetch_limit)
     if real_df is not None and not real_df.empty:
         if synced_p and synced_p > 0:
             last_idx = real_df.index[-1]
             last_c = float(real_df.at[last_idx, 'close'])
             offset = synced_p - last_c
-            # Only shift historical basis if the feed is a different instrument basis (e.g. > $1.50 spread)
-            # Otherwise preserve the true forming candle open so fast runaway moves are never masked!
             if abs(offset) > 0.02:
                 for col in ['open', 'high', 'low', 'close']:
                     real_df[col] = (real_df[col] + offset).round(precision)
@@ -854,13 +859,21 @@ def fetch_ohlcv(symbol: str = "EUR/USD", timeframe: str = "1m", limit: int = 100
             UNIVERSAL_PRICE_TIMESTAMPS[clean] = now
 
         OHLCV_CACHE[cache_key] = (now, real_df)
+        if len(real_df) > limit:
+            out = real_df.tail(limit).reset_index(drop=True)
+            out.attrs = real_df.attrs.copy()
+            return out
         return real_df.copy()
 
-    fetched_df = generate_live_ticking_ohlcv(symbol=symbol, timeframe=timeframe, limit=limit)
+    fetched_df = generate_live_ticking_ohlcv(symbol=symbol, timeframe=timeframe, limit=fetch_limit)
     if synced_p and synced_p > 0:
         fetched_df.at[fetched_df.index[-1], 'close'] = synced_p
 
     OHLCV_CACHE[cache_key] = (now, fetched_df)
+    if len(fetched_df) > limit:
+        out = fetched_df.tail(limit).reset_index(drop=True)
+        out.attrs = fetched_df.attrs.copy()
+        return out
     return fetched_df.copy()
 
 def calculate_support_resistance(df: pd.DataFrame, window: int = 14) -> Tuple[float, float, pd.DataFrame]:
@@ -1008,6 +1021,13 @@ def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m",
         current_price: Live spot price from chart to ensure 100% synchronization
     """
     clean_sym = clean_symbol_string(symbol)
+    fast_key = f"{clean_sym}:{timeframe}:{account_balance}:{lot_size}:{risk_percent}"
+    now_fast = time.time()
+    if fast_key in FAST_SIGNAL_CACHE:
+        cached_ts, cached_res = FAST_SIGNAL_CACHE[fast_key]
+        if now_fast - cached_ts < 2.5:
+            return cached_res
+
     _, precision = get_asset_base_config(symbol)
 
     # Always fetch the true live market price first so a locked signal entry echoed
@@ -1570,7 +1590,7 @@ def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m",
                 "rationale": rationale,
             }
 
-    return {
+    res_payload = {
         "symbol": symbol,
         "timeframe": timeframe,
         "data_source": data_source,
@@ -1613,6 +1633,12 @@ def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m",
         },
         "sd_zones": sd_zones
     }
+    FAST_SIGNAL_CACHE[fast_key] = (time.time(), res_payload)
+    # Also populate the default (0,0,0) key so ICT / Multi-Strategy sync calls hit the cache in 0ms!
+    default_fast_key = f"{clean_sym}:{timeframe}:0.0:0.0:0.0"
+    if default_fast_key not in FAST_SIGNAL_CACHE or (time.time() - FAST_SIGNAL_CACHE[default_fast_key][0] >= 2.5):
+        FAST_SIGNAL_CACHE[default_fast_key] = (time.time(), res_payload)
+    return res_payload
 
 
 # ═══════════════════════════════════════════════════════════════════
