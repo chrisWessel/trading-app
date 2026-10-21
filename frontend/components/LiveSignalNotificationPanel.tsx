@@ -4,6 +4,20 @@ import React, { useEffect, useState, useRef } from 'react';
 import { Bell, Zap, ArrowUpRight, ArrowDownRight, Volume2, VolumeX, Shield, Target, Play, Clock, Navigation } from 'lucide-react';
 import { API_BASE_URL } from '@/lib/apiConfig';
 
+export interface RunawayTrendInfo {
+  detected: boolean;
+  override_triggered: boolean;
+  direction: 'BEARISH' | 'BULLISH' | 'NONE';
+  points_moved: number;
+  threshold_pts: number;
+  live_bar_pts: number;
+  net_2bar_pts?: number;
+  net_3bar_pts: number;
+  adverse_excursion_pts: number;
+  intensity_ratio: number;
+  banner: string;
+}
+
 interface TradeParams {
   entry: number;
   entry_zones: number[];
@@ -15,6 +29,7 @@ interface TradeParams {
   probability?: number;
   hold_remaining_sec?: number;
   hold_total_sec?: number;
+  runaway_trend?: RunawayTrendInfo;
 }
 
 interface SignalAnalysis {
@@ -28,6 +43,7 @@ interface SignalAnalysis {
   probability?: number;
   hold_remaining_sec?: number;
   hold_total_sec?: number;
+  runaway_trend?: RunawayTrendInfo;
   volume: number;
   vol_ratio: number;
   obi_score: number;
@@ -202,12 +218,17 @@ export default function LiveSignalNotificationPanel({
         const isCrypto = symbol.includes('BTC') || symbol.includes('ETH') || symbol.includes('SOL') || symbol.includes('REXT') || symbol.includes('USDT');
         const isWeekend = (harareDate.getDay() === 0 || harareDate.getDay() === 6) && !isCrypto;
 
-        // ── ENFORCE STRICT TIMEFRAME HOLD LOCK ──────────────────────────────
-        // If a signal is already locked for this symbol+timeframe and its hold timer
-        // has not expired (and Stop Loss was not breached), keep the locked direction!
+        // ── ENFORCE TIMEFRAME HOLD LOCK WITH RUNAWAY TREND PRECEDENCE OVERRIDE ──
+        // Hold the locked direction for the timeframe window UNLESS:
+        //   1. A Runaway Trend occurs in the opposite direction (>= threshold_pts), OR
+        //   2. Price moves against the locked entry by >= threshold_pts, OR
+        //   3. Stop Loss is breached.
+        // Runaway Trend ALWAYS takes precedence over the countdown timer!
         const lockKey = `${symbol.toUpperCase()}:${timeframe}`;
         const tfHoldSec = TIMEFRAME_HOLD_SECONDS[timeframe] || a.hold_total_sec || 300;
         const existingLock = signalLockRef.current;
+        const rt = a.runaway_trend || a.trade_params?.runaway_trend;
+        const runawayThreshold = rt?.threshold_pts || (symbol.toUpperCase().includes('XAU') ? 4.0 : 0.0020);
 
         if (
           existingLock &&
@@ -219,7 +240,20 @@ export default function LiveSignalNotificationPanel({
             (existingLock.signal_type === 'BUY/LONG' && a.latest_price <= existingLock.stop_loss) ||
             (existingLock.signal_type === 'SELL/SHORT' && a.latest_price >= existingLock.stop_loss);
 
-          if (!slHit) {
+          const adverseMove =
+            (existingLock.signal_type === 'BUY/LONG' && (a.latest_price - existingLock.entry) <= -runawayThreshold) ||
+            (existingLock.signal_type === 'SELL/SHORT' && (a.latest_price - existingLock.entry) >= runawayThreshold);
+
+          const opposingRunaway =
+            Boolean(rt?.override_triggered) ||
+            (existingLock.signal_type === 'BUY/LONG' && Boolean(rt?.detected) && rt?.direction === 'BEARISH') ||
+            (existingLock.signal_type === 'SELL/SHORT' && Boolean(rt?.detected) && rt?.direction === 'BULLISH');
+
+          const favorableRunawayReanchor =
+            (existingLock.signal_type === 'BUY/LONG' && (a.latest_price - existingLock.entry) >= runawayThreshold * 1.5) ||
+            (existingLock.signal_type === 'SELL/SHORT' && (existingLock.entry - a.latest_price) >= runawayThreshold * 1.5);
+
+          if (!slHit && !adverseMove && !opposingRunaway && !favorableRunawayReanchor) {
             const remSec = Math.max(1, Math.ceil((existingLock.lockedAtMs + existingLock.holdTotalSec * 1000 - nowMs) / 1000));
             a.signal_type = existingLock.signal_type;
             a.trend = existingLock.signal_type === 'BUY/LONG' ? 'UPTREND' : 'DOWNTREND';
@@ -240,6 +274,28 @@ export default function LiveSignalNotificationPanel({
               hold_total_sec: existingLock.holdTotalSec,
             };
             setHoldRemainingSec(remSec);
+          } else if (slHit || adverseMove || opposingRunaway) {
+            // Break the old lock immediately so Runaway Trend takes precedence!
+            signalLockRef.current = null;
+            if (soundEnabled && typeof window !== 'undefined') {
+              try {
+                const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+                if (AudioCtx) {
+                  const ctx = new AudioCtx();
+                  const osc = ctx.createOscillator();
+                  const gain = ctx.createGain();
+                  osc.type = 'sawtooth';
+                  osc.frequency.setValueAtTime(880, ctx.currentTime);
+                  osc.frequency.setValueAtTime(660, ctx.currentTime + 0.12);
+                  gain.gain.setValueAtTime(0.08, ctx.currentTime);
+                  gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.3);
+                  osc.connect(gain);
+                  gain.connect(ctx.destination);
+                  osc.start();
+                  osc.stop(ctx.currentTime + 0.3);
+                }
+              } catch {}
+            }
           }
         }
 
@@ -710,6 +766,74 @@ export default function LiveSignalNotificationPanel({
                 <Clock className="w-3 h-3 text-blue-400" />
                 <span>HOLD: {formatHoldTimer(holdRemainingSec)} ({timeframe.toUpperCase()})</span>
               </span>
+            </div>
+          )}
+
+          {/* Runaway Trend Points Calculator & Precedence Override Banner */}
+          {latestNotif.type !== 'CLOSED' && analysis?.runaway_trend && (
+            <div
+              className={`px-2.5 py-2 rounded-lg border text-[10px] font-mono space-y-1 transition-all ${
+                analysis.runaway_trend.detected
+                  ? analysis.runaway_trend.direction === 'BEARISH'
+                    ? 'bg-rose-950/90 border-rose-500 text-rose-200 shadow-lg shadow-rose-950/50'
+                    : 'bg-emerald-950/90 border-emerald-500 text-emerald-200 shadow-lg shadow-emerald-950/50'
+                  : 'bg-slate-950/80 border-slate-800 text-slate-300'
+              }`}
+            >
+              <div className="flex items-center justify-between font-bold">
+                <span className="flex items-center gap-1">
+                  <Zap
+                    className={`w-3.5 h-3.5 ${
+                      analysis.runaway_trend.detected
+                        ? 'text-amber-300 animate-bounce'
+                        : 'text-slate-400'
+                    }`}
+                  />
+                  <span>
+                    {analysis.runaway_trend.detected
+                      ? `RUNAWAY ${analysis.runaway_trend.direction} PRECEDENCE`
+                      : 'RUNAWAY TREND METER'}
+                  </span>
+                </span>
+                <span
+                  className={`px-1.5 py-0.5 rounded text-[9px] font-extrabold ${
+                    analysis.runaway_trend.detected
+                      ? 'bg-amber-500 text-slate-950'
+                      : 'bg-slate-900 text-slate-400 border border-slate-700'
+                  }`}
+                >
+                  {analysis.runaway_trend.detected
+                    ? `${analysis.runaway_trend.intensity_ratio}x TRIGGER`
+                    : 'TIMER ACTIVE'}
+                </span>
+              </div>
+              <div className="flex items-center justify-between text-[9px] pt-0.5 border-t border-slate-800/80">
+                <span>
+                  Move:{' '}
+                  <strong
+                    className={
+                      analysis.runaway_trend.points_moved < 0
+                        ? 'text-rose-300'
+                        : 'text-emerald-300'
+                    }
+                  >
+                    {analysis.runaway_trend.points_moved > 0 ? '+' : ''}
+                    {analysis.runaway_trend.points_moved.toFixed(precision)} pts
+                  </strong>
+                </span>
+                <span>
+                  Trigger [{timeframe.toUpperCase()}]:{' '}
+                  <strong className="text-amber-300">
+                    ±{analysis.runaway_trend.threshold_pts.toFixed(precision)} pts
+                  </strong>
+                </span>
+              </div>
+              {analysis.runaway_trend.detected && (
+                <div className="text-[9px] text-amber-200 font-sans leading-tight pt-0.5">
+                  ⚡ Fast runaway move exceeded ±{analysis.runaway_trend.threshold_pts.toFixed(precision)} pts — overriding timer &amp; locking{' '}
+                  <strong>{analysis.runaway_trend.direction === 'BEARISH' ? 'SELL / BEARISH' : 'BUY / BULLISH'}</strong>!
+                </div>
+              )}
             </div>
           )}
 

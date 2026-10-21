@@ -321,6 +321,24 @@ export default function StrategyTabsPanel({
               HOLD: {formatCountdown(holdRemainingSec)} [{timeframe}]
             </span>
           </div>
+
+          {data?.signal_sync?.runaway_trend && (
+            <div
+              className={`px-3 py-1.5 rounded-lg border text-xs font-extrabold flex items-center gap-1.5 ${
+                data.signal_sync.runaway_trend.detected
+                  ? 'bg-amber-950/90 border-amber-500 text-amber-300 animate-pulse'
+                  : 'bg-slate-900 border-slate-700 text-slate-400'
+              }`}
+              title={data.signal_sync.runaway_trend.banner}
+            >
+              <Zap className="w-3.5 h-3.5 text-amber-400" />
+              <span>
+                {data.signal_sync.runaway_trend.detected
+                  ? `RUNAWAY OVERRIDE (${data.signal_sync.runaway_trend.points_moved > 0 ? '+' : ''}${Number(data.signal_sync.runaway_trend.points_moved).toFixed(precision)} pts)`
+                  : `Runaway Trigger: ±${Number(data.signal_sync.runaway_trend.threshold_pts).toFixed(precision)} pts`}
+              </span>
+            </div>
+          )}
         </div>
       </div>
 
@@ -835,3 +853,4 @@ export default function StrategyTabsPanel({
     </div>
   );
 }
+

@@ -997,6 +997,7 @@ def analyze_all_four_strategies(
             "probability": sig_sync.get("probability", 84),
             "hold_remaining_sec": sig_sync.get("hold_remaining_sec", 0),
             "hold_total_sec": sig_sync.get("hold_total_sec", 300),
+            "runaway_trend": sig_sync.get("runaway_trend"),
         },
         "strategies": {
             "daily_sweep": daily_sweep,
@@ -1005,3 +1006,4 @@ def analyze_all_four_strategies(
             "b_tier": b_tier,
         },
     }
+

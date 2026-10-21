@@ -826,23 +826,30 @@ def fetch_ohlcv(symbol: str = "EUR/USD", timeframe: str = "1m", limit: int = 100
         if now - cached_time < CACHE_TTL_SECONDS:
             df = cached_df.copy()
             if synced_p and synced_p > 0:
-                last_c = float(df['close'].iloc[-1])
-                offset = synced_p - last_c
-                if abs(offset) > 0.02:
-                    for col in ['open', 'high', 'low', 'close']:
-                        df[col] = (df[col] + offset).round(precision)
-                df.at[df.index[-1], 'close'] = synced_p
+                last_idx = df.index[-1]
+                df.at[last_idx, 'close'] = synced_p
+                if synced_p > float(df.at[last_idx, 'high']):
+                    df.at[last_idx, 'high'] = synced_p
+                if synced_p < float(df.at[last_idx, 'low']):
+                    df.at[last_idx, 'low'] = synced_p
             return df
 
     real_df = fetch_real_ohlcv_from_market(symbol=symbol, timeframe=timeframe, limit=limit)
     if real_df is not None and not real_df.empty:
         if synced_p and synced_p > 0:
-            last_c = float(real_df['close'].iloc[-1])
+            last_idx = real_df.index[-1]
+            last_c = float(real_df.at[last_idx, 'close'])
             offset = synced_p - last_c
+            # Only shift historical basis if the feed is a different instrument basis (e.g. > $1.50 spread)
+            # Otherwise preserve the true forming candle open so fast runaway moves are never masked!
             if abs(offset) > 0.02:
                 for col in ['open', 'high', 'low', 'close']:
                     real_df[col] = (real_df[col] + offset).round(precision)
-            real_df.at[real_df.index[-1], 'close'] = synced_p
+            real_df.at[last_idx, 'close'] = synced_p
+            if synced_p > float(real_df.at[last_idx, 'high']):
+                real_df.at[last_idx, 'high'] = synced_p
+            if synced_p < float(real_df.at[last_idx, 'low']):
+                real_df.at[last_idx, 'low'] = synced_p
             UNIVERSAL_PRICE_HUB[clean] = synced_p
             UNIVERSAL_PRICE_TIMESTAMPS[clean] = now
 
@@ -1001,14 +1008,24 @@ def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m",
         current_price: Live spot price from chart to ensure 100% synchronization
     """
     clean_sym = clean_symbol_string(symbol)
-    if current_price and current_price > 0:
-        latest_price = round(current_price, 2 if (latest_price_is_high := current_price > 10) else 4)
-        UNIVERSAL_PRICE_HUB[clean_sym] = latest_price
-        UNIVERSAL_PRICE_TIMESTAMPS[clean_sym] = time.time()
-    else:
-        latest_price = get_synchronized_live_price(symbol)
+    _, precision = get_asset_base_config(symbol)
+
+    # Always fetch the true live market price first so a locked signal entry echoed
+    # from the client can NEVER freeze `latest_price` in a feedback loop!
+    live_spot_price = get_synchronized_live_price(symbol)
+    if (not live_spot_price or live_spot_price <= 0) and current_price and current_price > 0:
+        live_spot_price = round(current_price, precision)
 
     df = fetch_ohlcv(symbol=symbol, timeframe=timeframe, limit=100)
+    if df is not None and not df.empty:
+        candle_close = round(float(df['close'].iloc[-1]), precision)
+        if candle_close > 0:
+            live_spot_price = candle_close
+
+    latest_price = round(float(live_spot_price), precision)
+    UNIVERSAL_PRICE_HUB[clean_sym] = latest_price
+    UNIVERSAL_PRICE_TIMESTAMPS[clean_sym] = time.time()
+
     data_source = df.attrs.get('data_source', 'unknown')
     if any(k in clean_sym for k in ['XAU', 'GOLD']):
         data_source = 'TradingView (OANDA:XAUUSD)'
@@ -1261,17 +1278,86 @@ def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m",
         else:
             min_effective_risk = max(risk_amount, atr * 1.5, 2.0 if entry_price > 10.0 else 0.0015)
 
-    # Re-sync entry_price with live ticking spot quote right before finalizing trade parameters
-    if current_price and current_price > 0:
-        entry_price = round(current_price, precision)
+    # Re-sync live_spot_price right before evaluating Runaway Trend & Hold Lock
+    synced_now = get_synchronized_live_price(symbol)
+    if synced_now and synced_now > 0:
+        live_spot_price = round(synced_now, precision)
+        latest_price = live_spot_price
+    entry_price = latest_price
+
+    # ── RUNAWAY TREND / FAST IMPULSE DETECTOR (TAKES PRECEDENCE OVER HOLD TIMER) ──
+    # Calculate the exact points that determine a fast runaway trend for this timeframe.
+    # When price runs away beyond `runaway_threshold_pts`, the system MUST immediately
+    # override the countdown timer, notify the user, and flip/update the signal direction!
+    tf_gold_runaway_pts = {
+        '1s': 0.80, '5s': 1.10, '15s': 1.50, '30s': 1.80,
+        '1m': 2.20, '2m': 2.80, '3m': 3.20, '5m': 4.00,
+        '15m': 6.50, '30m': 9.00, '45m': 11.00,
+        '1h': 14.00, '2h': 18.00, '4h': 25.00,
+        '1d': 40.00, '1w': 75.00, '1M': 120.00,
+    }
+    if is_gold:
+        runaway_threshold_pts = round(tf_gold_runaway_pts.get(timeframe, 3.50), precision)
     else:
-        synced_now = get_synchronized_live_price(symbol)
-        if synced_now and synced_now > 0:
-            entry_price = synced_now
+        runaway_threshold_pts = round(max(atr * 1.15, min_sl_distance * 0.70), precision)
+
+    # Measure live single-candle impulse and 2-to-3 candle fast displacement (including forming bar!)
+    live_bar_open = float(df['open'].iloc[-1])
+    live_bar_pts = round(live_spot_price - live_bar_open, precision)
+
+    lookback_3 = df.iloc[-min(3, len(df)):]
+    open_3bars_ago = float(lookback_3['open'].iloc[0])
+    high_3bars = float(lookback_3['high'].max())
+    low_3bars = float(lookback_3['low'].min())
+
+    net_3bar_pts = round(live_spot_price - open_3bars_ago, precision)
+    drop_from_3bar_high = round(live_spot_price - high_3bars, precision)   # negative on drops
+    surge_from_3bar_low = round(live_spot_price - low_3bars, precision)    # positive on surges
+
+    # Also check last 2 bars displacement
+    lookback_2 = df.iloc[-min(2, len(df)):]
+    net_2bar_pts = round(live_spot_price - float(lookback_2['open'].iloc[0]), precision)
+
+    # Bearish Runaway Crash: single bar drop >= threshold, OR 2-3 bar net drop >= 1.1x threshold,
+    # OR plunge from 3-bar high >= 1.35x threshold while current/recent bar is falling
+    runaway_bearish = (
+        (live_bar_pts <= -runaway_threshold_pts)
+        or (net_2bar_pts <= -runaway_threshold_pts)
+        or (net_3bar_pts <= -(runaway_threshold_pts * 1.15))
+        or (drop_from_3bar_high <= -(runaway_threshold_pts * 1.35) and (live_bar_pts < 0 or net_2bar_pts < 0))
+    )
+
+    # Bullish Runaway Surge: single bar rally >= threshold, OR 2-3 bar net rally >= 1.1x threshold,
+    # OR surge from 3-bar low >= 1.35x threshold while current/recent bar is rising
+    runaway_bullish = (
+        (live_bar_pts >= runaway_threshold_pts)
+        or (net_2bar_pts >= runaway_threshold_pts)
+        or (net_3bar_pts >= (runaway_threshold_pts * 1.15))
+        or (surge_from_3bar_low >= (runaway_threshold_pts * 1.35) and (live_bar_pts > 0 or net_2bar_pts > 0))
+    )
+
+    # If both somehow trigger in extreme whipsaw, pick the dominant recent 2-bar vector
+    if runaway_bearish and runaway_bullish:
+        if net_2bar_pts < 0:
+            runaway_bullish = False
+        else:
+            runaway_bearish = False
+
+    # Runaway Trend ALWAYS takes precedence over lagging moving averages or older completed candles
+    if runaway_bearish and data_source != 'SIMULATED':
+        signal_type = "SELL/SHORT"
+        trend = "DOWNTREND"
+        bearish_momentum = True
+        bullish_momentum = False
+    elif runaway_bullish and data_source != 'SIMULATED':
+        signal_type = "BUY/LONG"
+        trend = "UPTREND"
+        bullish_momentum = True
+        bearish_momentum = False
 
     # ── PREDICTIVE PROBABILITY & TIMEFRAME SIGNAL PERSISTENCE (HYSTERESIS) ──
-    # A 5m signal must hold its predicted direction for the 5m candle window (300s)
-    # unless invalidated by Stop Loss or target completion. Never flip-flop every 10-20s!
+    # A 5m signal holds its predicted direction for the 5m candle window (300s)
+    # UNLESS a Runaway Trend or Stop Loss breach occurs — Runaway Trend takes precedence!
     now_ts = time.time()
     min_hold_sec = TIMEFRAME_HOLD_SECONDS.get(timeframe, 300)
     registry_key = f"{clean_sym}:{timeframe}"
@@ -1282,11 +1368,16 @@ def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m",
         prob_score += 4
     if (signal_type == "BUY/LONG" and bullish_momentum) or (signal_type == "SELL/SHORT" and bearish_momentum):
         prob_score += 3
+    if runaway_bearish or runaway_bullish:
+        prob_score += 3
     if vol_ratio >= 1.2:
         prob_score += 2
     if obi_available and ((signal_type == "BUY/LONG" and obi_score >= 0.02) or (signal_type == "SELL/SHORT" and obi_score <= -0.02)):
         prob_score += 2
     prob_score = min(max(prob_score, 75), 89)
+
+    runaway_override_triggered = False
+    adverse_excursion_pts = 0.0
 
     with ACTIVE_SIGNAL_LOCK:
         active_state = ACTIVE_SIGNAL_REGISTRY.get(registry_key)
@@ -1294,12 +1385,51 @@ def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m",
             elapsed = now_ts - active_state["triggered_at"]
             act_sig = active_state["signal_type"]
             act_sl = active_state["stop_loss"]
+            act_entry = active_state["entry"]
 
-            # Hold the predicted direction for the full timeframe window unless Stop Loss is breached
-            sl_hit = (act_sig == "BUY/LONG" and entry_price <= act_sl) or (act_sig == "SELL/SHORT" and entry_price >= act_sl)
+            # 1. Check Stop Loss breach against LIVE market price
+            sl_hit = (act_sig == "BUY/LONG" and live_spot_price <= act_sl) or (act_sig == "SELL/SHORT" and live_spot_price >= act_sl)
 
-            if not sl_hit and elapsed < min_hold_sec:
-                # Hold the predicted direction and anchor entry so trader has time to execute!
+            # 2. Check Adverse Excursion (price ran away against locked entry by >= runaway_threshold_pts)
+            if act_sig == "BUY/LONG":
+                adverse_excursion_pts = round(live_spot_price - act_entry, precision)
+                adverse_runaway = adverse_excursion_pts <= -runaway_threshold_pts
+                opposing_runaway = runaway_bearish
+            else:
+                adverse_excursion_pts = round(live_spot_price - act_entry, precision)
+                adverse_runaway = adverse_excursion_pts >= runaway_threshold_pts
+                opposing_runaway = runaway_bullish
+
+            # 3. Check Same-Direction Runaway Continuation (price already moved >= 1.5x runaway_threshold_pts in profit)
+            favorable_runaway = (
+                (act_sig == "BUY/LONG" and (live_spot_price - act_entry) >= runaway_threshold_pts * 1.5)
+                or (act_sig == "SELL/SHORT" and (act_entry - live_spot_price) >= runaway_threshold_pts * 1.5)
+            )
+
+            if sl_hit or adverse_runaway or opposing_runaway:
+                # RUNAWAY TREND TAKES PRECEDENCE OVER THE HOLD TIMER!
+                # Flip immediately to the runaway direction and re-anchor at live_spot_price.
+                runaway_override_triggered = True
+                if act_sig == "BUY/LONG" and (sl_hit or adverse_runaway or runaway_bearish):
+                    signal_type = "SELL/SHORT"
+                    trend = "DOWNTREND"
+                    runaway_bearish = True
+                    runaway_bullish = False
+                elif act_sig == "SELL/SHORT" and (sl_hit or adverse_runaway or runaway_bullish):
+                    signal_type = "BUY/LONG"
+                    trend = "UPTREND"
+                    runaway_bullish = True
+                    runaway_bearish = False
+                entry_price = live_spot_price
+                triggered_at = now_ts
+            elif favorable_runaway:
+                # Keep direction & timer, but re-anchor entry/SL/TP to live price so trader isn't chasing stale levels
+                signal_type = act_sig
+                trend = active_state["trend"]
+                entry_price = live_spot_price
+                triggered_at = active_state["triggered_at"]
+            elif elapsed < min_hold_sec:
+                # Calm market within threshold: hold the predicted direction and anchor entry
                 signal_type = act_sig
                 trend = active_state["trend"]
                 entry_price = active_state["entry"]
@@ -1309,6 +1439,45 @@ def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m",
                 triggered_at = now_ts
         else:
             triggered_at = now_ts
+
+    # Compute final runaway telemetry summary
+    runaway_detected = bool(runaway_bearish or runaway_bullish or runaway_override_triggered)
+    if runaway_bearish or (runaway_override_triggered and signal_type == "SELL/SHORT"):
+        runaway_direction = "BEARISH"
+        active_runaway_pts = min(live_bar_pts, net_2bar_pts, net_3bar_pts, drop_from_3bar_high, adverse_excursion_pts)
+    elif runaway_bullish or (runaway_override_triggered and signal_type == "BUY/LONG"):
+        runaway_direction = "BULLISH"
+        active_runaway_pts = max(live_bar_pts, net_2bar_pts, net_3bar_pts, surge_from_3bar_low, adverse_excursion_pts)
+    else:
+        runaway_direction = "NONE"
+        active_runaway_pts = net_2bar_pts if abs(net_2bar_pts) >= abs(live_bar_pts) else live_bar_pts
+
+    intensity_ratio = round(abs(active_runaway_pts) / max(runaway_threshold_pts, 1e-6), 2)
+    if runaway_detected:
+        dir_word = "BEARISH CRASH" if runaway_direction == "BEARISH" else "BULLISH SURGE"
+        act_word = "SELL NOW" if runaway_direction == "BEARISH" else "BUY NOW"
+        runaway_banner = (
+            f"⚡ RUNAWAY {dir_word} ({active_runaway_pts:+.{precision}f} pts vs ±{runaway_threshold_pts:.{precision}f} pt threshold) "
+            f"— TAKING PRECEDENCE! Signal locked to {act_word} @ ${entry_price:.{precision}f}"
+        )
+    else:
+        runaway_banner = (
+            f"Normal Velocity ({active_runaway_pts:+.{precision}f} pts / ±{runaway_threshold_pts:.{precision}f} pt Runaway Trigger)"
+        )
+
+    runaway_trend_info = {
+        "detected": runaway_detected,
+        "override_triggered": runaway_override_triggered,
+        "direction": runaway_direction,
+        "points_moved": round(float(active_runaway_pts), precision),
+        "threshold_pts": round(float(runaway_threshold_pts), precision),
+        "live_bar_pts": round(float(live_bar_pts), precision),
+        "net_2bar_pts": round(float(net_2bar_pts), precision),
+        "net_3bar_pts": round(float(net_3bar_pts), precision),
+        "adverse_excursion_pts": round(float(adverse_excursion_pts), precision),
+        "intensity_ratio": intensity_ratio,
+        "banner": runaway_banner,
+    }
 
     hold_remaining_sec = int(max(0, min_hold_sec - (now_ts - triggered_at)))
     unified_bias = "BULLISH" if signal_type == "BUY/LONG" else ("BEARISH" if signal_type == "SELL/SHORT" else "NEUTRAL")
@@ -1339,7 +1508,10 @@ def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m",
         tp1 = tp_levels[0]
         tp2 = tp_levels[3]
 
-        sell_label = "Bearish Momentum / Downtrend" if trend == "DOWNTREND" else "Bearish Rejection"
+        if runaway_detected and runaway_direction == "BEARISH":
+            sell_label = f"⚡ RUNAWAY BEARISH TREND ({active_runaway_pts:+.{precision}f} pts / ±{runaway_threshold_pts:.{precision}f} pt trigger)"
+        else:
+            sell_label = "Bearish Momentum / Downtrend" if trend == "DOWNTREND" else "Bearish Rejection"
         rationale = f"[{timeframe.upper()}] [{prob_score}% PROB] {sell_label} (Risk: ${risk_dist:.{precision}f}). Entry: ${entry_price:.{precision}f}, SL: ${stop_loss:.{precision}f}."
 
     elif signal_type == "BUY/LONG":
@@ -1365,7 +1537,10 @@ def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m",
         tp1 = tp_levels[0]
         tp2 = tp_levels[3]
 
-        buy_label = "Bullish Momentum / Breakout" if trend == "UPTREND" else "Bullish Demand"
+        if runaway_detected and runaway_direction == "BULLISH":
+            buy_label = f"⚡ RUNAWAY BULLISH TREND ({active_runaway_pts:+.{precision}f} pts / ±{runaway_threshold_pts:.{precision}f} pt trigger)"
+        else:
+            buy_label = "Bullish Momentum / Breakout" if trend == "UPTREND" else "Bullish Demand"
         rationale = f"[{timeframe.upper()}] [{prob_score}% PROB] {buy_label} (Risk: ${risk_dist:.{precision}f}). Entry: ${entry_price:.{precision}f}, SL: ${stop_loss:.{precision}f}."
 
     else:
@@ -1399,7 +1574,7 @@ def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m",
         "symbol": symbol,
         "timeframe": timeframe,
         "data_source": data_source,
-        "latest_price": entry_price,
+        "latest_price": live_spot_price,
         "support": support,
         "resistance": resistance,
         "trend": trend,
@@ -1407,6 +1582,7 @@ def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m",
         "probability": prob_score,
         "hold_remaining_sec": hold_remaining_sec,
         "hold_total_sec": min_hold_sec,
+        "runaway_trend": runaway_trend_info,
         "atr": round(atr, precision),
         "risk_amount": risk_amount,
         "volume": latest_vol,
@@ -1432,7 +1608,8 @@ def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m",
             "rationale": rationale,
             "probability": prob_score,
             "hold_remaining_sec": hold_remaining_sec,
-            "hold_total_sec": min_hold_sec
+            "hold_total_sec": min_hold_sec,
+            "runaway_trend": runaway_trend_info,
         },
         "sd_zones": sd_zones
     }
