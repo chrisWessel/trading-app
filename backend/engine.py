@@ -1056,24 +1056,29 @@ def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m",
         trend = "RANGEBOUND"
 
     # ── SHORT-TERM MOMENTUM & TREND REVERSAL DETECTION ──────────────────────
-    # Check the last 5 candles for reversal patterns that override the longer-term trend.
-    # If price was falling but last 3+ candles make higher lows → bullish reversal
-    # If price was rising but last 3+ candles make lower highs → bearish reversal
-    recent_n = min(5, len(df) - 1)
-    recent_candles = df.iloc[-(recent_n + 1):]  # last 5+1 candles for comparison
+    # Evaluate completed candles (excluding the still-forming live tick bar)
+    # so micro-ticks within a timeframe window never cause random 10-20s flips.
+    closed_df = df.iloc[:-1] if len(df) > 6 else df
+    recent_n = min(5, len(closed_df) - 1)
+    recent_candles = closed_df.iloc[-(recent_n + 1):]  # last 5+1 completed candles
+
+    higher_lows = 0
+    lower_highs = 0
+    close_rising = latest_price >= sma_20_curr
+    close_change_pct = 0.0
 
     if len(recent_candles) >= 4:
-        recent_lows = recent_candles['low'].values[-4:]   # last 4 candle lows
-        recent_highs = recent_candles['high'].values[-4:]  # last 4 candle highs
+        recent_lows = recent_candles['low'].values[-4:]   # last 4 completed candle lows
+        recent_highs = recent_candles['high'].values[-4:]  # last 4 completed candle highs
         recent_closes = recent_candles['close'].values[-4:]
 
         # Count consecutive higher lows (bullish pressure building)
         higher_lows = sum(1 for i in range(1, len(recent_lows)) if recent_lows[i] > recent_lows[i-1])
         # Count consecutive lower highs (bearish pressure building)
         lower_highs = sum(1 for i in range(1, len(recent_highs)) if recent_highs[i] < recent_highs[i-1])
-        # Short-term close direction: are recent closes trending up or down?
-        close_rising = recent_closes[-1] > recent_closes[0]
-        close_change_pct = (recent_closes[-1] - recent_closes[0]) / recent_closes[0] * 100
+        # Short-term close direction on completed bars
+        close_rising = bool(recent_closes[-1] >= recent_closes[0])
+        close_change_pct = float((recent_closes[-1] - recent_closes[0]) / recent_closes[0] * 100)
 
     # ── SHORT-TERM MOMENTUM & BREAKOUT DETECTION ──────────────────────────────
     # If recent candles are aggressively rising with higher lows and rising closes:
@@ -1289,18 +1294,11 @@ def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m",
             elapsed = now_ts - active_state["triggered_at"]
             act_sig = active_state["signal_type"]
             act_sl = active_state["stop_loss"]
-            act_tps = active_state["tp_levels"]
 
-            # Check if previous prediction was invalidated by Stop Loss or completed at TP2
+            # Hold the predicted direction for the full timeframe window unless Stop Loss is breached
             sl_hit = (act_sig == "BUY/LONG" and entry_price <= act_sl) or (act_sig == "SELL/SHORT" and entry_price >= act_sl)
-            tp_hit = (len(act_tps) > 1) and (
-                (act_sig == "BUY/LONG" and entry_price >= act_tps[1]) or
-                (act_sig == "SELL/SHORT" and entry_price <= act_tps[1])
-            )
-            # Also check if live price drifted excessively far from original entry (> 3x max_sl)
-            excessive_drift = abs(entry_price - active_state["entry"]) > (min_effective_risk * 3.0)
 
-            if not sl_hit and not tp_hit and not excessive_drift and elapsed < min_hold_sec:
+            if not sl_hit and elapsed < min_hold_sec:
                 # Hold the predicted direction and anchor entry so trader has time to execute!
                 signal_type = act_sig
                 trend = active_state["trend"]
@@ -1313,6 +1311,7 @@ def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m",
             triggered_at = now_ts
 
     hold_remaining_sec = int(max(0, min_hold_sec - (now_ts - triggered_at)))
+    unified_bias = "BULLISH" if signal_type == "BUY/LONG" else ("BEARISH" if signal_type == "SELL/SHORT" else "NEUTRAL")
 
     # Calculate initial TP offset: TP1 starts close to entry for quick profit taking!
     tp1_base_offset = max(round(min_effective_risk * tp1_ratio, precision), pip_step)
@@ -1382,6 +1381,7 @@ def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m",
         with ACTIVE_SIGNAL_LOCK:
             ACTIVE_SIGNAL_REGISTRY[registry_key] = {
                 "signal_type": signal_type,
+                "bias": unified_bias,
                 "trend": trend,
                 "entry": entry_zones[0],
                 "entry_zones": entry_zones,
@@ -1403,6 +1403,7 @@ def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m",
         "support": support,
         "resistance": resistance,
         "trend": trend,
+        "bias": unified_bias,
         "probability": prob_score,
         "hold_remaining_sec": hold_remaining_sec,
         "hold_total_sec": min_hold_sec,
@@ -1642,6 +1643,33 @@ def analyze_market_bias(symbol: str, timeframe: str) -> Dict[str, Any]:
         candle_signal = "WAIT"
         candle_signal_text = f"⏸️ INDECISION — {candle_pattern.replace('_', ' ')} forming, wait for next candle"
 
+    # ── Synchronize Market Bias & Candle Signal with Unified Timeframe Signal Engine ──
+    # Rule: BUY is ALWAYS BULLISH, SELL is ALWAYS BEARISH, locked for the timeframe hold timer.
+    sig_sync = analyze_signal_conditions(symbol=symbol, timeframe=timeframe)
+    sync_type = sig_sync.get("signal_type", "NEUTRAL")
+    sync_hold_rem = sig_sync.get("hold_remaining_sec", 0)
+    sync_hold_tot = sig_sync.get("hold_total_sec", TIMEFRAME_HOLD_SECONDS.get(timeframe, 300))
+    sync_prob = sig_sync.get("probability", 80)
+
+    if sync_type == "BUY/LONG":
+        trend_direction = "BULL"
+        continuation_signal = "BUY_CONTINUATION"
+        continuation_text = f"🟢 TREND IS BULLISH ({timeframe.upper()}) — BUY SIGNAL LOCKED ({sync_prob}% PROB · HOLD {sync_hold_rem}s)"
+        candle_type = "BULLISH"
+        candle_bias = "BUYERS_IN_CONTROL"
+        candle_signal = "BUY"
+        pattern_label = candle_pattern.replace("_", " ") if candle_pattern not in bear_patterns else "BULLISH MOMENTUM"
+        candle_signal_text = f"🟢 BULLISH (BUY) — {pattern_label} [{timeframe.upper()} HOLD {sync_hold_rem}s]"
+    elif sync_type == "SELL/SHORT":
+        trend_direction = "BEAR"
+        continuation_signal = "SELL_CONTINUATION"
+        continuation_text = f"🔴 TREND IS BEARISH ({timeframe.upper()}) — SELL SIGNAL LOCKED ({sync_prob}% PROB · HOLD {sync_hold_rem}s)"
+        candle_type = "BEARISH"
+        candle_bias = "SELLERS_IN_CONTROL"
+        candle_signal = "SELL"
+        pattern_label = candle_pattern.replace("_", " ") if candle_pattern not in bull_patterns else "BEARISH MOMENTUM"
+        candle_signal_text = f"🔴 BEARISH (SELL) — {pattern_label} [{timeframe.upper()} HOLD {sync_hold_rem}s]"
+
     # Last 3 candles summary
     last_3 = []
     for i, row in enumerate([df.iloc[-3], df.iloc[-2], df.iloc[-1]]):
@@ -1658,6 +1686,11 @@ def analyze_market_bias(symbol: str, timeframe: str) -> Dict[str, Any]:
         "timeframe": timeframe,
         "data_source": data_source,
         "latest_price": round(latest_price, precision),
+        "signal_type": sync_type,
+        "bias": "BULLISH" if sync_type == "BUY/LONG" else ("BEARISH" if sync_type == "SELL/SHORT" else "NEUTRAL"),
+        "probability": sync_prob,
+        "hold_remaining_sec": sync_hold_rem,
+        "hold_total_sec": sync_hold_tot,
         "trend": {
             "direction": trend_direction,
             "strength": trend_strength,

@@ -80,6 +80,52 @@ interface LiveSignalNotificationPanelProps {
 
 const ALL_TIMEFRAMES = ['1s', '1m', '3m', '5m', '15m', '30m', '1h', '4h', '1d'];
 
+export const TIMEFRAME_HOLD_SECONDS: Record<string, number> = {
+  '1s': 15,
+  '5s': 30,
+  '15s': 45,
+  '30s': 60,
+  '1m': 60,
+  '2m': 120,
+  '3m': 180,
+  '5m': 300,
+  '15m': 900,
+  '30m': 1800,
+  '45m': 2700,
+  '1h': 3600,
+  '2h': 7200,
+  '4h': 14400,
+  '1d': 86400,
+};
+
+export interface LockedSignalState {
+  key: string;
+  symbol: string;
+  timeframe: string;
+  signal_type: string;
+  bias: 'BULLISH' | 'BEARISH' | 'NEUTRAL';
+  entry: number;
+  entry_zones: number[];
+  stop_loss: number;
+  tp1: number;
+  tp2: number;
+  tp_levels: number[];
+  probability: number;
+  rationale: string;
+  lockedAtMs: number;
+  holdTotalSec: number;
+}
+
+export function formatHoldTimer(sec: number): string {
+  const s = Math.max(0, Math.floor(sec));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const rem = s % 60;
+  if (h > 0) return `${h}h ${m}m ${rem}s`;
+  if (m > 0) return `${m}m ${rem < 10 ? '0' : ''}${rem}s`;
+  return `${rem}s`;
+}
+
 export default function LiveSignalNotificationPanel({
   symbol,
   timeframe,
@@ -102,9 +148,13 @@ export default function LiveSignalNotificationPanel({
   const [showRiskConfig, setShowRiskConfig] = useState<boolean>(false);
 
   // Frozen params — locked once per signal direction change.
-  // This prevents SL/TP from jittering on every 3-second poll.
+  // This prevents SL/TP from jittering on every poll.
   const frozenRef = useRef<FrozenParams | null>(null);
   const [frozenParams, setFrozenParams] = useState<FrozenParams | null>(null);
+
+  // Strict client-side timeframe hold lock so signals NEVER flip every 10-50 seconds
+  const signalLockRef = useRef<LockedSignalState | null>(null);
+  const [holdRemainingSec, setHoldRemainingSec] = useState<number>(TIMEFRAME_HOLD_SECONDS[timeframe] || 300);
 
   const isHighValue = (analysis?.latest_price || 0) > 10.0;
   const precision = isHighValue ? 2 : 4;
@@ -127,16 +177,18 @@ export default function LiveSignalNotificationPanel({
       if (res.ok) {
         const data = await res.json();
         const a: SignalAnalysis = data.analysis;
-        setAnalysis(a);
         if (a.data_source === 'SIMULATED') {
+          setAnalysis(a);
           frozenRef.current = null;
           setFrozenParams(null);
+          signalLockRef.current = null;
           setNotifications([]);
           return;
         }
 
         // Format Harare Time
         const now = new Date();
+        const nowMs = now.getTime();
         const harareDateString = now.toLocaleString('en-US', { timeZone: 'Africa/Harare' });
         const harareTime = now.toLocaleTimeString('en-US', {
           timeZone: 'Africa/Harare',
@@ -150,13 +202,51 @@ export default function LiveSignalNotificationPanel({
         const isCrypto = symbol.includes('BTC') || symbol.includes('ETH') || symbol.includes('SOL') || symbol.includes('REXT') || symbol.includes('USDT');
         const isWeekend = (harareDate.getDay() === 0 || harareDate.getDay() === 6) && !isCrypto;
 
+        // ── ENFORCE STRICT TIMEFRAME HOLD LOCK ──────────────────────────────
+        // If a signal is already locked for this symbol+timeframe and its hold timer
+        // has not expired (and Stop Loss was not breached), keep the locked direction!
+        const lockKey = `${symbol.toUpperCase()}:${timeframe}`;
+        const tfHoldSec = TIMEFRAME_HOLD_SECONDS[timeframe] || a.hold_total_sec || 300;
+        const existingLock = signalLockRef.current;
+
+        if (
+          existingLock &&
+          existingLock.key === lockKey &&
+          existingLock.signal_type !== 'NEUTRAL' &&
+          nowMs < existingLock.lockedAtMs + existingLock.holdTotalSec * 1000
+        ) {
+          const slHit =
+            (existingLock.signal_type === 'BUY/LONG' && a.latest_price <= existingLock.stop_loss) ||
+            (existingLock.signal_type === 'SELL/SHORT' && a.latest_price >= existingLock.stop_loss);
+
+          if (!slHit) {
+            const remSec = Math.max(1, Math.ceil((existingLock.lockedAtMs + existingLock.holdTotalSec * 1000 - nowMs) / 1000));
+            a.signal_type = existingLock.signal_type;
+            a.trend = existingLock.signal_type === 'BUY/LONG' ? 'UPTREND' : 'DOWNTREND';
+            a.probability = existingLock.probability;
+            a.hold_remaining_sec = remSec;
+            a.hold_total_sec = existingLock.holdTotalSec;
+            a.trade_params = {
+              ...a.trade_params,
+              entry: existingLock.entry,
+              entry_zones: existingLock.entry_zones,
+              stop_loss: existingLock.stop_loss,
+              tp1: existingLock.tp1,
+              tp2: existingLock.tp2,
+              tp_levels: existingLock.tp_levels,
+              rationale: existingLock.rationale,
+              probability: existingLock.probability,
+              hold_remaining_sec: remSec,
+              hold_total_sec: existingLock.holdTotalSec,
+            };
+            setHoldRemainingSec(remSec);
+          }
+        }
+
         const isBuy = isWeekend ? false : a.signal_type === 'BUY/LONG';
         const isSell = isWeekend ? false : a.signal_type === 'SELL/SHORT';
         const notifType: 'BUY_NOW' | 'SELL_NOW' | 'MONITORING' | 'CLOSED' = isWeekend ? 'CLOSED' : isBuy ? 'BUY_NOW' : isSell ? 'SELL_NOW' : 'MONITORING';
 
-        // ── LIVE VALUES: backend computes everything from the current live price each poll.
-        // Always update zones, SL, and TPs so they stay accurate with the market.
-        // Only reset the TP chip selection when the signal DIRECTION changes.
         const incoming_zones: number[] = a.trade_params.entry_zones || [];
         const incoming_tp_levels: number[] = a.trade_params.tp_levels || [];
 
@@ -191,6 +281,45 @@ export default function LiveSignalNotificationPanel({
           if (effectiveTp1 <= a.trade_params.entry) effectiveTp1 = Number((a.trade_params.entry + minRiskBuffer).toFixed(precision));
           if (effectiveTp2 <= a.trade_params.entry) effectiveTp2 = Number((a.trade_params.entry + minRiskBuffer * 2).toFixed(precision));
         }
+
+        // Create or update the timeframe lock when starting a new window
+        const currentLock = signalLockRef.current;
+        if (
+          !currentLock ||
+          currentLock.key !== lockKey ||
+          currentLock.signal_type !== a.signal_type ||
+          nowMs >= currentLock.lockedAtMs + currentLock.holdTotalSec * 1000
+        ) {
+          const initialRemSec = a.hold_remaining_sec && a.hold_remaining_sec > 10 ? a.hold_remaining_sec : tfHoldSec;
+          const lockedAt = nowMs - (tfHoldSec - initialRemSec) * 1000;
+          const newLock: LockedSignalState = {
+            key: lockKey,
+            symbol,
+            timeframe,
+            signal_type: a.signal_type,
+            bias: isBuy ? 'BULLISH' : isSell ? 'BEARISH' : 'NEUTRAL',
+            entry: a.trade_params.entry,
+            entry_zones: incoming_zones,
+            stop_loss: effectiveSL,
+            tp1: effectiveTp1,
+            tp2: effectiveTp2,
+            tp_levels: effectiveTpLevels,
+            probability: a.probability ?? a.trade_params.probability ?? 84,
+            rationale: a.trade_params.rationale,
+            lockedAtMs: lockedAt,
+            holdTotalSec: tfHoldSec,
+          };
+          signalLockRef.current = newLock;
+          setHoldRemainingSec(initialRemSec);
+        }
+
+        // Broadcast active lock globally so ICT Strategy & Trend panels stay 100% synchronized
+        if (typeof window !== 'undefined' && signalLockRef.current) {
+          (window as any).__wessignalActiveSignal = signalLockRef.current;
+          window.dispatchEvent(new CustomEvent('wessignal-signal-sync', { detail: signalLockRef.current }));
+        }
+
+        setAnalysis(a);
 
         const prevFrozen = frozenRef.current;
         const directionChanged = !prevFrozen || prevFrozen.signal_type !== a.signal_type;
@@ -263,11 +392,24 @@ export default function LiveSignalNotificationPanel({
     setNotifications([]);
     frozenRef.current = null;
     setFrozenParams(null);
+    signalLockRef.current = null;
+    setHoldRemainingSec(TIMEFRAME_HOLD_SECONDS[timeframe] || 300);
     setSelectedTpIndex(0);
     fetchSignal();
     const interval = setInterval(fetchSignal, 8000);
     return () => clearInterval(interval);
   }, [symbol, timeframe, accountBalance, lotSize, riskPercent]);
+
+  // 1-second live interval countdown ticker for the Signal Navigator hold lock
+  useEffect(() => {
+    const tick = setInterval(() => {
+      const lock = signalLockRef.current;
+      if (!lock) return;
+      const rem = Math.max(0, Math.ceil((lock.lockedAtMs + lock.holdTotalSec * 1000 - Date.now()) / 1000));
+      setHoldRemainingSec(rem);
+    }, 1000);
+    return () => clearInterval(tick);
+  }, []);
 
   const latestNotif = notifications[0];
 
@@ -330,7 +472,7 @@ export default function LiveSignalNotificationPanel({
   ];
 
   return (
-    <aside className="bg-slate-900 border border-slate-800 rounded-xl p-4 shadow-2xl flex flex-col h-full max-h-[calc(100vh-2rem)] sticky top-4 space-y-4 font-mono overflow-hidden">
+    <aside className="bg-slate-900 border border-slate-800 rounded-xl p-4 shadow-2xl flex flex-col h-full max-h-[calc(100vh-2rem)] sticky top-4 space-y-4 font-mono overflow-y-auto scrollbar-navigator">
       {/* Sidebar Top Header */}
       <div className="space-y-3 pb-3 border-b border-slate-800 shrink-0">
         <div className="flex items-center justify-between">
@@ -540,11 +682,11 @@ export default function LiveSignalNotificationPanel({
               </span>
             ) : (analysis?.signal_type === 'BUY/LONG' || (!analysis && latestNotif.type === 'BUY_NOW')) ? (
               <span className="px-2.5 py-1 bg-emerald-600 text-white font-extrabold text-xs rounded-lg animate-pulse flex items-center gap-1">
-                <ArrowUpRight className="w-4 h-4" /> BUY NOW [{timeframe.toUpperCase()}]
+                <ArrowUpRight className="w-4 h-4" /> BUY NOW · BULLISH [{timeframe.toUpperCase()}]
               </span>
             ) : (analysis?.signal_type === 'SELL/SHORT' || (!analysis && latestNotif.type === 'SELL_NOW')) ? (
               <span className="px-2.5 py-1 bg-rose-600 text-white font-extrabold text-xs rounded-lg animate-pulse flex items-center gap-1">
-                <ArrowDownRight className="w-4 h-4" /> SELL NOW [{timeframe.toUpperCase()}]
+                <ArrowDownRight className="w-4 h-4" /> SELL NOW · BEARISH [{timeframe.toUpperCase()}]
               </span>
             ) : (
               <span className="px-2.5 py-1 bg-amber-600 text-white font-extrabold text-xs rounded-lg flex items-center gap-1">
@@ -564,10 +706,9 @@ export default function LiveSignalNotificationPanel({
                 <Target className="w-3 h-3" />
                 <span>PROBABILITY: {analysis?.probability ?? analysis?.trade_params?.probability ?? 84}%</span>
               </span>
-              <span className="text-blue-300 font-mono font-bold">
-                {analysis?.hold_remaining_sec !== undefined
-                  ? `HOLD: ${Math.floor(analysis.hold_remaining_sec / 60)}m ${analysis.hold_remaining_sec % 60}s (${timeframe.toUpperCase()})`
-                  : `LOCKED FOR ${timeframe.toUpperCase()} CANDLE`}
+              <span className="text-blue-300 font-mono font-bold flex items-center gap-1">
+                <Clock className="w-3 h-3 text-blue-400" />
+                <span>HOLD: {formatHoldTimer(holdRemainingSec)} ({timeframe.toUpperCase()})</span>
               </span>
             </div>
           )}
@@ -724,11 +865,11 @@ export default function LiveSignalNotificationPanel({
       )}
 
       {/* Vertical Navigation Signal Feed History (Stretches down to bottom) */}
-      <div className="flex-1 min-h-0 flex flex-col space-y-2 overflow-hidden">
+      <div className="flex-1 min-h-[180px] flex flex-col space-y-2 shrink-0">
         <h4 className="text-[11px] font-bold text-slate-400 font-sans uppercase tracking-wider border-b border-slate-800 pb-1 shrink-0">
           Live Action History Log
         </h4>
-        <div className="flex-1 min-h-0 overflow-y-auto space-y-2 pr-1 scrollbar-thin">
+        <div className="max-h-[340px] overflow-y-auto space-y-2 pr-1.5 scrollbar-navigator">
           {notifications.slice(1).map((item) => (
             <div
               key={item.id}

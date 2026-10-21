@@ -41,15 +41,37 @@ body {
 
 /* Thin scrollbar for narrow panels */
 .scrollbar-thin::-webkit-scrollbar {
-  width: 4px;
+  width: 5px;
 }
 .scrollbar-thin::-webkit-scrollbar-track {
-  background: transparent;
+  background: rgba(15, 23, 42, 0.6);
+  border-radius: 3px;
 }
 .scrollbar-thin::-webkit-scrollbar-thumb {
-  background: #334155;
-  border-radius: 2px;
+  background: #475569;
+  border-radius: 3px;
 }
 .scrollbar-thin::-webkit-scrollbar-thumb:hover {
-  background: #475569;
+  background: #64748b;
+}
+
+/* Dedicated visible vertical scrollbar for Signal Navigator */
+.scrollbar-navigator {
+  scrollbar-width: thin;
+  scrollbar-color: #3b82f6 #0f172a;
+}
+.scrollbar-navigator::-webkit-scrollbar {
+  width: 7px;
+}
+.scrollbar-navigator::-webkit-scrollbar-track {
+  background: #0f172a;
+  border-radius: 4px;
+}
+.scrollbar-navigator::-webkit-scrollbar-thumb {
+  background: #334155;
+  border-radius: 4px;
+  border: 1px solid #1e293b;
+}
+.scrollbar-navigator::-webkit-scrollbar-thumb:hover {
+  background: #3b82f6;
 }

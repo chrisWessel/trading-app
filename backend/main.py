@@ -484,7 +484,7 @@ def get_chart_data(symbol: str = Query("XAU/USD"), timeframe: str = Query("5m"),
 # The strategy is execution-driven on the 1-minute, so this endpoint always
 # pulls 1m candles regardless of the timeframe the chart is displaying.
 
-ICT_CACHE_TTL_SECONDS = 5.0
+ICT_CACHE_TTL_SECONDS = 2.5
 ICT_CACHE: Dict[str, Tuple[float, Dict[str, Any]]] = {}
 ICT_CACHE_LOCK = threading.Lock()
 ICT_1M_LIMIT = 1200          # ~20h, enough to cover an Asia session
@@ -494,10 +494,10 @@ ICT_DAILY_LIMIT = 30
 @app.get("/api/ict/analysis")
 def get_ict_analysis(
     symbol: str = Query("XAU/USD", description="Trading symbol"),
-    timeframe: str = Query("1m", description="Chart timeframe (informational only)")
+    timeframe: str = Query("1m", description="Chart timeframe")
 ):
-    """Session status, liquidity, displacement, FVG/IFVG state and trade signal."""
-    cache_key = symbol.upper()
+    """Session status, liquidity, displacement, FVG/IFVG state and trade signal synchronized with Signal Navigator."""
+    cache_key = f"{symbol.upper()}:{timeframe}"
     with ICT_CACHE_LOCK:
         now = time.monotonic()
         cached = ICT_CACHE.get(cache_key)
@@ -525,6 +525,57 @@ def get_ict_analysis(
     )
     result["candles_1m_returned"] = len(candles_1m)
     result["daily_candles_returned"] = len(daily_rows)
+
+    # ── Synchronize ICT Strategy Bias & Hold Timer with Signal Navigator ──
+    # Rule: BUY is ALWAYS BULLISH, SELL is ALWAYS BEARISH, locked for the timeframe interval.
+    try:
+        sig_sync = analyze_signal_conditions(symbol=symbol, timeframe=timeframe)
+        sync_type = sig_sync.get("signal_type", "NEUTRAL")
+        is_buy = sync_type == "BUY/LONG"
+        is_sell = sync_type == "SELL/SHORT"
+        unified_bias = "BULLISH" if is_buy else ("BEARISH" if is_sell else "NEUTRAL")
+        unified_dir = "LONG" if is_buy else ("SHORT" if is_sell else "NONE")
+        hold_rem = sig_sync.get("hold_remaining_sec", 0)
+        hold_tot = sig_sync.get("hold_total_sec", 300)
+        prob = sig_sync.get("probability", 82)
+        tp_params = sig_sync.get("trade_params", {})
+
+        if unified_bias != "NEUTRAL":
+            if isinstance(result.get("displacement"), dict):
+                result["displacement"]["direction"] = unified_bias
+            if isinstance(result.get("htf"), dict):
+                result["htf"]["bias"] = unified_bias
+            if isinstance(result.get("asia_trend"), dict):
+                result["asia_trend"]["asia_trend"] = unified_bias
+            if isinstance(result.get("sweep"), dict) and result["sweep"] is not None:
+                result["sweep"]["expected_direction"] = unified_dir
+            if isinstance(result.get("signal"), dict):
+                result["signal"]["bias"] = unified_bias
+                result["signal"]["signal_type"] = sync_type
+                result["signal"]["hold_remaining_sec"] = hold_rem
+                result["signal"]["hold_total_sec"] = hold_tot
+                result["signal"]["probability"] = prob
+                if result["signal"].get("direction") in ("LONG", "SHORT") and result["signal"]["direction"] != unified_dir:
+                    result["signal"]["direction"] = unified_dir
+                    result["signal"]["entry"] = tp_params.get("entry", result["signal"].get("entry"))
+                    result["signal"]["stop_loss"] = tp_params.get("stop_loss", result["signal"].get("stop_loss"))
+                    result["signal"]["take_profit"] = tp_params.get("tp1", result["signal"].get("take_profit"))
+
+        result["signal_sync"] = {
+            "signal_type": sync_type,
+            "bias": unified_bias,
+            "direction": unified_dir,
+            "timeframe": timeframe,
+            "probability": prob,
+            "hold_remaining_sec": hold_rem,
+            "hold_total_sec": hold_tot,
+            "entry": tp_params.get("entry"),
+            "stop_loss": tp_params.get("stop_loss"),
+            "tp1": tp_params.get("tp1"),
+            "tp2": tp_params.get("tp2"),
+        }
+    except Exception as sync_err:
+        print("ICT signal sync notice:", sync_err)
 
     with ICT_CACHE_LOCK:
         ICT_CACHE[cache_key] = (time.monotonic(), result)

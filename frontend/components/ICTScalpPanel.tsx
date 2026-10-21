@@ -9,6 +9,7 @@ import {
 import { API_BASE_URL } from '@/lib/apiConfig';
 import type { SessionWindow, NextKillzone } from '@/components/SessionRibbon';
 import ICTStrategyGuide from '@/components/ICTStrategyGuide';
+import { TIMEFRAME_HOLD_SECONDS, formatHoldTimer, type LockedSignalState } from '@/components/LiveSignalNotificationPanel';
 
 // ─── Types (mirror backend/ict_engine.py) ─────────────────────────────────────
 
@@ -358,6 +359,19 @@ interface IctAnalysis {
   htf: HtfInfo;
   state_machine_state: string;
   signal: IctSignal;
+  signal_sync?: {
+    signal_type: string;
+    bias: 'BULLISH' | 'BEARISH' | 'NEUTRAL';
+    direction: string;
+    timeframe: string;
+    probability: number;
+    hold_remaining_sec: number;
+    hold_total_sec: number;
+    entry?: number;
+    stop_loss?: number;
+    tp1?: number;
+    tp2?: number;
+  };
   message?: string;
 }
 
@@ -627,6 +641,42 @@ export default function ICTScalpPanel({ symbol, timeframe, onPublish }: Props) {
   const [copiedLevels, setCopiedLevels] = useState(false);
   const [copiedField, setCopiedField] = useState<string | null>(null);
 
+  // ── Unified Signal & Interval Hold Timer Sync (shared with Signal Navigator) ──
+  const [syncedLock, setSyncedLock] = useState<LockedSignalState | null>(null);
+  const [ictHoldSec, setIctHoldSec] = useState<number>(TIMEFRAME_HOLD_SECONDS[timeframe] || 300);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const existing = (window as any).__wessignalActiveSignal as LockedSignalState | undefined;
+    if (existing && existing.symbol.toUpperCase() === symbol.toUpperCase() && existing.timeframe === timeframe) {
+      setSyncedLock(existing);
+    }
+    const onSync = (e: Event) => {
+      const detail = (e as CustomEvent<LockedSignalState>).detail;
+      if (detail && detail.symbol.toUpperCase() === symbol.toUpperCase() && detail.timeframe === timeframe) {
+        setSyncedLock(detail);
+      }
+    };
+    window.addEventListener('wessignal-signal-sync', onSync);
+    return () => window.removeEventListener('wessignal-signal-sync', onSync);
+  }, [symbol, timeframe]);
+
+  useEffect(() => {
+    const tick = setInterval(() => {
+      const activeWinLock = typeof window !== 'undefined' ? ((window as any).__wessignalActiveSignal as LockedSignalState | undefined) : undefined;
+      const lock = (activeWinLock && activeWinLock.symbol.toUpperCase() === symbol.toUpperCase() && activeWinLock.timeframe === timeframe)
+        ? activeWinLock
+        : syncedLock;
+      if (lock) {
+        const rem = Math.max(0, Math.ceil((lock.lockedAtMs + lock.holdTotalSec * 1000 - Date.now()) / 1000));
+        setIctHoldSec(rem);
+      } else {
+        setIctHoldSec((prev) => (prev > 1 ? prev - 1 : TIMEFRAME_HOLD_SECONDS[timeframe] || 300));
+      }
+    }, 1000);
+    return () => clearInterval(tick);
+  }, [symbol, timeframe, syncedLock]);
+
   const fetchAnalysis = useCallback(async () => {
     try {
       const res = await fetch(
@@ -717,19 +767,27 @@ export default function ICTScalpPanel({ symbol, timeframe, onPublish }: Props) {
     displacement_zone: dispZone, london_expansion: londonExp, htf_dol: dol, ny_scenario: nyScn,
   } = data;
   const isLive = session.in_killzone;
-  const isLong = signal.direction === 'LONG';
   const ready = signal.status === 'ENTRY_READY';
+
+  // Unified directional bias & interval hold timer synchronized with Signal Navigator
+  // Rule: BUY is ALWAYS BULLISH, SELL is ALWAYS BEARISH, locked for the selected timeframe interval!
+  const activeSignalType =
+    (syncedLock && syncedLock.symbol.toUpperCase() === symbol.toUpperCase() && syncedLock.timeframe === timeframe)
+      ? syncedLock.signal_type
+      : (data.signal_sync?.signal_type || (displacement.direction === 'BULLISH' ? 'BUY/LONG' : 'SELL/SHORT'));
+
+  const unifiedBias: 'BULLISH' | 'BEARISH' = activeSignalType === 'BUY/LONG' ? 'BULLISH' : 'BEARISH';
+  const unifiedActionWord = unifiedBias === 'BULLISH' ? 'BUY' : 'SELL';
+  const unifiedDirectionWord = unifiedBias === 'BULLISH' ? 'LONG' : 'SHORT';
 
   const sessionBorder = isLive
     ? 'border-emerald-600/60 bg-emerald-950/40'
     : 'border-slate-700 bg-slate-950/60';
   const sessionText = isLive ? 'text-emerald-300' : 'text-slate-300';
 
-  const dirAccent = signal.direction === 'LONG'
+  const dirAccent = unifiedBias === 'BULLISH'
     ? 'text-emerald-400 border-emerald-700/60 bg-emerald-950/40'
-    : signal.direction === 'SHORT'
-      ? 'text-rose-400 border-rose-700/60 bg-rose-950/40'
-      : 'text-slate-400 border-slate-700 bg-slate-950/60';
+    : 'text-rose-400 border-rose-700/60 bg-rose-950/40';
 
   const handleRunAudit = async () => {
     setAuditing(true);
@@ -1158,14 +1216,20 @@ export default function ICTScalpPanel({ symbol, timeframe, onPublish }: Props) {
           <div className="flex items-center gap-2.5">
             <Crosshair className="w-5 h-5" />
             <div>
-              <div className="text-lg font-black tracking-tight">
-                {signal.status === 'ENTRY_READY' && `${signal.direction} — ENTRY READY`}
-                {signal.status === 'EXECUTED' && `${signal.direction} — EXECUTED`}
-                {signal.status === 'CANCELLED - RISK LIMIT EXCEEDED' && `${signal.direction} — CANCELLED (RISK LIMIT EXCEEDED)`}
-                {signal.status === 'CANCELLED - MIN RR NOT MET' && `${signal.direction} — CANCELLED (MIN R:R NOT MET)`}
-                {signal.status === 'ENTRY_CANCELLED' && `${signal.direction} — ENTRY CANCELLED`}
-                {signal.status === 'INHIBITED_TRAP' && `${signal.direction} — BLOCKED BY TRAP FILTER`}
-                {signal.status === 'WAIT' && 'NO TRADE — WAIT'}
+              <div className="text-lg font-black tracking-tight flex flex-wrap items-center gap-2">
+                <span>
+                  {unifiedBias === 'BULLISH' ? '🟢 BULLISH (BUY / LONG)' : '🔴 BEARISH (SELL / SHORT)'}
+                  {signal.status === 'ENTRY_READY' && ' — ENTRY READY'}
+                  {signal.status === 'EXECUTED' && ' — EXECUTED'}
+                  {signal.status === 'CANCELLED - RISK LIMIT EXCEEDED' && ' — CANCELLED (RISK LIMIT EXCEEDED)'}
+                  {signal.status === 'CANCELLED - MIN RR NOT MET' && ' — CANCELLED (MIN R:R NOT MET)'}
+                  {signal.status === 'ENTRY_CANCELLED' && ' — ENTRY CANCELLED'}
+                  {signal.status === 'INHIBITED_TRAP' && ' — BLOCKED BY TRAP FILTER'}
+                  {signal.status === 'WAIT' && ` · [${timeframe.toUpperCase()} BIAS LOCKED]`}
+                </span>
+                <span className="text-xs px-2.5 py-0.5 rounded-full bg-slate-950/90 border border-blue-700/70 text-blue-300 font-mono font-bold">
+                  HOLD TIMER: {formatHoldTimer(ictHoldSec)} ({timeframe.toUpperCase()})
+                </span>
               </div>
               <div className="text-[11px] opacity-90">
                 {ready
@@ -1277,8 +1341,8 @@ export default function ICTScalpPanel({ symbol, timeframe, onPublish }: Props) {
           <div className="space-y-2 text-xs">
             <div className="flex justify-between items-center">
               <span className="text-slate-400">ASIA_TREND</span>
-              <span className={`font-black ${trend.asia_trend === 'BULLISH' ? 'text-emerald-300' : trend.asia_trend === 'BEARISH' ? 'text-rose-300' : 'text-slate-300'}`}>
-                {trend.asia_trend}
+              <span className={`font-black ${unifiedBias === 'BULLISH' ? 'text-emerald-300' : 'text-rose-300'}`}>
+                {unifiedBias} ({unifiedActionWord})
               </span>
             </div>
             <div className="flex flex-wrap gap-1.5 text-[10px] font-bold">
@@ -1373,13 +1437,18 @@ export default function ICTScalpPanel({ symbol, timeframe, onPublish }: Props) {
                 {displacement.volume_ratio.toFixed(2)}×
               </span>
             </div>
-            <div className="flex justify-between">
+            <div className="flex justify-between items-center">
               <span className="text-slate-400">Direction</span>
-              <span className="text-slate-200 font-bold">{displacement.direction}</span>
+              <span className={`font-black flex items-center gap-1.5 ${unifiedBias === 'BULLISH' ? 'text-emerald-300' : 'text-rose-300'}`}>
+                <span>{unifiedBias} ({unifiedActionWord})</span>
+                <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-950 text-blue-300 border border-blue-800 font-mono">
+                  HOLD: {formatHoldTimer(ictHoldSec)} [{timeframe.toUpperCase()}]
+                </span>
+              </span>
             </div>
             <div className="h-1.5 bg-slate-800 rounded overflow-hidden">
               <div
-                className={`h-full ${displacement.confirmed ? 'bg-emerald-400' : 'bg-amber-500'}`}
+                className={`h-full ${unifiedBias === 'BULLISH' ? 'bg-emerald-400' : 'bg-rose-500'}`}
                 style={{ width: `${Math.min(100, (displacement.body_ratio / displacement.threshold) * 100)}%` }}
               />
             </div>
@@ -1387,7 +1456,7 @@ export default function ICTScalpPanel({ symbol, timeframe, onPublish }: Props) {
               Latest sweep:{' '}
               {sweep ? (
                 <span className="text-amber-300 font-bold">
-                  {sweep.side.replace('_', '-')} {sweep.level} wick {sweep.wick_points} → expect {sweep.expected_direction}
+                  {sweep.side.replace('_', '-')} {sweep.level} wick {sweep.wick_points} → expect {unifiedDirectionWord} ({unifiedBias})
                 </span>
               ) : (
                 <span className="text-slate-500">none in last 5 candles</span>
@@ -1398,12 +1467,15 @@ export default function ICTScalpPanel({ symbol, timeframe, onPublish }: Props) {
 
         <Card title="Higher Timeframe Bias" icon={<Activity className="w-3.5 h-3.5 text-violet-400" />}>
           <div className="space-y-1.5 text-xs">
-            <div className="flex justify-between">
-              <span className="text-slate-400">Daily bias</span>
-              <span className={`font-black ${
-                htf.bias === 'BULLISH' ? 'text-emerald-300' : htf.bias === 'BEARISH' ? 'text-rose-300' : 'text-slate-300'
+            <div className="flex justify-between items-center">
+              <span className="text-slate-400">Timeframe bias</span>
+              <span className={`font-black flex items-center gap-1.5 ${
+                unifiedBias === 'BULLISH' ? 'text-emerald-300' : 'text-rose-300'
               }`}>
-                {htf.bias}
+                <span>{unifiedBias} ({unifiedActionWord})</span>
+                <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-950 text-blue-300 border border-blue-800 font-mono">
+                  {formatHoldTimer(ictHoldSec)}
+                </span>
               </span>
             </div>
             <div className="flex justify-between">
