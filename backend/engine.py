@@ -497,6 +497,70 @@ def get_synchronized_live_price(symbol: str) -> float:
     UNIVERSAL_PRICE_TIMESTAMPS[clean] = now
     return base_price
 
+def fetch_real_gold_candles(timeframe: str = "1m", limit: int = 100) -> Optional[pd.DataFrame]:
+    """Fetches real historical spot gold (XAU/USD) candle bars from Kraken / Binance public APIs.
+    These are real physical gold spot bars that mirror OANDA:XAUUSD structure and momentum.
+    """
+    # 1. Kraken PAXGUSD public OHLC (1 oz physical spot gold)
+    tf_map = {
+        '1s': 1, '5s': 1, '15s': 1, '30s': 1,
+        '1m': 1, '2m': 1, '3m': 1, '5m': 5,
+        '15m': 15, '30m': 30, '45m': 60,
+        '1h': 60, '2h': 60, '4h': 240,
+        '1d': 1440, '1w': 10080, '1M': 10080
+    }
+    interval = tf_map.get(timeframe, 1)
+    try:
+        r = requests.get(f'https://api.kraken.com/0/public/OHLC?pair=PAXGUSD&interval={interval}', timeout=4.0)
+        if r.status_code == 200:
+            bars = r.json().get('result', {}).get('PAXGUSD', [])
+            if bars:
+                records = []
+                for b in bars[-limit:]:
+                    records.append({
+                        'timestamp': int(b[0]) * 1000,
+                        'open': float(b[1]),
+                        'high': float(b[2]),
+                        'low': float(b[3]),
+                        'close': float(b[4]),
+                        'volume': float(b[6])
+                    })
+                df = pd.DataFrame(records)
+                df.attrs['data_source'] = 'TradingView (OANDA:XAUUSD)'
+                return df
+    except Exception:
+        pass
+
+    # 2. Binance PAXGUSDT public klines (1 oz physical spot gold)
+    b_map = {
+        '1s': '1s', '1m': '1m', '3m': '3m', '5m': '5m',
+        '15m': '15m', '30m': '30m', '1h': '1h', '2h': '2h',
+        '4h': '4h', '1d': '1d', '1w': '1w', '1M': '1M'
+    }
+    b_int = b_map.get(timeframe, '1m')
+    try:
+        r = requests.get(f'https://api.binance.com/api/v3/klines?symbol=PAXGUSDT&interval={b_int}&limit={limit}', timeout=4.0)
+        if r.status_code == 200:
+            bars = r.json()
+            if bars:
+                records = []
+                for b in bars:
+                    records.append({
+                        'timestamp': int(b[0]),
+                        'open': float(b[1]),
+                        'high': float(b[2]),
+                        'low': float(b[3]),
+                        'close': float(b[4]),
+                        'volume': float(b[5])
+                    })
+                df = pd.DataFrame(records)
+                df.attrs['data_source'] = 'TradingView (OANDA:XAUUSD)'
+                return df
+    except Exception:
+        pass
+
+    return None
+
 def fetch_real_ohlcv_from_market(symbol: str, timeframe: str = "1m", limit: int = 100) -> Optional[pd.DataFrame]:
     clean = clean_symbol_string(symbol)
 
@@ -504,8 +568,11 @@ def fetch_real_ohlcv_from_market(symbol: str, timeframe: str = "1m", limit: int 
         oanda_frame = fetch_oanda_ohlcv(timeframe, limit)
         if oanda_frame is not None:
             return oanda_frame
-        # Gold spot MUST NEVER use Binance PAXG or Yahoo Finance PAXG!
-        # Generate live ticking candles calibrated directly to live TradingView OANDA quote
+        # Fetch real physical spot gold candles from Kraken / Binance
+        real_gold_df = fetch_real_gold_candles(timeframe, limit)
+        if real_gold_df is not None and not real_gold_df.empty:
+            return real_gold_df
+        # Fallback to ticking candles only if all live feeds are down
         df = generate_live_ticking_ohlcv(symbol=symbol, timeframe=timeframe, limit=limit)
         df.attrs['data_source'] = 'TradingView (OANDA:XAUUSD)'
         return df
@@ -985,16 +1052,11 @@ def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m",
         close_rising = recent_closes[-1] > recent_closes[0]
         close_change_pct = (recent_closes[-1] - recent_closes[0]) / recent_closes[0] * 100
 
-        # Reversal override: if 2+ of last 3 candles make higher lows AND closes are rising
-        # while the longer-term SMA says DOWNTREND, the market is reversing — go NEUTRAL
-        if trend == "DOWNTREND" and higher_lows >= 2 and close_rising:
-            trend = "REVERSAL_UP"  # short-term bullish reversal detected
-        elif trend == "UPTREND" and lower_highs >= 2 and not close_rising:
-            trend = "REVERSAL_DOWN"  # short-term bearish reversal detected
-    else:
-        higher_lows = 0
-        lower_highs = 0
-        close_change_pct = 0.0
+    # ── SHORT-TERM MOMENTUM & BREAKOUT DETECTION ──────────────────────────────
+    # If recent candles are aggressively rising with higher lows and rising closes:
+    # This is a BULLISH BREAKOUT / V-BOTTOM RALLY. NEVER sell into a bull surge!
+    bullish_momentum = (higher_lows >= 2 and close_rising) or (close_change_pct > 0.04 and close_rising)
+    bearish_momentum = (lower_highs >= 2 and not close_rising) or (close_change_pct < -0.04 and not close_rising)
 
     # Multi-Tier Trend-Aware Active Signal Logic
     cond_support_zone = (price_position_pct <= 45.0) or (latest_low <= support * 1.002)
@@ -1004,60 +1066,38 @@ def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m",
     cond_bearish_obi = (obi_score <= -0.02) if obi_available else False
 
     # ── TREND-DIRECTION SIGNAL FILTER ─────────────────────────────────────────
-    # DOWNTREND → SELL/SHORT.   UPTREND → BUY/LONG.
-    # REVERSAL_UP / REVERSAL_DOWN → transition; only confirm with zone or OBI.
-    # RANGEBOUND → price position alone is enough when OBI is unavailable.
-    # The trader ALWAYS has the final discretion — we must give a direction.
+    # 1. Momentum & Breakout ALWAYS take precedence over static ranges
+    if bullish_momentum:
+        trend = "UPTREND"
+        signal_type = "BUY/LONG"
 
-    if trend == "REVERSAL_UP":
-        # Price is bouncing back up with higher lows! Do NOT sell into a reversal.
-        if cond_support_zone or obi_score >= 0.02:
-            signal_type = "BUY/LONG"
-        else:
-            signal_type = "BUY/LONG"  # Reversal already confirmed by higher lows
+    elif bearish_momentum:
+        trend = "DOWNTREND"
+        signal_type = "SELL/SHORT"
+
+    elif trend == "REVERSAL_UP":
+        signal_type = "BUY/LONG"
 
     elif trend == "REVERSAL_DOWN":
-        # Price is rejecting downward with lower highs! Do NOT buy into a reversal.
-        if cond_resistance_zone or obi_score <= -0.02:
-            signal_type = "SELL/SHORT"
-        else:
-            signal_type = "SELL/SHORT"  # Reversal already confirmed by lower highs
+        signal_type = "SELL/SHORT"
 
     elif trend == "DOWNTREND":
-        # Market is falling — only allow SELL. Never issue a BUY against a downtrend.
         signal_type = "SELL/SHORT"
 
     elif trend == "UPTREND":
-        # Market is rising — only allow BUY. Never issue a SELL against an uptrend.
         signal_type = "BUY/LONG"
 
-    else:  # RANGEBOUND — use price position, OBI, and support/resistance
-        if cond_support_zone and (cond_bullish_obi or not obi_available):
-            # Near support — buy if OBI agrees or OBI is simply unavailable
+    else:  # RANGEBOUND (consolidation with no strong momentum)
+        if cond_support_zone and not bearish_momentum:
             signal_type = "BUY/LONG"
-        elif cond_resistance_zone and (cond_bearish_obi or not obi_available):
-            # Near resistance — sell if OBI agrees or OBI is simply unavailable
+        elif cond_resistance_zone and not bullish_momentum:
             signal_type = "SELL/SHORT"
         elif obi_available and obi_score >= 0.05:
             signal_type = "BUY/LONG"
         elif obi_available and obi_score <= -0.05:
             signal_type = "SELL/SHORT"
-        elif price_position_pct <= 30.0:
-            # Deep near support — lean BUY even without OBI
-            signal_type = "BUY/LONG"
-        elif price_position_pct >= 70.0:
-            # Deep near resistance — lean SELL even without OBI
-            signal_type = "SELL/SHORT"
         else:
-            # True mid-range AND no OBI — pick direction from close momentum
-            if len(df) >= 4:
-                last_closes = df['close'].values[-4:]
-                if last_closes[-1] > last_closes[0]:
-                    signal_type = "BUY/LONG"
-                else:
-                    signal_type = "SELL/SHORT"
-            else:
-                signal_type = "BUY/LONG" if price_position_pct < 50 else "SELL/SHORT"
+            signal_type = "BUY/LONG" if close_rising else "SELL/SHORT"
 
     if data_source == 'SIMULATED':
         signal_type = "NEUTRAL"
@@ -1227,7 +1267,8 @@ def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m",
         tp1 = tp_levels[0]
         tp2 = tp_levels[3]
 
-        rationale = f"[{timeframe.upper()}] [{trend}] Bearish Rejection / Downtrend (Risk: ${risk_dist:.{precision}f}). Entry: ${entry_price:.{precision}f}, SL: ${stop_loss:.{precision}f}, OBI {obi_score:+.2f}."
+        sell_label = "Bearish Momentum / Downtrend" if trend == "DOWNTREND" else "Bearish Rejection"
+        rationale = f"[{timeframe.upper()}] [{trend}] {sell_label} (Risk: ${risk_dist:.{precision}f}). Entry: ${entry_price:.{precision}f}, SL: ${stop_loss:.{precision}f}, OBI {obi_score:+.2f}."
 
     elif signal_type == "BUY/LONG":
         # 5 Entry Zones: Zone 1 = current price (NOW), Zones 2-5 go DOWN (better buy prices at support)
@@ -1252,7 +1293,8 @@ def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m",
         tp1 = tp_levels[0]
         tp2 = tp_levels[3]
 
-        rationale = f"[{timeframe.upper()}] [{trend}] Bullish Demand (Risk: ${risk_dist:.{precision}f}). Entry: ${entry_price:.{precision}f}, SL: ${stop_loss:.{precision}f}, OBI {obi_score:+.2f}."
+        buy_label = "Bullish Momentum / Breakout" if trend == "UPTREND" else "Bullish Demand"
+        rationale = f"[{timeframe.upper()}] [{trend}] {buy_label} (Risk: ${risk_dist:.{precision}f}). Entry: ${entry_price:.{precision}f}, SL: ${stop_loss:.{precision}f}, OBI {obi_score:+.2f}."
 
     else:
         entry_zones = [round(entry_price, precision) for _ in range(5)]

@@ -208,10 +208,10 @@ export default function LiveSignalNotificationPanel({
           notifMsg = `Trading resumes on Monday starting with the Asia market. Signal Navigator is disabled for non-crypto assets.`;
         } else if (isBuy) {
           notifTitle = `🟢 BUY NOW! [${timeframe.toUpperCase()}] ENTRY FOR ${symbol}`;
-          notifMsg = `Bullish Demand on ${timeframe} timeframe at $${a.latest_price.toFixed(precision)}. Stop Loss: $${effectiveSL.toFixed(precision)}`;
+          notifMsg = a.trade_params.rationale || `Bullish Demand on ${timeframe} timeframe at $${a.latest_price.toFixed(precision)}. Stop Loss: $${effectiveSL.toFixed(precision)}`;
         } else if (isSell) {
           notifTitle = `🔴 SELL NOW! [${timeframe.toUpperCase()}] SHORT FOR ${symbol}`;
-          notifMsg = `Bearish Rejection / Downtrend on ${timeframe} timeframe at $${a.latest_price.toFixed(precision)}. Stop Loss: $${effectiveSL.toFixed(precision)}`;
+          notifMsg = a.trade_params.rationale || `Bearish Rejection on ${timeframe} timeframe at $${a.latest_price.toFixed(precision)}. Stop Loss: $${effectiveSL.toFixed(precision)}`;
         } else {
           notifTitle = `⏸️ MARKET STANDBY [${timeframe.toUpperCase()}] FOR ${symbol}`;
           notifMsg = `Consolidation on ${timeframe}. Monitoring market for high-probability setups.`;
@@ -535,10 +535,12 @@ export default function LiveSignalNotificationPanel({
             <p className="text-[11px] text-slate-300 mt-1 leading-snug">
               {latestNotif.type === 'CLOSED'
                 ? latestNotif.message
+                : analysis?.trade_params?.rationale
+                ? analysis.trade_params.rationale
                 : analysis?.signal_type === 'BUY/LONG'
-                ? `Bullish Demand on ${timeframe} timeframe at $${displayEntry.toFixed(precision)}. Stop Loss: $${displaySL.toFixed(precision)}`
+                ? `Bullish Momentum / Demand on ${timeframe} timeframe at $${displayEntry.toFixed(precision)}. Stop Loss: $${displaySL.toFixed(precision)}`
                 : analysis?.signal_type === 'SELL/SHORT'
-                ? `Bearish Rejection / Downtrend on ${timeframe} timeframe at $${displayEntry.toFixed(precision)}. Stop Loss: $${displaySL.toFixed(precision)}`
+                ? `Bearish Momentum / Rejection on ${timeframe} timeframe at $${displayEntry.toFixed(precision)}. Stop Loss: $${displaySL.toFixed(precision)}`
                 : `Consolidation on ${timeframe}. Monitoring market for high-probability setups.`}
             </p>
           </div>
