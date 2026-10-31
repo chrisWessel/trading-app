@@ -3,7 +3,7 @@
   "webhook_url": "https://minneapolis-citizen-varied-musical.trycloudflare.com/webhook/mt5",
   "health_url": "https://minneapolis-citizen-varied-musical.trycloudflare.com/health",
   "port": 8001,
-  "updated_at_utc": "2026-10-31T07:09:22.921640+00:00",
+  "updated_at_utc": "2026-10-31T07:11:17.151257+00:00",
   "mt5_connected": true,
   "mt5_terminal_name": "MetaTrader 5 EXNESS",
   "mt5_account_login": 223995620,
