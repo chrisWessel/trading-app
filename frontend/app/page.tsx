@@ -76,12 +76,36 @@ export default function DashboardPage() {
   // Top-level MT5 4-Button Execution & Cancel/Stop Bar State
   const [topLotSize, setTopLotSize] = useState<number>(0.01);
   const [topDirection, setTopDirection] = useState<'BUY' | 'SELL'>('BUY');
+  const [topStopLoss, setTopStopLoss] = useState<number | undefined>(undefined);
+  const [topTakeProfit, setTopTakeProfit] = useState<number | undefined>(undefined);
   const [topMt5Syncing, setTopMt5Syncing] = useState<boolean>(false);
   const [topMt5Ordering, setTopMt5Ordering] = useState<boolean>(false);
   const [topMt5Cancelling, setTopMt5Cancelling] = useState<boolean>(false);
   const [topMt5Stopping, setTopMt5Stopping] = useState<boolean>(false);
   const [topMt5Status, setTopMt5Status] = useState<string>('MT5 Bridge Ready (Auto-Stop SL/TP Active)');
   const [topMt5Receipt, setTopMt5Receipt] = useState<any | null>(null);
+
+  // Sync Top Command Bar direction & Risk-Calculated SL/TP with the live Signal Navigator
+  useEffect(() => {
+    const onLiveParams = (e: Event) => {
+      const detail = (e as CustomEvent)?.detail;
+      if (!detail) return;
+      if (detail.direction === 'BUY' || detail.direction === 'SELL') {
+        setTopDirection(detail.direction);
+      }
+      if (typeof detail.stopLoss === 'number' && detail.stopLoss > 0) {
+        setTopStopLoss(detail.stopLoss);
+      }
+      if (typeof detail.takeProfit === 'number' && detail.takeProfit > 0) {
+        setTopTakeProfit(detail.takeProfit);
+      }
+      if (typeof detail.lotSize === 'number' && detail.lotSize > 0) {
+        setTopLotSize(detail.lotSize);
+      }
+    };
+    window.addEventListener('wessignal-live-params', onLiveParams);
+    return () => window.removeEventListener('wessignal-live-params', onLiveParams);
+  }, []);
 
   const handleTopExecuteSync = async () => {
     setTopMt5Syncing(true);
@@ -132,6 +156,8 @@ export default function DashboardPage() {
       symbol,
       action: dir,
       volume: topLotSize,
+      stop_loss: topStopLoss && topStopLoss > 0 ? topStopLoss : undefined,
+      take_profit: topTakeProfit && topTakeProfit > 0 ? topTakeProfit : undefined,
       timeframe,
       dry_run: false,
     };

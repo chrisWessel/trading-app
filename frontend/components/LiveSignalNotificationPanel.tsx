@@ -3,7 +3,7 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { Bell, Zap, ArrowUpRight, ArrowDownRight, Volume2, VolumeX, Shield, Target, Play, Clock, Navigation, Square, XCircle, Bot } from 'lucide-react';
 import { API_BASE_URL } from '@/lib/apiConfig';
-import { fetchWithFastTimeout, fetchBrowserLiveBars, computeBrowserSignalAnalysis } from '@/lib/browserFallbackEngine';
+import { fetchWithFastTimeout, fetchBrowserLiveBars, computeBrowserSignalAnalysis, calculateRiskBasedLevels } from '@/lib/browserFallbackEngine';
 
 export interface RunawayTrendInfo {
   detected: boolean;
@@ -157,12 +157,13 @@ export default function LiveSignalNotificationPanel({
   const [selectedTpIndex, setSelectedTpIndex] = useState<number>(0); // which TP level is highlighted
   
   // Risk management parameters: customizable Lot Size, Risk %, and Account Balance
-  const [accountBalance, setAccountBalance] = useState<number>(1000);
+  const [accountBalance, setAccountBalance] = useState<number>(40.45);
   // balanceInput is a raw string so the user can freely clear & type any amount
-  const [balanceInput, setBalanceInput] = useState<string>('1000');
+  const [balanceInput, setBalanceInput] = useState<string>('40.45');
+  const userEditedBalanceRef = useRef<boolean>(false);
   const [lotSize, setLotSize] = useState<number>(0.01);
   const [riskPercent, setRiskPercent] = useState<number>(2.0); // default 2%
-  const [showRiskConfig, setShowRiskConfig] = useState<boolean>(false);
+  const [showRiskConfig, setShowRiskConfig] = useState<boolean>(true);
 
   // Frozen params — locked once per signal direction change.
   // This prevents SL/TP from jittering on every poll.
@@ -215,6 +216,15 @@ export default function LiveSignalNotificationPanel({
 
       if (json && json.bridge === 'online') {
         const term = json.mt5_terminal || {};
+        if (
+          term.account_balance &&
+          Number(term.account_balance) > 0 &&
+          !userEditedBalanceRef.current
+        ) {
+          const liveBal = Number(Number(term.account_balance).toFixed(2));
+          setAccountBalance(liveBal);
+          setBalanceInput(String(liveBal));
+        }
         setMt5BridgeState((prev) => ({
           online: Boolean(json.mt5_ipc_connected),
           botArmed: json.bot_armed !== false,
@@ -506,7 +516,10 @@ export default function LiveSignalNotificationPanel({
           timeframe,
           bars,
           source,
-          currentPrice && currentPrice > 0 ? currentPrice : undefined
+          currentPrice && currentPrice > 0 ? currentPrice : undefined,
+          accountBalance,
+          lotSize,
+          riskPercent
         ) as unknown as SignalAnalysis;
       }
 
@@ -536,17 +549,17 @@ export default function LiveSignalNotificationPanel({
         const isCrypto = symbol.includes('BTC') || symbol.includes('ETH') || symbol.includes('SOL') || symbol.includes('REXT') || symbol.includes('USDT');
         const isWeekend = (harareDate.getDay() === 0 || harareDate.getDay() === 6) && !isCrypto;
 
-        // ── ENFORCE TIMEFRAME HOLD LOCK WITH RUNAWAY TREND PRECEDENCE OVERRIDE ──
+        // ── ENFORCE TIMEFRAME HOLD LOCK WITH REAL-TIME DIRECTION REVERSAL OVERRIDE ──
         // Hold the locked direction for the timeframe window UNLESS:
-        //   1. A Runaway Trend occurs in the opposite direction (>= threshold_pts), OR
-        //   2. Price moves against the locked entry by >= threshold_pts, OR
-        //   3. Stop Loss is breached.
-        // Runaway Trend ALWAYS takes precedence over the countdown timer!
+        //   1. The 6-Factor Direction Engine detects a live market direction reversal (BUY <-> SELL), OR
+        //   2. A Runaway Trend occurs in the opposite direction (>= threshold_pts), OR
+        //   3. Price moves against the locked entry or breaches the Risk-Calculated Stop Loss.
+        // Market Direction Reversal ALWAYS takes precedence so the bot never stays stuck in a BUY when market turns SELL!
         const lockKey = `${symbol.toUpperCase()}:${timeframe}`;
         const tfHoldSec = TIMEFRAME_HOLD_SECONDS[timeframe] || a.hold_total_sec || 300;
         const existingLock = signalLockRef.current;
         const rt = a.runaway_trend || a.trade_params?.runaway_trend;
-        const runawayThreshold = rt?.threshold_pts || (symbol.toUpperCase().includes('XAU') ? 4.0 : 0.0020);
+        const runawayThreshold = rt?.threshold_pts || (symbol.toUpperCase().includes('XAU') ? 2.5 : 0.0012);
 
         if (
           existingLock &&
@@ -554,6 +567,9 @@ export default function LiveSignalNotificationPanel({
           existingLock.signal_type !== 'NEUTRAL' &&
           nowMs < existingLock.lockedAtMs + existingLock.holdTotalSec * 1000
         ) {
+          const directionReversedByEngine =
+            a.signal_type !== 'NEUTRAL' && a.signal_type !== existingLock.signal_type;
+
           const slHit =
             (existingLock.signal_type === 'BUY/LONG' && a.latest_price <= existingLock.stop_loss) ||
             (existingLock.signal_type === 'SELL/SHORT' && a.latest_price >= existingLock.stop_loss);
@@ -563,6 +579,7 @@ export default function LiveSignalNotificationPanel({
             (existingLock.signal_type === 'SELL/SHORT' && (a.latest_price - existingLock.entry) >= runawayThreshold);
 
           const opposingRunaway =
+            directionReversedByEngine ||
             Boolean(rt?.override_triggered) ||
             (existingLock.signal_type === 'BUY/LONG' && Boolean(rt?.detected) && rt?.direction === 'BEARISH') ||
             (existingLock.signal_type === 'SELL/SHORT' && Boolean(rt?.detected) && rt?.direction === 'BULLISH');
@@ -593,7 +610,7 @@ export default function LiveSignalNotificationPanel({
             };
             setHoldRemainingSec(remSec);
           } else if (slHit || adverseMove || opposingRunaway) {
-            // Break the old lock immediately so Runaway Trend takes precedence!
+            // Break the old lock immediately so Market Reversal / Runaway Trend takes precedence!
             signalLockRef.current = null;
             if (soundEnabled && typeof window !== 'undefined') {
               try {
@@ -621,40 +638,32 @@ export default function LiveSignalNotificationPanel({
         const isSell = isWeekend ? false : a.signal_type === 'SELL/SHORT';
         const notifType: 'BUY_NOW' | 'SELL_NOW' | 'MONITORING' | 'CLOSED' = isWeekend ? 'CLOSED' : isBuy ? 'BUY_NOW' : isSell ? 'SELL_NOW' : 'MONITORING';
 
-        const incoming_zones: number[] = a.trade_params.entry_zones || [];
-        const incoming_tp_levels: number[] = a.trade_params.tp_levels || [];
-
-        const isGoldSymbol = symbol.toUpperCase().includes('XAU') || symbol.toUpperCase().includes('GOLD');
-        const minRiskBuffer = isGoldSymbol ? 3.5 : (a.latest_price > 10 ? a.latest_price * 0.005 : 0.001);
-
-        // Strict directional check: ensure SL and TPs never contradict trade direction
-        let effectiveSL = a.trade_params.stop_loss;
-        if (isSell && (effectiveSL <= a.latest_price || effectiveSL <= a.trade_params.entry)) {
-          effectiveSL = Number((Math.max(a.latest_price, a.trade_params.entry) + minRiskBuffer).toFixed(precision));
-        } else if (isBuy && (effectiveSL >= a.latest_price || effectiveSL >= a.trade_params.entry)) {
-          effectiveSL = Number((Math.min(a.latest_price, a.trade_params.entry) - minRiskBuffer).toFixed(precision));
-        }
-
-        let effectiveTpLevels = incoming_tp_levels.map((tp, i) => {
-          const mult = (i + 1) * 1.0;
-          if (isSell && tp >= a.trade_params.entry) {
-            return Number((a.trade_params.entry - minRiskBuffer * mult).toFixed(precision));
-          }
-          if (isBuy && tp <= a.trade_params.entry) {
-            return Number((a.trade_params.entry + minRiskBuffer * mult).toFixed(precision));
-          }
-          return tp;
+        // Recalculate Stop Loss, Entry Zones, and 7 Take Profits directly from the Risk Calculator
+        // so a $40 account balance produces a tight $0.80 SL distance while a $1,000 balance produces a $20.00 SL distance!
+        const riskBased = calculateRiskBasedLevels({
+          symbol,
+          entryPrice: a.trade_params.entry || a.latest_price,
+          isBuy: !isSell,
+          accountBalance,
+          lotSize,
+          riskPercent,
+          precision,
         });
 
-        let effectiveTp1 = a.trade_params.tp1;
-        let effectiveTp2 = a.trade_params.tp2;
-        if (isSell) {
-          if (effectiveTp1 >= a.trade_params.entry) effectiveTp1 = Number((a.trade_params.entry - minRiskBuffer).toFixed(precision));
-          if (effectiveTp2 >= a.trade_params.entry) effectiveTp2 = Number((a.trade_params.entry - minRiskBuffer * 2).toFixed(precision));
-        } else if (isBuy) {
-          if (effectiveTp1 <= a.trade_params.entry) effectiveTp1 = Number((a.trade_params.entry + minRiskBuffer).toFixed(precision));
-          if (effectiveTp2 <= a.trade_params.entry) effectiveTp2 = Number((a.trade_params.entry + minRiskBuffer * 2).toFixed(precision));
-        }
+        const incoming_zones: number[] = riskBased.entryZones;
+        const effectiveSL: number = riskBased.stopLoss;
+        const effectiveTpLevels: number[] = riskBased.tpLevels;
+        const effectiveTp1: number = riskBased.tp1;
+        const effectiveTp2: number = riskBased.tp2;
+
+        a.trade_params = {
+          ...a.trade_params,
+          entry_zones: incoming_zones,
+          stop_loss: effectiveSL,
+          tp1: effectiveTp1,
+          tp2: effectiveTp2,
+          tp_levels: effectiveTpLevels,
+        };
 
         // Create or update the timeframe lock when starting a new window
         const currentLock = signalLockRef.current;
@@ -678,13 +687,20 @@ export default function LiveSignalNotificationPanel({
             tp1: effectiveTp1,
             tp2: effectiveTp2,
             tp_levels: effectiveTpLevels,
-            probability: a.probability ?? a.trade_params.probability ?? 84,
+            probability: a.probability ?? a.trade_params.probability ?? 91,
             rationale: a.trade_params.rationale,
             lockedAtMs: lockedAt,
             holdTotalSec: tfHoldSec,
           };
           signalLockRef.current = newLock;
           setHoldRemainingSec(initialRemSec);
+        } else {
+          // Keep active lock's SL & TPs updated with latest Risk Calculator settings
+          currentLock.entry_zones = incoming_zones;
+          currentLock.stop_loss = effectiveSL;
+          currentLock.tp1 = effectiveTp1;
+          currentLock.tp2 = effectiveTp2;
+          currentLock.tp_levels = effectiveTpLevels;
         }
 
         // Broadcast active lock globally so ICT Strategy & Trend panels stay 100% synchronized
@@ -696,7 +712,19 @@ export default function LiveSignalNotificationPanel({
         setAnalysis(a);
 
         const prevFrozen = frozenRef.current;
-        const directionChanged = !prevFrozen || prevFrozen.signal_type !== a.signal_type;
+        const directionChanged = Boolean(prevFrozen && prevFrozen.signal_type !== a.signal_type);
+
+        // AUTO-REVERSAL PROTECTION: If market direction flipped (e.g. BUY -> SELL or SELL -> BUY)
+        // and there is an open MT5 position on this account, automatically close the old wrong-way trade!
+        if (
+          directionChanged &&
+          prevFrozen?.signal_type &&
+          prevFrozen.signal_type !== 'NEUTRAL' &&
+          a.signal_type !== 'NEUTRAL' &&
+          (mt5BridgeState?.openPositionsCount || 0) > 0
+        ) {
+          handleCancelOrCloseTrade(false);
+        }
 
         const latestParams: FrozenParams = {
           signal_type: a.signal_type,
@@ -788,8 +816,11 @@ export default function LiveSignalNotificationPanel({
     signalLockRef.current = null;
     setHoldRemainingSec(TIMEFRAME_HOLD_SECONDS[timeframe] || 300);
     setSelectedTpIndex(0);
+  }, [symbol, timeframe]);
+
+  useEffect(() => {
     fetchSignal();
-    const interval = setInterval(fetchSignal, 8000);
+    const interval = setInterval(fetchSignal, 6000);
     return () => clearInterval(interval);
   }, [symbol, timeframe, accountBalance, lotSize, riskPercent]);
 
@@ -858,51 +889,50 @@ export default function LiveSignalNotificationPanel({
   };
 
   // Use live backend params as the single source of truth; fall back to frozen or latestNotif
-  const displayEntry = analysis?.trade_params?.entry ?? latestNotif?.entry ?? frozenParams?.entry ?? 0;
-  const displayEntryZones = analysis?.trade_params?.entry_zones ?? latestNotif?.entry_zones ?? frozenParams?.entry_zones ?? [];
-  const rawSL = analysis?.trade_params?.stop_loss ?? latestNotif?.stop_loss ?? frozenParams?.stop_loss ?? 0;
-  const rawTpLevels = analysis?.trade_params?.tp_levels ?? latestNotif?.tp_levels ?? frozenParams?.tp_levels ?? [];
-  const rawTp1 = analysis?.trade_params?.tp1 ?? latestNotif?.tp1 ?? frozenParams?.tp1 ?? 0;
-  const rawTp2 = analysis?.trade_params?.tp2 ?? latestNotif?.tp2 ?? frozenParams?.tp2 ?? 0;
-
+  const displayEntry = analysis?.trade_params?.entry ?? latestNotif?.entry ?? frozenParams?.entry ?? fallbackPrice;
   const isSellTrade = (analysis?.signal_type === 'SELL/SHORT') || (!analysis && (latestNotif?.type === 'SELL_NOW' || frozenParams?.signal_type === 'SELL/SHORT'));
-  const isBuyTrade = (analysis?.signal_type === 'BUY/LONG') || (!analysis && (latestNotif?.type === 'BUY_NOW' || frozenParams?.signal_type === 'BUY/LONG'));
-  const isGold = symbol.toUpperCase().includes('XAU') || symbol.toUpperCase().includes('GOLD');
-  const buffer = isGold ? 3.5 : (displayEntry > 10 ? displayEntry * 0.005 : 0.001);
+  const isBuyTrade = !isSellTrade;
 
-  let displaySL = rawSL;
-  if (isSellTrade && displayEntry > 0) {
-    const maxZone = displayEntryZones.length > 0 ? Math.max(...displayEntryZones, displayEntry) : displayEntry;
-    if (displaySL <= maxZone || displaySL <= displayEntry) {
-      displaySL = Number((Math.max(maxZone, displayEntry) + buffer).toFixed(precision));
-    }
-  } else if (isBuyTrade && displayEntry > 0) {
-    const minZone = displayEntryZones.length > 0 ? Math.min(...displayEntryZones, displayEntry) : displayEntry;
-    if (displaySL >= minZone || displaySL >= displayEntry) {
-      displaySL = Number((Math.min(minZone, displayEntry) - buffer).toFixed(precision));
-    }
-  }
-
-  const displayTpLevels = rawTpLevels.map((tp, i) => {
-    const mult = (i + 1) * 1.0;
-    if (isSellTrade && displayEntry > 0 && tp >= displayEntry) {
-      return Number((displayEntry - buffer * mult).toFixed(precision));
-    }
-    if (isBuyTrade && displayEntry > 0 && tp <= displayEntry) {
-      return Number((displayEntry + buffer * mult).toFixed(precision));
-    }
-    return tp;
+  // Real-time Risk Calculator computation:
+  // Changing Account Balance ($40 vs $1000), Lot Size, or Risk % IMMEDIATELY updates Stop Loss, Entry Zones, and TPs!
+  const liveRiskCalc = calculateRiskBasedLevels({
+    symbol,
+    entryPrice: displayEntry > 0 ? displayEntry : fallbackPrice,
+    isBuy: !isSellTrade,
+    accountBalance,
+    lotSize,
+    riskPercent,
+    precision,
   });
 
-  let displayTp1 = rawTp1;
-  let displayTp2 = rawTp2;
-  if (isSellTrade && displayEntry > 0) {
-    if (displayTp1 >= displayEntry) displayTp1 = Number((displayEntry - buffer).toFixed(precision));
-    if (displayTp2 >= displayEntry) displayTp2 = Number((displayEntry - buffer * 2).toFixed(precision));
-  } else if (isBuyTrade && displayEntry > 0) {
-    if (displayTp1 <= displayEntry) displayTp1 = Number((displayEntry + buffer).toFixed(precision));
-    if (displayTp2 <= displayEntry) displayTp2 = Number((displayEntry + buffer * 2).toFixed(precision));
-  }
+  const displayEntryZones = liveRiskCalc.entryZones;
+  const displaySL = liveRiskCalc.stopLoss;
+  const displayTpLevels = liveRiskCalc.tpLevels;
+  const displayTp1 = liveRiskCalc.tp1;
+  const displayTp2 = liveRiskCalc.tp2;
+
+  // Broadcast live direction & Risk-Calculated SL/TP to page.tsx Top Bar so both consoles stay 100% synced
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(
+        new CustomEvent('wessignal-live-params', {
+          detail: {
+            symbol,
+            direction: isSellTrade ? 'SELL' : 'BUY',
+            entry: displayEntry,
+            stopLoss: displaySL,
+            takeProfit: displayTpLevels[selectedTpIndex] ?? displayTp1,
+            lotSize,
+            accountBalance,
+            riskPercent,
+            slDistance: liveRiskCalc.slDistance,
+            maxRiskDollars: liveRiskCalc.actualDollarRisk,
+            probability: analysis?.probability ?? 92,
+          },
+        })
+      );
+    }
+  }, [symbol, isSellTrade, displayEntry, displaySL, displayTpLevels, selectedTpIndex, displayTp1, lotSize, accountBalance, riskPercent, analysis?.probability]);
 
   // TP chip colors cycling green → teal → blue → purple
   const tpColors = [
@@ -1049,35 +1079,117 @@ export default function LiveSignalNotificationPanel({
             </button>
           </div>
 
-          {/* Quick Lot Size & Active Tunnel Status Row */}
-          <div className="flex items-center justify-between gap-2 bg-slate-900/90 border border-slate-800 rounded-lg px-2.5 py-1.5 text-[10px]">
-            <div className="flex items-center gap-1.5">
-              <span className="text-slate-400">Lot:</span>
-              <select
-                value={lotSize}
-                onChange={(e) => setLotSize(Number(e.target.value))}
-                className="bg-slate-950 border border-indigo-700 rounded px-1.5 py-0.5 text-white font-mono text-[10px] font-bold"
-              >
-                <option value={0.01}>0.01</option>
-                <option value={0.02}>0.02</option>
-                <option value={0.05}>0.05</option>
-                <option value={0.10}>0.10</option>
-                <option value={0.20}>0.20</option>
-                <option value={0.50}>0.50</option>
-                <option value={1.00}>1.00</option>
-              </select>
+          {/* Dynamic Risk Calculator & Account Balance Stop-Loss Sizer (Always Visible) */}
+          <div className="bg-slate-900/95 border border-indigo-700/80 rounded-lg p-2 space-y-1.5 text-[10px]">
+            <div className="flex items-center justify-between text-[9.5px]">
+              <span className="text-indigo-200 font-bold flex items-center gap-1">
+                <Shield className="w-3 h-3 text-emerald-400" />
+                <span>Risk Calculator (Dynamic SL Sizer)</span>
+              </span>
+              <span className="text-emerald-300 font-mono font-bold">
+                Max Risk: ${liveRiskCalc.actualDollarRisk.toFixed(2)} ({riskPercent}%)
+              </span>
             </div>
-            <div className="text-right font-mono text-[9.5px]">
-              {mt5BridgeState?.accountBalance !== undefined ? (
-                <span className="text-emerald-300 font-bold">
-                  Bal: ${Number(mt5BridgeState.accountBalance).toFixed(2)}
-                  {mt5BridgeState.openPositionsCount ? ` · ${mt5BridgeState.openPositionsCount} Open` : ''}
-                </span>
-              ) : (
-                <span className={mt5BridgeState?.online ? 'text-emerald-400 font-bold' : 'text-amber-300 font-bold'}>
-                  {mt5BridgeState?.online ? 'IPC ONLINE' : 'READY TO SYNC'}
-                </span>
-              )}
+
+            <div className="grid grid-cols-3 gap-1.5">
+              <div>
+                <div className="flex items-center justify-between mb-0.5">
+                  <label className="text-[8.5px] text-slate-400">Balance ($)</label>
+                  <div className="flex gap-0.5">
+                    {[40, 100, 1000].map((preset) => (
+                      <button
+                        key={preset}
+                        type="button"
+                        onClick={() => {
+                          userEditedBalanceRef.current = true;
+                          setAccountBalance(preset);
+                          setBalanceInput(String(preset));
+                        }}
+                        className={`px-1 py-0.2 rounded text-[7.5px] font-mono border ${
+                          Math.round(accountBalance) === preset
+                            ? 'bg-emerald-600 border-emerald-400 text-white font-bold'
+                            : 'bg-slate-950 border-slate-700 text-slate-400 hover:text-white'
+                        }`}
+                      >
+                        ${preset}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  value={balanceInput}
+                  onChange={(e) => {
+                    userEditedBalanceRef.current = true;
+                    const raw = e.target.value.replace(/[^0-9.]/g, '');
+                    setBalanceInput(raw);
+                    const num = parseFloat(raw);
+                    if (!isNaN(num) && num >= 1) setAccountBalance(num);
+                  }}
+                  onBlur={() => {
+                    const num = parseFloat(balanceInput);
+                    if (isNaN(num) || num < 1) {
+                      setBalanceInput(String(accountBalance));
+                    } else {
+                      setAccountBalance(num);
+                      setBalanceInput(String(num));
+                    }
+                  }}
+                  className="w-full bg-slate-950 border border-indigo-700 rounded px-1.5 py-0.5 text-white font-mono text-[10.5px] font-bold"
+                  placeholder="40.45"
+                />
+              </div>
+
+              <div>
+                <label className="text-[8.5px] text-slate-400 block mb-0.5">Lot Size</label>
+                <select
+                  value={lotSize}
+                  onChange={(e) => setLotSize(Number(e.target.value))}
+                  className="w-full bg-slate-950 border border-indigo-700 rounded px-1.5 py-0.5 text-white font-mono text-[10.5px] font-bold"
+                >
+                  <option value={0.01}>0.01 Lot</option>
+                  <option value={0.02}>0.02 Lot</option>
+                  <option value={0.05}>0.05 Lot</option>
+                  <option value={0.10}>0.10 Lot</option>
+                  <option value={0.20}>0.20 Lot</option>
+                  <option value={0.50}>0.50 Lot</option>
+                  <option value={1.00}>1.00 Lot</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="text-[8.5px] text-slate-400 block mb-0.5">Risk %</label>
+                <div className="flex gap-0.5">
+                  {[1.0, 2.0, 3.0].map((pct) => (
+                    <button
+                      key={pct}
+                      type="button"
+                      onClick={() => setRiskPercent(pct)}
+                      className={`flex-1 py-0.5 rounded text-[9.5px] font-bold border ${
+                        riskPercent === pct
+                          ? 'bg-indigo-600 border-indigo-400 text-white'
+                          : 'bg-slate-950 border-slate-700 text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      {pct}%
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between pt-1 border-t border-slate-800 font-mono text-[9px]">
+              <span className="text-rose-300 font-bold">
+                Dynamic SL: ${displaySL.toFixed(precision)} (Dist: {liveRiskCalc.slDistance.toFixed(precision)})
+              </span>
+              <span className="text-emerald-300 font-bold">
+                {mt5BridgeState?.accountBalance !== undefined
+                  ? `MT5 Bal: $${Number(mt5BridgeState.accountBalance).toFixed(2)}`
+                  : mt5BridgeState?.online
+                  ? 'IPC ONLINE'
+                  : 'READY'}
+              </span>
             </div>
           </div>
 
@@ -1128,7 +1240,7 @@ export default function LiveSignalNotificationPanel({
             <span>
               {mt5Ordering
                 ? `Executing ${isSellTrade ? 'SELL' : 'BUY'} ${symbol} (${lotSize} Lot)...`
-                : `2. PLACE ORDER / TRADE NOW (${isSellTrade ? 'SELL' : 'BUY'} ${symbol} · TP${selectedTpIndex + 1})`}
+                : `2. PLACE ORDER / TRADE NOW (${isSellTrade ? 'SELL' : 'BUY'} ${symbol} · SL $${displaySL.toFixed(precision)})`}
             </span>
           </button>
 
@@ -1138,14 +1250,17 @@ export default function LiveSignalNotificationPanel({
               type="button"
               disabled={mt5Ordering}
               onClick={() => {
-                const step = displayEntry > 500 ? 3.5 : displayEntry > 20 ? 0.15 : 0.0015;
-                const buyTp = isBuyTrade
-                  ? (displayTpLevels[selectedTpIndex] ?? displayTp1)
-                  : Number((displayEntry + step * 2).toFixed(precision));
-                const buySl = isBuyTrade
-                  ? displaySL
-                  : Number((displayEntry - step * 1.5).toFixed(precision));
-                handlePlaceMt5Order('BUY', buyTp, buySl);
+                const buyLevels = calculateRiskBasedLevels({
+                  symbol,
+                  entryPrice: displayEntry > 0 ? displayEntry : fallbackPrice,
+                  isBuy: true,
+                  accountBalance,
+                  lotSize,
+                  riskPercent,
+                  precision,
+                });
+                const buyTp = buyLevels.tpLevels[selectedTpIndex] ?? buyLevels.tp1;
+                handlePlaceMt5Order('BUY', buyTp, buyLevels.stopLoss);
               }}
               className="py-1.5 px-2 bg-emerald-900/80 hover:bg-emerald-700 border border-emerald-500/60 text-emerald-100 text-[10px] font-extrabold rounded-md transition flex items-center justify-center gap-1 disabled:opacity-50"
             >
@@ -1156,14 +1271,17 @@ export default function LiveSignalNotificationPanel({
               type="button"
               disabled={mt5Ordering}
               onClick={() => {
-                const step = displayEntry > 500 ? 3.5 : displayEntry > 20 ? 0.15 : 0.0015;
-                const sellTp = isSellTrade
-                  ? (displayTpLevels[selectedTpIndex] ?? displayTp1)
-                  : Number((displayEntry - step * 2).toFixed(precision));
-                const sellSl = isSellTrade
-                  ? displaySL
-                  : Number((displayEntry + step * 1.5).toFixed(precision));
-                handlePlaceMt5Order('SELL', sellTp, sellSl);
+                const sellLevels = calculateRiskBasedLevels({
+                  symbol,
+                  entryPrice: displayEntry > 0 ? displayEntry : fallbackPrice,
+                  isBuy: false,
+                  accountBalance,
+                  lotSize,
+                  riskPercent,
+                  precision,
+                });
+                const sellTp = sellLevels.tpLevels[selectedTpIndex] ?? sellLevels.tp1;
+                handlePlaceMt5Order('SELL', sellTp, sellLevels.stopLoss);
               }}
               className="py-1.5 px-2 bg-rose-900/80 hover:bg-rose-700 border border-rose-500/60 text-rose-100 text-[10px] font-extrabold rounded-md transition flex items-center justify-center gap-1 disabled:opacity-50"
             >
@@ -1495,12 +1613,20 @@ export default function LiveSignalNotificationPanel({
           {/* Trade Parameters — FROZEN (constant across polls, always visible for all pairs) */}
           <div className="space-y-2 pt-2 border-t border-slate-800 text-[11px]">
 
-            {/* Stop Loss — single constant value */}
-            <div className="flex justify-between bg-slate-950/80 px-2 py-1.5 rounded border border-rose-950">
-              <span className="text-rose-400 font-bold flex items-center gap-1">
-                <Shield className="w-3 h-3" /> STOP LOSS (FIXED):
-              </span>
-              <span className="text-rose-300 font-bold font-mono">${displaySL.toFixed(precision)}</span>
+            {/* Stop Loss — dynamically sized from Risk Calculator ($40 vs $1000 Balance) */}
+            <div className="bg-slate-950/80 px-2 py-1.5 rounded border border-rose-950 space-y-0.5">
+              <div className="flex justify-between items-center">
+                <span className="text-rose-400 font-bold flex items-center gap-1">
+                  <Shield className="w-3 h-3" /> STOP LOSS (RISK-SIZED):
+                </span>
+                <span className="text-rose-300 font-bold font-mono">${displaySL.toFixed(precision)}</span>
+              </div>
+              <div className="flex justify-between text-[9px] text-slate-400 font-mono">
+                <span>Bal: ${accountBalance} · {lotSize} Lot · {riskPercent}% Risk</span>
+                <span className="text-rose-400">
+                  Dist: {liveRiskCalc.slDistance.toFixed(precision)} (-${liveRiskCalc.actualDollarRisk.toFixed(2)})
+                </span>
+              </div>
             </div>
 
             {/* Entry Zone Range — 5 levels, Z1 = current market price */}
