@@ -152,7 +152,41 @@ export default function AITradingCopilotModal({
   const prevVerdictRef = useRef<string>('');
   const prevDirectionRef = useRef<string>('');
   const prevSymbolRef = useRef<string>('');
+  const currentPriceRef = useRef<number | undefined>(currentPrice);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (currentPrice && currentPrice > 0) {
+      currentPriceRef.current = currentPrice;
+    }
+  }, [currentPrice]);
+
+  const isCryptoPair = (sym: string): boolean => {
+    const s = sym.toUpperCase();
+    return (
+      s.includes('BTC') ||
+      s.includes('ETH') ||
+      s.includes('SOL') ||
+      s.includes('XRP') ||
+      s.includes('BNB') ||
+      s.includes('DOGE') ||
+      s.includes('ADA') ||
+      s.includes('REXT') ||
+      s.includes('USDT')
+    );
+  };
+
+  const isWeekendMarketClosed = (sym: string): boolean => {
+    if (isCryptoPair(sym)) return false; // Crypto trades 24/7 on Exness MT5
+    const now = new Date();
+    const utcDay = now.getUTCDay();
+    const utcHour = now.getUTCHours();
+    // Forex, Gold/Metals, Oil & Indices close Friday 22:00 UTC and reopen Sunday 22:00 UTC (00:00 Monday Harare)
+    if (utcDay === 6) return true; // All Saturday
+    if (utcDay === 0 && utcHour < 22) return true; // Sunday before 22:00 UTC
+    if (utcDay === 5 && utcHour >= 22) return true; // Friday after 22:00 UTC
+    return false;
+  };
 
   const getPrecision = (sym: string): number => {
     const s = sym.toUpperCase();
@@ -262,22 +296,20 @@ export default function AITradingCopilotModal({
   const evaluateSessionQuality = (sym: string) => {
     const now = new Date();
     const utcHour = now.getUTCHours();
-    const day = now.getUTCDay();
-    const isCrypto =
-      sym.toUpperCase().includes('BTC') ||
-      sym.toUpperCase().includes('ETH') ||
-      sym.toUpperCase().includes('SOL') ||
-      sym.toUpperCase().includes('XRP') ||
-      sym.toUpperCase().includes('BNB') ||
-      sym.toUpperCase().includes('DOGE') ||
-      sym.toUpperCase().includes('ADA') ||
-      sym.toUpperCase().includes('USDT');
 
-    if ((day === 0 || day === 6) && !isCrypto) {
+    if (isWeekendMarketClosed(sym)) {
       return {
-        name: 'Weekend Market Standby',
+        name: 'Weekend Market Closed (Gold / Forex / Indices Standby)',
         quality: 'LOW' as const,
-        summary: 'Institutional Forex/Metals desks are closed for the weekend (Crypto remains 24/7 active).',
+        summary: `${sym} is CLOSED for the weekend on Exness MT5 (reopens Sunday 22:00 UTC / 00:00 Monday Harare). Switch to BTC/USDT, ETH/USDT, or SOL/USDT for 24/7 weekend trading.`,
+      };
+    }
+
+    if (isCryptoPair(sym) && (now.getUTCDay() === 0 || now.getUTCDay() === 6)) {
+      return {
+        name: '24/7 Weekend Crypto Liquidity Active',
+        quality: 'GOOD' as const,
+        summary: `${sym} trades 24/7 through the weekend on Exness MT5 and global spot exchanges.`,
       };
     }
 
@@ -315,6 +347,8 @@ export default function AITradingCopilotModal({
       setIsAnalyzing(true);
       try {
         const lp = liveParamsRef.current;
+        const weekendClosed = isWeekendMarketClosed(symbol);
+        const livePriceHint = currentPriceRef.current;
 
         // 1. Fetch live OHLCV bars & compute 6-factor technical/volatility metrics
         const { bars, source } = await fetchBrowserLiveBars(symbol, timeframe);
@@ -323,7 +357,7 @@ export default function AITradingCopilotModal({
           timeframe,
           bars,
           source,
-          currentPrice && currentPrice > 0 ? currentPrice : undefined,
+          livePriceHint && livePriceHint > 0 ? livePriceHint : undefined,
           lp.accountBalance,
           lp.lotSize,
           lp.riskPercent
@@ -335,7 +369,7 @@ export default function AITradingCopilotModal({
           recent14.reduce((acc, b) => acc + Math.max(b.high - b.low, 0.00001), 0) /
           Math.max(1, recent14.length);
         const currentRange = lastBar ? Math.abs(lastBar.high - lastBar.low) : atr;
-        const volatilityRatio = Number((currentRange / Math.max(atr, 0.00001)).toFixed(2));
+        let volatilityRatio = Number((currentRange / Math.max(atr, 0.00001)).toFixed(2));
 
         // Calculate RSI(14)
         let gains = 0;
@@ -352,7 +386,12 @@ export default function AITradingCopilotModal({
         let volLabel = 'Optimal Institutional Volatility';
         let volSummary = `ATR(14) is ${atr.toFixed(precision)} with normal bar expansion (${volatilityRatio}x ATR). Ideal conditions for clean entry execution.`;
 
-        if (volatilityRatio >= 2.3) {
+        if (weekendClosed) {
+          volState = 'LOW_LIQUIDITY';
+          volatilityRatio = 0;
+          volLabel = 'Weekend Market Closed (0 Liquidity)';
+          volSummary = `${symbol} spot & MT5 liquidity is CLOSED for the weekend. Price is frozen at Friday's close until Sunday 22:00 UTC (00:00 Monday Harare).`;
+        } else if (volatilityRatio >= 2.3) {
           volState = 'EXTREME_WHIPSAW';
           volLabel = 'Extreme Whipsaw / Spike Volatility';
           volSummary = `Current candle range is ${volatilityRatio}x larger than average ATR (${atr.toFixed(precision)}). High slip/whipsaw risk — wait for candle close or use 0.01 Lot.`;
@@ -437,61 +476,77 @@ export default function AITradingCopilotModal({
         let score = analysis.probability || 91;
         const reasons: string[] = [];
 
-        reasons.push(
-          `Direction Confluence: ${direction} (${analysis.signal_type}) with ${analysis.probability}% 6-factor alignment.`
-        );
-
-        if (volState === 'OPTIMAL' || volState === 'HIGH_VOLATILITY') {
-          reasons.push(`Volatility Check: PASSED (${volLabel}, ${volatilityRatio}x ATR).`);
-        } else if (volState === 'EXTREME_WHIPSAW') {
-          score -= 18;
+        if (weekendClosed) {
+          score = 0;
           reasons.push(
-            `Volatility Warning: Whipsaw candle (${volatilityRatio}x ATR) — wait for pullback or trade minimum lot.`
+            `🛑 Weekend Market Closure: ${symbol} is CLOSED on Exness MT5 & global institutional desks during Saturday and Sunday.`
+          );
+          reasons.push(
+            `⏰ Reopen Schedule: ${symbol} reopens Sunday at 22:00 UTC (00:00 Monday Harare Time) when the Sydney/Tokyo session begins.`
+          );
+          reasons.push(
+            `⚡ Want to Trade Right Now? Select a 24/7 Crypto pair (BTC/USDT, ETH/USDT, SOL/USDT, XRP/USDT) from the top bar — Crypto markets are open and live on MT5 all weekend!`
           );
         } else {
-          score -= 6;
-          reasons.push(`Volatility Note: Quiet consolidation (${volatilityRatio}x ATR) — target TP1/TP2.`);
-        }
-
-        if (newsStatus === 'CLEAR') {
-          reasons.push(`Market News Check: CLEAR — no red-folder shock blocking ${symbol}.`);
-        } else if (newsStatus === 'WATCH') {
-          score -= 7;
-          reasons.push(`Market News Check: WATCH — 1 macro headline active; hard SL required.`);
-        } else {
-          score -= 22;
-          reasons.push(`Market News Alert: HIGH-IMPACT NEWS RISK (${highImpactNews.length} events).`);
-        }
-
-        if ((direction === 'BUY' && rsi14 > 74) || (direction === 'SELL' && rsi14 < 26)) {
-          score -= 12;
           reasons.push(
-            `RSI(14) Exhaustion Guard: RSI is ${rsi14} (${
-              direction === 'BUY' ? 'Overbought' : 'Oversold'
-            }) — wait for minor retracement to Entry Zone Z2.`
+            `Direction Confluence: ${direction} (${analysis.signal_type}) with ${analysis.probability}% 6-factor alignment.`
           );
-        } else {
-          reasons.push(`RSI(14) Momentum Room: ${rsi14} — clean room to reach TP1 & TP2.`);
+
+          if (volState === 'OPTIMAL' || volState === 'HIGH_VOLATILITY') {
+            reasons.push(`Volatility Check: PASSED (${volLabel}, ${volatilityRatio}x ATR).`);
+          } else if (volState === 'EXTREME_WHIPSAW') {
+            score -= 18;
+            reasons.push(
+              `Volatility Warning: Whipsaw candle (${volatilityRatio}x ATR) — wait for pullback or trade minimum lot.`
+            );
+          } else {
+            score -= 6;
+            reasons.push(`Volatility Note: Quiet consolidation (${volatilityRatio}x ATR) — target TP1/TP2.`);
+          }
+
+          if (newsStatus === 'CLEAR') {
+            reasons.push(`Market News Check: CLEAR — no red-folder shock blocking ${symbol}.`);
+          } else if (newsStatus === 'WATCH') {
+            score -= 7;
+            reasons.push(`Market News Check: WATCH — 1 macro headline active; hard SL required.`);
+          } else {
+            score -= 22;
+            reasons.push(`Market News Alert: HIGH-IMPACT NEWS RISK (${highImpactNews.length} events).`);
+          }
+
+          if ((direction === 'BUY' && rsi14 > 74) || (direction === 'SELL' && rsi14 < 26)) {
+            score -= 12;
+            reasons.push(
+              `RSI(14) Exhaustion Guard: RSI is ${rsi14} (${
+                direction === 'BUY' ? 'Overbought' : 'Oversold'
+              }) — wait for minor retracement to Entry Zone Z2.`
+            );
+          } else {
+            reasons.push(`RSI(14) Momentum Room: ${rsi14} — clean room to reach TP1 & TP2.`);
+          }
+
+          reasons.push(
+            `Risk Calculator Protection: $${lp.accountBalance.toFixed(2)} Balance @ ${lp.riskPercent}% Risk ($${riskCalc.actualDollarRisk.toFixed(2)} max loss) -> Hard SL at $${riskCalc.stopLoss.toFixed(precision)}.`
+          );
         }
 
-        reasons.push(
-          `Risk Calculator Protection: $${lp.accountBalance.toFixed(2)} Balance @ ${lp.riskPercent}% Risk ($${riskCalc.actualDollarRisk.toFixed(2)} max loss) -> Hard SL at $${riskCalc.stopLoss.toFixed(precision)}.`
-        );
-
-        const clampedScore = Math.max(45, Math.min(98, Math.round(score)));
+        const clampedScore = weekendClosed ? 0 : Math.max(45, Math.min(98, Math.round(score)));
 
         let verdict: AIClearanceReport['verdict'] = 'CLEAR_TO_TRADE';
         let verdictTitle = `✅ CLEAR TO ${direction} ${symbol} (${clampedScore}% AI Clearance)`;
         let verdictColor: AIClearanceReport['verdictColor'] = 'emerald';
 
-        if (newsStatus === 'BLOCKED_HIGH_IMPACT' || volState === 'EXTREME_WHIPSAW') {
+        if (weekendClosed) {
+          verdict = 'DO_NOT_TRADE';
+          verdictTitle = `🛑 MARKET CLOSED FOR WEEKEND — ${symbol} Closed Until Sunday 22:00 UTC`;
+          verdictColor = 'rose';
+        } else if (newsStatus === 'BLOCKED_HIGH_IMPACT' || volState === 'EXTREME_WHIPSAW') {
           verdict = 'CAUTION';
           verdictTitle = `⚠️ CAUTION ON ${symbol}: ${
             newsStatus === 'BLOCKED_HIGH_IMPACT' ? 'HIGH-IMPACT NEWS' : 'VOLATILITY SPIKE'
           } (${clampedScore}%)`;
           verdictColor = 'amber';
-        }
-        if (clampedScore < 65) {
+        } else if (clampedScore < 65) {
           verdict = 'DO_NOT_TRADE';
           verdictTitle = `🛑 HOLD / STAND BY ON ${symbol} — Wait for Cleaner Setup (${clampedScore}%)`;
           verdictColor = 'rose';
@@ -513,7 +568,7 @@ export default function AITradingCopilotModal({
           verdictColor,
           clearanceScore: clampedScore,
           direction,
-          signalConfidence: analysis.probability || 91,
+          signalConfidence: weekendClosed ? 0 : analysis.probability || 91,
           latestPrice: analysis.latest_price,
           entryPrice,
           stopLoss: riskCalc.stopLoss,
@@ -572,15 +627,29 @@ export default function AITradingCopilotModal({
         const symbolSwitched = prevSymbolRef.current !== `${symbol}:${timeframe}`;
         const verdictChanged = prevVerdictRef.current !== newReport.verdict;
         const directionFlipped =
+          !weekendClosed &&
           prevDirectionRef.current !== '' &&
           prevDirectionRef.current !== newReport.direction &&
           !symbolSwitched;
 
         prevSymbolRef.current = `${symbol}:${timeframe}`;
         prevVerdictRef.current = newReport.verdict;
-        prevDirectionRef.current = newReport.direction;
+        prevDirectionRef.current = weekendClosed ? '' : newReport.direction;
 
-        if (directionFlipped) {
+        if (weekendClosed && (symbolSwitched || verdictChanged || announceToChat)) {
+          // Clear any stale fake reversal alerts from chat when viewing a closed weekend market
+          setMessages([
+            {
+              id: Math.random().toString(36).substring(2, 9),
+              sender: 'ai',
+              title: `🛑 WEEKEND MARKET CLOSED: ${symbol} Not Tradable Until Sunday Night`,
+              text: `• Market Status: ${symbol} (Gold / Forex / Indices) is CLOSED for the weekend on Exness MT5.\n• Reopens: Sunday 22:00 UTC (00:00 Monday Harare Time).\n• Why Signals Are Paused: No live institutional Gold/Forex ticks or reversals occur over the weekend.\n• 💡 Trade 24/7 Right Now: Click BTC/USDT, ETH/USDT, or SOL/USDT at the top of the screen — Crypto markets are open 24/7 on Exness MT5!`,
+              timestamp: harareNow,
+              verdict: 'DO_NOT_TRADE',
+              direction: newReport.direction,
+            },
+          ]);
+        } else if (directionFlipped) {
           pushAIAlert(
             {
               sender: 'alert',
@@ -599,7 +668,7 @@ export default function AITradingCopilotModal({
             },
             true
           );
-        } else if (symbolSwitched || verdictChanged || announceToChat) {
+        } else if (!weekendClosed && (symbolSwitched || verdictChanged || announceToChat)) {
           pushAIAlert(
             {
               sender: 'ai',
@@ -628,7 +697,7 @@ export default function AITradingCopilotModal({
         setIsAnalyzing(false);
       }
     },
-    [symbol, timeframe, currentPrice, precision, pushAIAlert]
+    [symbol, timeframe, precision, pushAIAlert]
   );
 
   // Run initial evaluation and periodic 12-second background monitoring
@@ -684,16 +753,20 @@ export default function AITradingCopilotModal({
     }
 
     const r = report;
+    const weekendClosed = isWeekendMarketClosed(symbol);
     const lower = q.toLowerCase();
     let replyTitle = r.verdictTitle;
     let replyBody = '';
 
-    if (lower.includes('clear') || lower.includes('safe') || lower.includes('trade now') || lower.includes('can i trade')) {
+    if (weekendClosed && !lower.includes('stop loss') && !lower.includes('sl') && !lower.includes('risk') && !lower.includes('balance') && !lower.includes('news')) {
+      replyTitle = `🛑 WEEKEND MARKET CLOSED: Do Not Trade ${symbol} Right Now`;
+      replyBody = `NO — ${symbol} is CLOSED for the weekend on Exness MT5 and global spot desks.\n\n• Market Reopens: Sunday at 22:00 UTC (00:00 Monday Harare Time).\n• Why: Institutional Gold, Forex, and Index liquidity is offline on Saturdays and Sundays, so no real market reversals or entries occur.\n• 💡 Want to Trade Right Now? Click BTC/USDT, ETH/USDT, or SOL/USDT in the top asset bar — Crypto markets trade 24/7 on Exness MT5 all weekend!`;
+    } else if (lower.includes('clear') || lower.includes('safe') || lower.includes('trade now') || lower.includes('can i trade')) {
       replyTitle = r.verdictTitle;
       replyBody =
         r.verdict === 'CLEAR_TO_TRADE'
           ? `YES — ${symbol} (${timeframe.toUpperCase()}) is CLEAR TO ${r.direction} right now (${r.clearanceScore}% clearance score).\n\n1. Volatility: ${r.volatility.label} (${r.volatility.volatilityRatio}x ATR, RSI ${r.volatility.rsi14}).\n2. Market News: ${r.news.label}.\n3. Session: ${r.session.name}.\n4. Exact Risk-Sized Order: ${r.direction} @ $${r.entryPrice.toFixed(precision)} | Stop Loss: $${r.stopLoss.toFixed(precision)} (Max loss $${r.maxRiskDollars.toFixed(2)} on $${r.accountBalance.toFixed(2)} balance) | TP1: $${r.takeProfit1.toFixed(precision)}.`
-          : `CAUTION — ${r.verdictTitle}.\n\n• Volatility: ${r.volatility.summary}\n• News: ${r.news.summary}\n• Recommendation: Wait for a clean candle close or trade minimum 0.01 lot with hard SL at $${r.stopLoss.toFixed(precision)}.`;
+          : `NO / STAND BY — ${r.verdictTitle}.\n\n• Volatility: ${r.volatility.summary}\n• News: ${r.news.summary}\n• Session: ${r.session.summary}`;
     } else if (lower.includes('volatil') || lower.includes('atr') || lower.includes('chop') || lower.includes('whipsaw')) {
       replyTitle = `📊 Volatility Report for ${symbol} (${timeframe.toUpperCase()}): ${r.volatility.label}`;
       replyBody = `${r.volatility.summary}\n\n• 14-Bar ATR: ${r.volatility.atr.toFixed(precision)}\n• Current Candle Range: ${r.volatility.currentRange.toFixed(precision)} (${r.volatility.volatilityRatio}x ATR)\n• RSI(14): ${r.volatility.rsi14}\n• Active Session: ${r.session.name} — ${r.session.summary}`;
@@ -708,7 +781,7 @@ export default function AITradingCopilotModal({
       replyBody = `${r.news.summary}\n\nLatest Headlines:\n${headlineList}`;
     } else if (lower.includes('stop loss') || lower.includes('sl') || lower.includes('risk') || lower.includes('balance') || lower.includes('lot')) {
       replyTitle = `🛡️ Dynamic Risk-Calculator Stop Loss ($${r.accountBalance.toFixed(2)} Balance)`;
-      replyBody = `For your $${r.accountBalance.toFixed(2)} account balance at ${r.riskPercent}% risk and ${r.lotSize} Lot:\n\n• Max Allowed Loss: $${r.maxRiskDollars.toFixed(2)}\n• Exact Stop Loss Distance: ${r.slDistance.toFixed(precision)} pts\n• Recommended ${r.direction} Entry: $${r.entryPrice.toFixed(precision)}\n• Hard Stop Loss Price: $${r.stopLoss.toFixed(precision)}\n• Take Profit 1 (1.2R): $${r.takeProfit1.toFixed(precision)}\n• Take Profit 2 (2.0R): $${r.takeProfit2.toFixed(precision)}`;
+      replyBody = `For your $${r.accountBalance.toFixed(2)} account balance at ${r.riskPercent}% risk and ${r.lotSize} Lot:\n\n• Max Allowed Loss: $${r.maxRiskDollars.toFixed(2)}\n• Exact Stop Loss Distance: ${r.slDistance.toFixed(precision)} pts\n• Reference ${r.direction} Entry: $${r.entryPrice.toFixed(precision)}\n• Hard Stop Loss Price: $${r.stopLoss.toFixed(precision)}\n• Take Profit 1 (1.2R): $${r.takeProfit1.toFixed(precision)}\n• Take Profit 2 (2.0R): $${r.takeProfit2.toFixed(precision)}`;
     } else if (lower.includes('direction') || lower.includes('buy') || lower.includes('sell') || lower.includes('trend') || lower.includes('revers')) {
       replyTitle = `🧭 6-Factor Market Direction Verdict: ${r.direction} ${symbol} (${r.signalConfidence}%)`;
       replyBody = `The system's 6-Factor Direction Engine currently dictates ${r.direction} on ${symbol} (${timeframe.toUpperCase()}).\n\n${r.reasons.map((item) => `• ${item}`).join('\n')}\n\nRemember: If order flow reverses against ${r.direction}, the bot will immediately alert you and auto-close any wrong-way MT5 trade.`;
@@ -725,14 +798,17 @@ export default function AITradingCopilotModal({
       timestamp: harareNow,
       verdict: r.verdict,
       direction: r.direction,
-      actionable: {
-        symbol,
-        direction: r.direction,
-        entry: r.entryPrice,
-        stopLoss: r.stopLoss,
-        takeProfit: r.takeProfit1,
-        lotSize: r.lotSize,
-      },
+      actionable:
+        !weekendClosed && r.verdict !== 'DO_NOT_TRADE'
+          ? {
+              symbol,
+              direction: r.direction,
+              entry: r.entryPrice,
+              stopLoss: r.stopLoss,
+              takeProfit: r.takeProfit1,
+              lotSize: r.lotSize,
+            }
+          : undefined,
     };
     setMessages((prev) => [...prev.slice(-39), aiReply]);
   };
