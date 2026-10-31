@@ -1314,6 +1314,20 @@ export default function LiveSignalNotificationPanel({
             </button>
           </div>
 
+          {/* BUTTON 5: AI CLEARANCE CHAT (VOLATILITY, NEWS & DIRECTION ADVISOR) */}
+          <button
+            type="button"
+            onClick={() => {
+              if (typeof window !== 'undefined') {
+                window.dispatchEvent(new CustomEvent('wessignal-open-ai-copilot'));
+              }
+            }}
+            className="w-full py-2 px-3 bg-gradient-to-r from-violet-600 via-indigo-600 to-teal-600 hover:from-violet-500 hover:to-teal-500 text-white text-[10.5px] font-black rounded-lg shadow-lg border border-violet-300/70 transition flex items-center justify-center gap-1.5"
+          >
+            <Bot className="w-3.5 h-3.5 text-amber-300 animate-pulse" />
+            <span>5. AI CLEARANCE CHAT (Check Volatility &amp; Market News)</span>
+          </button>
+
           {/* Auto-Stop & Server-Side TP/SL Protection Note */}
           <div className="text-[8.5px] text-slate-300 bg-slate-900/90 border border-slate-800 rounded px-2 py-1 font-sans leading-tight">
             🛡️ <strong>Auto-Stop Built-In:</strong> Every order attaches hard <strong>SL (${displaySL.toFixed(precision)})</strong> &amp; <strong>TP{selectedTpIndex + 1} (${(displayTpLevels[selectedTpIndex] ?? displayTp1).toFixed(precision)})</strong> on the Exness MT5 server, so trades close automatically on their own at profit/stop even if your PC is off.

@@ -15,7 +15,8 @@ import AuditReportSection from '@/components/AuditReportSection';
 import MarketSessionClocks from '@/components/MarketSessionClocks';
 import PositionSizingGuide from '@/components/PositionSizingGuide';
 import TrendCandlePanel from '@/components/TrendCandlePanel';
-import { Activity, ShieldCheck, Cpu, Radio, Coins, Search, Globe, Eye, Monitor, Calculator, Sparkles, Zap, Play, ArrowUpRight, ArrowDownRight, Square, XCircle } from 'lucide-react';
+import AITradingCopilotModal from '@/components/AITradingCopilotModal';
+import { Activity, ShieldCheck, Cpu, Radio, Coins, Search, Globe, Eye, Monitor, Calculator, Sparkles, Zap, Play, ArrowUpRight, ArrowDownRight, Square, XCircle, Bot, Bell } from 'lucide-react';
 
 interface AssetOption {
   symbol: string;
@@ -67,6 +68,12 @@ export default function DashboardPage() {
   const [refreshAuditCount, setRefreshAuditCount] = useState<number>(0);
   const [chartMode, setChartMode] = useState<'TradingViewDirect' | 'CustomEngine'>('CustomEngine');
   const [showPositionGuide, setShowPositionGuide] = useState<boolean>(false);
+  const [showAICopilot, setShowAICopilot] = useState<boolean>(false);
+  const [aiClearanceState, setAiClearanceState] = useState<{
+    verdict?: 'CLEAR_TO_TRADE' | 'CAUTION' | 'DO_NOT_TRADE';
+    clearanceScore?: number;
+    direction?: 'BUY' | 'SELL' | 'NEUTRAL';
+  }>({ verdict: 'CLEAR_TO_TRADE', clearanceScore: 92, direction: 'BUY' });
   const [externalTradeParams, setExternalTradeParams] = useState<any>(null);
   const [engineStatus, setEngineStatus] = useState<'checking' | 'online' | 'offline'>('checking');
   const [telegramStatus, setTelegramStatus] = useState<'unknown' | 'configured' | 'simulation'>('unknown');
@@ -103,8 +110,24 @@ export default function DashboardPage() {
         setTopLotSize(detail.lotSize);
       }
     };
+    const onAiCopilotState = (e: Event) => {
+      const detail = (e as CustomEvent)?.detail;
+      if (!detail) return;
+      setAiClearanceState((prev) => ({
+        verdict: detail.verdict || prev.verdict,
+        clearanceScore: detail.clearanceScore ?? prev.clearanceScore,
+        direction: detail.direction || prev.direction,
+      }));
+    };
+    const onOpenAiCopilot = () => setShowAICopilot(true);
     window.addEventListener('wessignal-live-params', onLiveParams);
-    return () => window.removeEventListener('wessignal-live-params', onLiveParams);
+    window.addEventListener('wessignal-ai-copilot-state', onAiCopilotState);
+    window.addEventListener('wessignal-open-ai-copilot', onOpenAiCopilot);
+    return () => {
+      window.removeEventListener('wessignal-live-params', onLiveParams);
+      window.removeEventListener('wessignal-ai-copilot-state', onAiCopilotState);
+      window.removeEventListener('wessignal-open-ai-copilot', onOpenAiCopilot);
+    };
   }, []);
 
   const handleTopExecuteSync = async () => {
@@ -488,6 +511,27 @@ export default function DashboardPage() {
           </div>
 
           <button
+            onClick={() => setShowAICopilot(true)}
+            className={`flex items-center gap-2 font-black px-3.5 py-1.5 rounded-lg shadow-lg transition border ${
+              aiClearanceState.verdict === 'CLEAR_TO_TRADE'
+                ? 'bg-gradient-to-r from-emerald-600 via-teal-600 to-indigo-600 hover:from-emerald-500 hover:to-indigo-500 text-white border-emerald-300 shadow-emerald-900/50'
+                : aiClearanceState.verdict === 'DO_NOT_TRADE'
+                ? 'bg-gradient-to-r from-rose-700 to-red-700 hover:from-rose-600 hover:to-red-600 text-white border-rose-300 shadow-rose-900/50'
+                : 'bg-gradient-to-r from-amber-600 to-indigo-600 hover:from-amber-500 hover:to-indigo-500 text-white border-amber-300'
+            }`}
+          >
+            <Bot className="w-4 h-4 text-amber-300 animate-pulse" />
+            <span>
+              🤖 AI Trade Copilot:{' '}
+              {aiClearanceState.verdict === 'CLEAR_TO_TRADE'
+                ? `CLEAR TO ${aiClearanceState.direction || 'TRADE'} (${aiClearanceState.clearanceScore || 92}%)`
+                : aiClearanceState.verdict === 'DO_NOT_TRADE'
+                ? 'HOLD / NEWS RISK'
+                : 'CAUTION'}
+            </span>
+          </button>
+
+          <button
             onClick={() => setShowPositionGuide(true)}
             className="flex items-center gap-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-bold px-3.5 py-1.5 rounded-lg shadow-lg shadow-blue-900/50 transition border border-blue-400"
           >
@@ -733,6 +777,16 @@ export default function DashboardPage() {
                   : '4. STOP BOT (CLOSE ALL)'}
               </span>
             </button>
+
+            <button
+              type="button"
+              onClick={() => setShowAICopilot(true)}
+              className="px-3.5 py-2 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white text-xs font-black rounded-lg shadow-lg border border-violet-300 transition flex items-center gap-1.5 font-mono"
+              title="Open AI Trade Copilot & Live Volatility/News Clearance Chat"
+            >
+              <Bot className="w-4 h-4 text-amber-300" />
+              <span>5. AI CLEARANCE CHAT</span>
+            </button>
           </div>
         </div>
 
@@ -878,6 +932,16 @@ export default function DashboardPage() {
           onClose={() => setShowPositionGuide(false)}
         />
       )}
+
+      <AITradingCopilotModal
+        symbol={symbol}
+        timeframe={timeframe}
+        currentPrice={currentPrice}
+        isOpen={showAICopilot}
+        onClose={() => setShowAICopilot(false)}
+        onOpen={() => setShowAICopilot(true)}
+        onQuickPlaceOrder={(dir) => handleTopPlaceOrder(dir)}
+      />
     </div>
   );
 }
