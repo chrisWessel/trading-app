@@ -9,9 +9,15 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-from fastapi import Depends, FastAPI, Header, HTTPException, status
+from fastapi import Body, Depends, FastAPI, Header, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
+
+# Runtime Auto-Bot Armed State (True = Ready/Active, False = Stopped by Kill-Switch)
+BOT_RUNTIME_STATE = {
+    "bot_armed": True,
+    "auto_bot_enabled": False,
+}
 
 # Ensure local imports inside mt5_bridge/ resolve cleanly regardless of cwd
 BRIDGE_DIR = Path(__file__).resolve().parent
@@ -74,9 +80,14 @@ def bridge_health():
     """Authenticated health endpoint verifying live IPC connectivity to the Windows MT5 terminal."""
     ok, meta = bridge_client.ensure_connected()
     tunnel_url = read_saved_tunnel_url()
+    open_positions = bridge_client.list_open_positions() if ok else []
     return {
         "bridge": "online",
         "port": settings.port,
+        "bot_armed": BOT_RUNTIME_STATE["bot_armed"],
+        "auto_bot_enabled": BOT_RUNTIME_STATE["auto_bot_enabled"],
+        "open_positions_count": len(open_positions),
+        "open_positions": open_positions,
         "tunnel_url": tunnel_url,
         "webhook_url": f"{tunnel_url}/webhook/mt5" if tunnel_url else None,
         "mt5_ipc_connected": ok,
@@ -88,12 +99,14 @@ def bridge_health():
 def execute_bridge_and_sync_git():
     """
     Button 1 ("Execute Bridge & Sync to Git/Vercel"):
-      1. Verifies MT5 IPC connection to the local Windows MT5 terminal.
-      2. Starts (or verifies) the Cloudflare Quick Tunnel (`cloudflared tunnel --url http://127.0.0.1:8001`).
-      3. Writes the generated `https://*.trycloudflare.com` URL to `frontend/public/mt5_tunnel.json`.
-      4. Commits and pushes `frontend/public/mt5_tunnel.json` to `origin/main` so Vercel automatically
+      1. Re-arms the MT5 bridge (`bot_armed = True`).
+      2. Verifies MT5 IPC connection to the local Windows MT5 terminal.
+      3. Starts (or verifies) the Cloudflare Quick Tunnel (`cloudflared tunnel --url http://127.0.0.1:8001`).
+      4. Writes the generated `https://*.trycloudflare.com` URL to `frontend/public/mt5_tunnel.json`.
+      5. Commits and pushes `frontend/public/mt5_tunnel.json` to `origin/main` so Vercel automatically
          receives the new tunnel URL and redeploys!
     """
+    BOT_RUNTIME_STATE["bot_armed"] = True
     mt5_ok, mt5_meta = bridge_client.ensure_connected()
     tunnel_ok, tunnel_url, tunnel_msg = start_or_get_cloudflare_tunnel()
     if not tunnel_ok or not tunnel_url:
@@ -109,6 +122,7 @@ def execute_bridge_and_sync_git():
     sync_data = persist_and_push_tunnel(tunnel_url, mt5_meta)
     return {
         "status": "synced",
+        "bot_armed": True,
         "message": tunnel_msg,
         "tunnel_url": sync_data["tunnel_url"],
         "webhook_url": sync_data["webhook_url"],
@@ -116,6 +130,47 @@ def execute_bridge_and_sync_git():
         "mt5_terminal": mt5_meta,
         "git_sync": sync_data["git_sync"],
         "updated_at_utc": sync_data["updated_at_utc"],
+    }
+
+
+@app.post("/bridge/cancel-close", dependencies=[Depends(verify_secret_token)])
+def cancel_or_close_trade(payload: dict = Body(default={})):
+    """
+    Button 3 ("Cancel / Close Trade"):
+    Closes open position(s) and cancels pending orders on MT5 for the specified symbol
+    (or all symbols if `close_all: true`).
+    """
+    symbol = payload.get("symbol")
+    ticket = payload.get("ticket")
+    close_all = bool(payload.get("close_all", False))
+    return bridge_client.close_positions_and_cancel_orders(
+        symbol=symbol,
+        ticket=ticket,
+        close_all=close_all,
+    )
+
+
+@app.post("/bridge/stop-bot", dependencies=[Depends(verify_secret_token)])
+def stop_bot_and_close_all(payload: dict = Body(default={})):
+    """
+    Button 4 ("Stop Bot / Emergency Kill-Switch"):
+    1. Disarms the auto-bot (`bot_armed = False`, `auto_bot_enabled = False`) so no new trades are opened.
+    2. Closes all open positions & cancels all pending orders on MT5 (unless `close_all_trades` is explicitly False).
+    """
+    BOT_RUNTIME_STATE["bot_armed"] = False
+    BOT_RUNTIME_STATE["auto_bot_enabled"] = False
+    close_all_trades = bool(payload.get("close_all_trades", True))
+    close_report = (
+        bridge_client.close_positions_and_cancel_orders(close_all=True)
+        if close_all_trades
+        else {"closed_positions_count": 0, "cancelled_orders_count": 0, "message": "Bot disarmed without closing open trades."}
+    )
+    return {
+        "status": "stopped",
+        "bot_armed": False,
+        "auto_bot_enabled": False,
+        "message": f"🛑 Auto-Bot STOPPED & Disarmed. {close_report.get('message', '')}",
+        "close_report": close_report,
     }
 
 

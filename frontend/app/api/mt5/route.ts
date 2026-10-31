@@ -125,6 +125,62 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    if (mode === 'cancel_close') {
+      // Button 3: Cancel pending orders & close open positions for the pair (or all)
+      const cancelRes = await fetchWithTimeout(
+        `${baseUrl}/bridge/cancel-close`,
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${DEFAULT_SECRET_TOKEN}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            symbol: body.symbol,
+            ticket: body.ticket,
+            close_all: Boolean(body.close_all),
+          }),
+        },
+        12000
+      );
+      const cancelJson = await cancelRes.json().catch(() => ({}));
+      return NextResponse.json(
+        {
+          ...cancelJson,
+          resolved_bridge_url: baseUrl,
+          resolution_source: source,
+        },
+        { status: cancelRes.ok ? 200 : cancelRes.status }
+      );
+    }
+
+    if (mode === 'stop_bot') {
+      // Button 4: Disarm Auto-Bot & Close All Open Positions on MT5
+      const stopRes = await fetchWithTimeout(
+        `${baseUrl}/bridge/stop-bot`,
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${DEFAULT_SECRET_TOKEN}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            close_all_trades: body.close_all_trades !== false,
+          }),
+        },
+        12000
+      );
+      const stopJson = await stopRes.json().catch(() => ({}));
+      return NextResponse.json(
+        {
+          ...stopJson,
+          resolved_bridge_url: baseUrl,
+          resolution_source: source,
+        },
+        { status: stopRes.ok ? 200 : stopRes.status }
+      );
+    }
+
     // Button 2: Place Order / Trade Now -> POST /webhook/mt5
     const orderPayload = {
       symbol: body.symbol || 'XAU/USD',

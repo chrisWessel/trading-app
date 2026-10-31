@@ -15,7 +15,7 @@ import AuditReportSection from '@/components/AuditReportSection';
 import MarketSessionClocks from '@/components/MarketSessionClocks';
 import PositionSizingGuide from '@/components/PositionSizingGuide';
 import TrendCandlePanel from '@/components/TrendCandlePanel';
-import { Activity, ShieldCheck, Cpu, Radio, Coins, Search, Globe, Eye, Monitor, Calculator, Sparkles, Zap, Play, ArrowUpRight, ArrowDownRight } from 'lucide-react';
+import { Activity, ShieldCheck, Cpu, Radio, Coins, Search, Globe, Eye, Monitor, Calculator, Sparkles, Zap, Play, ArrowUpRight, ArrowDownRight, Square, XCircle } from 'lucide-react';
 
 interface AssetOption {
   symbol: string;
@@ -73,12 +73,14 @@ export default function DashboardPage() {
   const [goldFeedLabel, setGoldFeedLabel] = useState<string>('CHECKING');
   const [goldFeedMessage, setGoldFeedMessage] = useState<string>('');
 
-  // Top-level MT5 2-Button Execution Bar State
+  // Top-level MT5 4-Button Execution & Cancel/Stop Bar State
   const [topLotSize, setTopLotSize] = useState<number>(0.01);
   const [topDirection, setTopDirection] = useState<'BUY' | 'SELL'>('BUY');
   const [topMt5Syncing, setTopMt5Syncing] = useState<boolean>(false);
   const [topMt5Ordering, setTopMt5Ordering] = useState<boolean>(false);
-  const [topMt5Status, setTopMt5Status] = useState<string>('MT5 Bridge Ready (Port 8001 + Cloudflare Tunnel)');
+  const [topMt5Cancelling, setTopMt5Cancelling] = useState<boolean>(false);
+  const [topMt5Stopping, setTopMt5Stopping] = useState<boolean>(false);
+  const [topMt5Status, setTopMt5Status] = useState<string>('MT5 Bridge Ready (Auto-Stop SL/TP Active)');
   const [topMt5Receipt, setTopMt5Receipt] = useState<any | null>(null);
 
   const handleTopExecuteSync = async () => {
@@ -163,6 +165,85 @@ export default function DashboardPage() {
       });
     } finally {
       setTopMt5Ordering(false);
+    }
+  };
+
+  const handleTopCancelClose = async () => {
+    setTopMt5Cancelling(true);
+    setTopMt5Receipt(null);
+    try {
+      let json: any = null;
+      try {
+        const localRes = await fetch('http://127.0.0.1:8001/bridge/cancel-close', {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${MT5_LOCAL_TOKEN}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ symbol, close_all: false }),
+        });
+        if (localRes.ok) json = await localRes.json();
+      } catch {}
+
+      if (!json) {
+        const apiRes = await fetch('/api/mt5', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ mode: 'cancel_close', symbol, close_all: false }),
+        });
+        json = await apiRes.json();
+      }
+      setTopMt5Receipt({
+        status: json?.closed_positions_count > 0 || json?.cancelled_orders_count > 0 ? 'executed' : 'notice',
+        retcode_name: json?.message || `Cancel/Close executed for ${symbol}.`,
+      });
+    } catch (e: any) {
+      setTopMt5Receipt({
+        status: 'error',
+        retcode_name: e?.message || 'Failed to cancel/close trades on MT5.',
+      });
+    } finally {
+      setTopMt5Cancelling(false);
+    }
+  };
+
+  const handleTopStopBot = async () => {
+    setTopMt5Stopping(true);
+    setTopMt5Receipt(null);
+    try {
+      let json: any = null;
+      try {
+        const localRes = await fetch('http://127.0.0.1:8001/bridge/stop-bot', {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${MT5_LOCAL_TOKEN}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ close_all_trades: true }),
+        });
+        if (localRes.ok) json = await localRes.json();
+      } catch {}
+
+      if (!json) {
+        const apiRes = await fetch('/api/mt5', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ mode: 'stop_bot', close_all_trades: true }),
+        });
+        json = await apiRes.json();
+      }
+      setTopMt5Status('🛑 Auto-Bot Disarmed & All Open MT5 Trades Closed.');
+      setTopMt5Receipt({
+        status: 'stopped',
+        retcode_name: json?.message || '🛑 Auto-Bot stopped & open MT5 trades closed.',
+      });
+    } catch (e: any) {
+      setTopMt5Receipt({
+        status: 'error',
+        retcode_name: e?.message || 'Auto-Bot stopped locally.',
+      });
+    } finally {
+      setTopMt5Stopping(false);
     }
   };
 
@@ -563,19 +644,19 @@ export default function DashboardPage() {
             </span>
           </div>
 
-          {/* THE 2 CORE BUTTONS: 1. EXECUTE & 2. PLACE ORDER / TRADE NOW */}
-          <div className="flex flex-wrap items-center gap-2.5">
+          {/* THE 4 CORE BUTTONS: 1. EXECUTE | 2. PLACE ORDER | 3. CANCEL/CLOSE | 4. STOP BOT */}
+          <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
               disabled={topMt5Syncing}
               onClick={handleTopExecuteSync}
-              className="px-4 py-2 bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-500 hover:to-blue-500 disabled:opacity-60 text-white text-xs font-black rounded-lg shadow-lg border border-indigo-300/70 transition flex items-center gap-1.5 font-mono"
+              className="px-3.5 py-2 bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-500 hover:to-blue-500 disabled:opacity-60 text-white text-xs font-black rounded-lg shadow-lg border border-indigo-300/70 transition flex items-center gap-1.5 font-mono"
             >
               <Zap className={`w-4 h-4 text-amber-300 ${topMt5Syncing ? 'animate-spin' : ''}`} />
               <span>
                 {topMt5Syncing
-                  ? '1. Starting Cloudflare & Pushing to Git/Vercel...'
-                  : '1. EXECUTE (Start Tunnel & Push URL to Git/Vercel)'}
+                  ? '1. Syncing Tunnel...'
+                  : '1. EXECUTE (Start Tunnel & Sync Git/Vercel)'}
               </span>
             </button>
 
@@ -583,7 +664,7 @@ export default function DashboardPage() {
               type="button"
               disabled={topMt5Ordering}
               onClick={() => handleTopPlaceOrder(topDirection)}
-              className={`px-4 py-2 text-white text-xs font-black rounded-lg shadow-xl border transition flex items-center gap-1.5 font-mono ${
+              className={`px-3.5 py-2 text-white text-xs font-black rounded-lg shadow-xl border transition flex items-center gap-1.5 font-mono ${
                 topDirection === 'SELL'
                   ? 'bg-gradient-to-r from-rose-600 to-red-600 hover:from-rose-500 hover:to-red-500 border-rose-300/80'
                   : 'bg-gradient-to-r from-emerald-600 to-green-600 hover:from-emerald-500 hover:to-green-500 border-emerald-300/80'
@@ -594,6 +675,36 @@ export default function DashboardPage() {
                 {topMt5Ordering
                   ? `Executing ${topDirection} ${symbol}...`
                   : `2. PLACE ORDER / TRADE NOW (${topDirection} ${symbol} · ${topLotSize} Lot)`}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              disabled={topMt5Cancelling}
+              onClick={handleTopCancelClose}
+              className="px-3.5 py-2 bg-amber-600 hover:bg-amber-500 disabled:opacity-60 text-slate-950 text-xs font-black rounded-lg shadow-lg border border-amber-300 transition flex items-center gap-1.5 font-mono"
+              title="Closes open position(s) and cancels pending orders on MT5 for the active pair"
+            >
+              <XCircle className="w-4 h-4" />
+              <span>
+                {topMt5Cancelling
+                  ? 'Closing...'
+                  : `3. CANCEL / CLOSE (${symbol})`}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              disabled={topMt5Stopping}
+              onClick={handleTopStopBot}
+              className="px-3.5 py-2 bg-rose-700 hover:bg-rose-600 disabled:opacity-60 text-white text-xs font-black rounded-lg shadow-lg border border-rose-400 transition flex items-center gap-1.5 font-mono"
+              title="Stops the Auto-Bot and immediately closes ALL open MT5 positions across all pairs"
+            >
+              <Square className="w-3.5 h-3.5 fill-white" />
+              <span>
+                {topMt5Stopping
+                  ? 'Stopping...'
+                  : '4. STOP BOT (CLOSE ALL)'}
               </span>
             </button>
           </div>

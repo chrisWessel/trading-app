@@ -546,7 +546,14 @@ class MT5BridgeClient:
             ok, _ = self.ensure_connected()
             if not ok:
                 return []
-            positions = mt5.positions_get(symbol=symbol) if symbol else mt5.positions_get()
+            resolved_symbol = None
+            if symbol:
+                resolved_symbol, _ = self.resolve_broker_symbol(symbol)
+            positions = (
+                mt5.positions_get(symbol=resolved_symbol)
+                if resolved_symbol
+                else mt5.positions_get()
+            )
             if not positions:
                 return []
             return [
@@ -565,6 +572,159 @@ class MT5BridgeClient:
                 }
                 for p in positions
             ]
+
+    def close_positions_and_cancel_orders(
+        self,
+        symbol: Optional[str] = None,
+        ticket: Optional[int] = None,
+        close_all: bool = False,
+    ) -> dict[str, Any]:
+        """
+        Button 3 ("Cancel / Close Trade") & Button 4 ("Stop Bot"):
+        1. Closes open position(s) via opposite TRADE_ACTION_DEAL on MT5.
+        2. Cancels any pending orders via TRADE_ACTION_REMOVE on MT5.
+        """
+        now_utc = datetime.now(timezone.utc).isoformat()
+        with _mt5_lock:
+            ok, conn_meta = self.ensure_connected()
+            if not ok:
+                return {
+                    "status": "error",
+                    "message": conn_meta.get("error") or "MT5 IPC not connected.",
+                    "closed_positions_count": 0,
+                    "cancelled_orders_count": 0,
+                    "timestamp_utc": now_utc,
+                }
+
+            resolved_symbol = None
+            if symbol and not close_all:
+                resolved_symbol, _ = self.resolve_broker_symbol(symbol)
+
+            # 1. Gather open positions to close
+            if ticket is not None:
+                positions = mt5.positions_get(ticket=int(ticket))
+            elif resolved_symbol and not close_all:
+                positions = mt5.positions_get(symbol=resolved_symbol)
+            else:
+                positions = mt5.positions_get()
+
+            closed_results: list[dict[str, Any]] = []
+            total_profit = 0.0
+
+            if positions:
+                for pos in positions:
+                    pos_symbol = pos.symbol
+                    sym_info = mt5.symbol_info(pos_symbol)
+                    tick = mt5.symbol_info_tick(pos_symbol)
+                    if sym_info is None or tick is None:
+                        closed_results.append({
+                            "ticket": pos.ticket,
+                            "symbol": pos_symbol,
+                            "status": "failed",
+                            "reason": "Symbol info or live tick unavailable",
+                        })
+                        continue
+
+                    # Opposite order type to close position
+                    is_buy_pos = pos.type == mt5.ORDER_TYPE_BUY
+                    close_type = mt5.ORDER_TYPE_SELL if is_buy_pos else mt5.ORDER_TYPE_BUY
+                    close_price = float(tick.bid if is_buy_pos else tick.ask)
+                    filling_modes = self.candidate_filling_modes(sym_info)
+
+                    closed_ok = False
+                    last_rc = None
+                    for fill_mode in filling_modes:
+                        req = {
+                            "action": mt5.TRADE_ACTION_DEAL,
+                            "position": int(pos.ticket),
+                            "symbol": pos_symbol,
+                            "volume": float(pos.volume),
+                            "type": close_type,
+                            "price": close_price,
+                            "deviation": settings.max_slippage_points,
+                            "magic": int(pos.magic or settings.magic_number),
+                            "comment": "WesSignal:Close",
+                            "type_time": mt5.ORDER_TIME_GTC,
+                            "type_filling": fill_mode,
+                        }
+                        res = mt5.order_send(req)
+                        if res is None:
+                            continue
+                        last_rc = res.retcode
+                        if last_rc in (mt5.TRADE_RETCODE_DONE, mt5.TRADE_RETCODE_DONE_PARTIAL):
+                            closed_ok = True
+                            total_profit += float(pos.profit or 0.0)
+                            closed_results.append({
+                                "ticket": pos.ticket,
+                                "deal": getattr(res, "deal", None),
+                                "symbol": pos_symbol,
+                                "volume": pos.volume,
+                                "closed_price": float(getattr(res, "price", close_price) or close_price),
+                                "profit": round(float(pos.profit or 0.0), 2),
+                                "status": "closed",
+                                "retcode_name": describe_retcode(last_rc),
+                            })
+                            break
+                        if last_rc != mt5.TRADE_RETCODE_INVALID_FILL:
+                            break
+
+                    if not closed_ok:
+                        closed_results.append({
+                            "ticket": pos.ticket,
+                            "symbol": pos_symbol,
+                            "status": "failed",
+                            "retcode_name": describe_retcode(last_rc),
+                        })
+
+            # 2. Gather pending orders to cancel
+            if ticket is not None:
+                orders = mt5.orders_get(ticket=int(ticket))
+            elif resolved_symbol and not close_all:
+                orders = mt5.orders_get(symbol=resolved_symbol)
+            else:
+                orders = mt5.orders_get()
+
+            cancelled_results: list[dict[str, Any]] = []
+            if orders:
+                for ord_item in orders:
+                    req = {
+                        "action": mt5.TRADE_ACTION_REMOVE,
+                        "order": int(ord_item.ticket),
+                        "comment": "WesSignal:Cancel",
+                    }
+                    res = mt5.order_send(req)
+                    rc = getattr(res, "retcode", None) if res else None
+                    cancelled_results.append({
+                        "order_ticket": ord_item.ticket,
+                        "symbol": ord_item.symbol,
+                        "status": "cancelled" if rc == mt5.TRADE_RETCODE_DONE else "failed",
+                        "retcode_name": describe_retcode(rc),
+                    })
+
+            closed_count = sum(1 for r in closed_results if r.get("status") == "closed")
+            cancelled_count = sum(1 for r in cancelled_results if r.get("status") == "cancelled")
+
+            if closed_count == 0 and cancelled_count == 0 and not closed_results and not cancelled_results:
+                scope_label = "all symbols" if close_all else (resolved_symbol or symbol or "account")
+                msg = f"No open positions or pending orders found on MT5 for {scope_label}."
+            else:
+                msg = (
+                    f"Closed {closed_count} open position(s) (PnL: ${total_profit:+.2f}) "
+                    f"and cancelled {cancelled_count} pending order(s) on MT5."
+                )
+
+            return {
+                "status": "ok",
+                "message": msg,
+                "symbol_requested": symbol,
+                "symbol_resolved": resolved_symbol,
+                "closed_positions_count": closed_count,
+                "cancelled_orders_count": cancelled_count,
+                "total_profit": round(total_profit, 2),
+                "closed_positions": closed_results,
+                "cancelled_orders": cancelled_results,
+                "timestamp_utc": now_utc,
+            }
 
 
 bridge_client = MT5BridgeClient()

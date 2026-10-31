@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useEffect, useState, useRef } from 'react';
-import { Bell, Zap, ArrowUpRight, ArrowDownRight, Volume2, VolumeX, Shield, Target, Play, Clock, Navigation } from 'lucide-react';
+import { Bell, Zap, ArrowUpRight, ArrowDownRight, Volume2, VolumeX, Shield, Target, Play, Clock, Navigation, Square, XCircle, Bot } from 'lucide-react';
 import { API_BASE_URL } from '@/lib/apiConfig';
 import { fetchWithFastTimeout, fetchBrowserLiveBars, computeBrowserSignalAnalysis } from '@/lib/browserFallbackEngine';
 
@@ -173,11 +173,17 @@ export default function LiveSignalNotificationPanel({
   const signalLockRef = useRef<LockedSignalState | null>(null);
   const [holdRemainingSec, setHoldRemainingSec] = useState<number>(TIMEFRAME_HOLD_SECONDS[timeframe] || 300);
 
-  // ── MT5 Bridge & Cloudflare Tunnel 2-Button Execution Console State ──
+  // ── MT5 Bridge & Cloudflare Tunnel 4-Button Execution Console State ──
   const [mt5Syncing, setMt5Syncing] = useState<boolean>(false);
   const [mt5Ordering, setMt5Ordering] = useState<boolean>(false);
+  const [mt5Cancelling, setMt5Cancelling] = useState<boolean>(false);
+  const [mt5Stopping, setMt5Stopping] = useState<boolean>(false);
+  const [autoBotEnabled, setAutoBotEnabled] = useState<boolean>(false);
+  const lastAutoTradedKeyRef = useRef<string>('');
   const [mt5BridgeState, setMt5BridgeState] = useState<{
     online: boolean;
+    botArmed?: boolean;
+    openPositionsCount?: number;
     tunnelUrl: string;
     accountLogin?: number | string;
     accountServer?: string;
@@ -211,6 +217,8 @@ export default function LiveSignalNotificationPanel({
         const term = json.mt5_terminal || {};
         setMt5BridgeState((prev) => ({
           online: Boolean(json.mt5_ipc_connected),
+          botArmed: json.bot_armed !== false,
+          openPositionsCount: Number(json.open_positions_count || 0),
           tunnelUrl: json.tunnel_url || json.resolved_bridge_url || prev?.tunnelUrl || '',
           accountLogin: term.account_login,
           accountServer: term.account_server,
@@ -266,6 +274,7 @@ export default function LiveSignalNotificationPanel({
       const pushed = Boolean(json?.git_sync?.pushed || json?.status === 'synced');
       setMt5BridgeState({
         online: Boolean(json?.mt5_ipc_connected),
+        botArmed: true,
         tunnelUrl: json?.tunnel_url || json?.resolved_bridge_url || '',
         accountLogin: term.account_login,
         accountServer: term.account_server,
@@ -287,7 +296,7 @@ export default function LiveSignalNotificationPanel({
     }
   };
 
-  // BUTTON 2: Place Order / Trade Now (Executes real TRADE_ACTION_DEAL on MT5)
+  // BUTTON 2: Place Order / Trade Now (Executes real TRADE_ACTION_DEAL on MT5 with automatic TP & SL)
   const handlePlaceMt5Order = async (directionOverride?: 'BUY' | 'SELL', selectedTpPrice?: number, slPrice?: number) => {
     setMt5Ordering(true);
     setMt5OrderReceipt(null);
@@ -345,6 +354,118 @@ export default function LiveSignalNotificationPanel({
       });
     } finally {
       setMt5Ordering(false);
+    }
+  };
+
+  // BUTTON 3: Cancel / Close Trade for Active Symbol on MT5
+  const handleCancelOrCloseTrade = async (closeAll = false) => {
+    setMt5Cancelling(true);
+    setMt5OrderReceipt(null);
+    try {
+      let json: any = null;
+      try {
+        const localRes = await fetchWithFastTimeout(
+          'http://127.0.0.1:8001/bridge/cancel-close',
+          10000,
+          {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${MT5_LOCAL_TOKEN}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ symbol, close_all: closeAll }),
+          }
+        );
+        if (localRes.ok) json = await localRes.json();
+      } catch {}
+
+      if (!json) {
+        const apiRes = await fetchWithFastTimeout(
+          '/api/mt5',
+          12000,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ mode: 'cancel_close', symbol, close_all: closeAll }),
+          }
+        );
+        json = await apiRes.json();
+      }
+
+      setMt5OrderReceipt({
+        status: json?.closed_positions_count > 0 || json?.cancelled_orders_count > 0 ? 'executed' : 'notice',
+        direction: `CLOSED (${symbol})`,
+        retcode_name: json?.message || 'Cancel/Close completed.',
+      });
+      checkMt5BridgeHealth();
+    } catch (err: any) {
+      setMt5OrderReceipt({
+        status: 'error',
+        retcode_name: err?.message || 'Failed to cancel/close trades on MT5.',
+      });
+    } finally {
+      setMt5Cancelling(false);
+    }
+  };
+
+  // BUTTON 4: Stop Auto-Bot & Close All Open Trades (Emergency Kill-Switch)
+  const handleStopAutoBot = async () => {
+    setMt5Stopping(true);
+    setAutoBotEnabled(false);
+    setMt5OrderReceipt(null);
+    try {
+      let json: any = null;
+      try {
+        const localRes = await fetchWithFastTimeout(
+          'http://127.0.0.1:8001/bridge/stop-bot',
+          10000,
+          {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${MT5_LOCAL_TOKEN}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ close_all_trades: true }),
+          }
+        );
+        if (localRes.ok) json = await localRes.json();
+      } catch {}
+
+      if (!json) {
+        const apiRes = await fetchWithFastTimeout(
+          '/api/mt5',
+          12000,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ mode: 'stop_bot', close_all_trades: true }),
+          }
+        );
+        json = await apiRes.json();
+      }
+
+      setMt5BridgeState((prev) => ({
+        online: prev?.online ?? false,
+        botArmed: false,
+        openPositionsCount: 0,
+        tunnelUrl: prev?.tunnelUrl || '',
+        accountLogin: prev?.accountLogin,
+        accountServer: prev?.accountServer,
+        accountBalance: prev?.accountBalance,
+        message: json?.message || '🛑 Auto-Bot STOPPED & all open MT5 trades closed.',
+      }));
+      setMt5OrderReceipt({
+        status: 'stopped',
+        direction: 'BOT STOPPED',
+        retcode_name: json?.message || '🛑 Auto-Bot disarmed & open MT5 trades closed.',
+      });
+    } catch (err: any) {
+      setMt5OrderReceipt({
+        status: 'error',
+        retcode_name: err?.message || 'Auto-Bot stopped locally.',
+      });
+    } finally {
+      setMt5Stopping(false);
     }
   };
 
@@ -794,6 +915,22 @@ export default function LiveSignalNotificationPanel({
     'border-violet-700 text-violet-300 bg-violet-950/60',
   ];
 
+  // Auto-Bot Pilot: when enabled, automatically dispatches 1 order on BUY_NOW / SELL_NOW with hard MT5 SL & TP, then auto-stops!
+  useEffect(() => {
+    if (!autoBotEnabled || mt5Ordering) return;
+    if (latestNotif?.type !== 'BUY_NOW' && latestNotif?.type !== 'SELL_NOW') return;
+    const dir = latestNotif.type === 'SELL_NOW' ? 'SELL' : 'BUY';
+    const sigKey = `${symbol}_${timeframe}_${dir}_${Math.round(displayEntry * 100)}`;
+    if (lastAutoTradedKeyRef.current === sigKey) return;
+    lastAutoTradedKeyRef.current = sigKey;
+    const targetTp = displayTpLevels[selectedTpIndex] ?? displayTp1;
+    handlePlaceMt5Order(dir, targetTp, displaySL).then(() => {
+      // Automatically stop Auto-Bot after placing the trade so it never spam-opens multiple orders;
+      // MT5 server-side TP & SL will now automatically close the trade on its own!
+      setAutoBotEnabled(false);
+    });
+  }, [autoBotEnabled, latestNotif?.type, symbol, timeframe, displayEntry]);
+
   return (
     <aside className="bg-slate-900 border border-slate-800 rounded-xl p-4 shadow-2xl flex flex-col h-full max-h-[calc(100vh-2rem)] sticky top-4 space-y-4 font-mono overflow-y-auto scrollbar-navigator">
       {/* Sidebar Top Header */}
@@ -880,24 +1017,36 @@ export default function LiveSignalNotificationPanel({
           </div>
         </div>
 
-        {/* ── TOP-LEVEL MT5 2-BUTTON EXECUTION CONSOLE (ALWAYS VISIBLE FOR ALL PAIRS) ── */}
+        {/* ── TOP-LEVEL MT5 4-BUTTON EXECUTION & STOP/CANCEL CONSOLE (ALWAYS VISIBLE FOR ALL PAIRS) ── */}
         <div className="bg-gradient-to-b from-indigo-950/90 to-slate-950 border-2 border-indigo-500/80 p-3 rounded-xl space-y-2.5 shadow-xl">
           <div className="flex items-center justify-between border-b border-indigo-800/70 pb-1.5">
             <div className="flex items-center gap-1.5">
               <span
                 className={`w-2.5 h-2.5 rounded-full ${
-                  mt5BridgeState?.online ? 'bg-emerald-400 animate-ping' : 'bg-amber-400'
+                  mt5BridgeState?.botArmed === false
+                    ? 'bg-rose-500'
+                    : mt5BridgeState?.online
+                    ? 'bg-emerald-400 animate-ping'
+                    : 'bg-amber-400'
                 }`}
               />
               <span className="text-[11px] font-black text-white uppercase tracking-wider">
                 MT5 Auto-Bridge ({symbol})
               </span>
             </div>
-            <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-indigo-900/90 border border-indigo-600 text-indigo-100 font-bold">
-              {mt5BridgeState?.accountServer
-                ? `${mt5BridgeState.accountServer} · #${mt5BridgeState.accountLogin}`
-                : 'Exness MT5 · All Pairs'}
-            </span>
+            <button
+              type="button"
+              onClick={() => setAutoBotEnabled((prev) => !prev)}
+              className={`text-[9px] font-mono px-2 py-0.5 rounded border font-extrabold flex items-center gap-1 transition ${
+                autoBotEnabled
+                  ? 'bg-emerald-600 border-emerald-300 text-white animate-pulse'
+                  : 'bg-indigo-900/90 border-indigo-600 text-indigo-100 hover:bg-indigo-800'
+              }`}
+              title="When Auto-Bot is ON, it automatically places 1 order on the next signal with hard SL/TP and then auto-stops."
+            >
+              <Bot className="w-3 h-3" />
+              <span>{autoBotEnabled ? 'AUTO-BOT: ON (AUTO-STOP)' : 'AUTO-BOT: MANUAL'}</span>
+            </button>
           </div>
 
           {/* Quick Lot Size & Active Tunnel Status Row */}
@@ -921,7 +1070,8 @@ export default function LiveSignalNotificationPanel({
             <div className="text-right font-mono text-[9.5px]">
               {mt5BridgeState?.accountBalance !== undefined ? (
                 <span className="text-emerald-300 font-bold">
-                  MT5 Bal: ${Number(mt5BridgeState.accountBalance).toFixed(2)}
+                  Bal: ${Number(mt5BridgeState.accountBalance).toFixed(2)}
+                  {mt5BridgeState.openPositionsCount ? ` · ${mt5BridgeState.openPositionsCount} Open` : ''}
                 </span>
               ) : (
                 <span className={mt5BridgeState?.online ? 'text-emerald-400 font-bold' : 'text-amber-300 font-bold'}>
@@ -947,9 +1097,9 @@ export default function LiveSignalNotificationPanel({
             type="button"
             disabled={mt5Syncing}
             onClick={handleExecuteBridgeSync}
-            className="w-full py-2.5 px-3 bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-500 hover:to-blue-500 disabled:opacity-60 text-white text-[11px] font-black rounded-lg shadow-lg border border-indigo-300/60 transition flex items-center justify-center gap-1.5"
+            className="w-full py-2 px-3 bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-500 hover:to-blue-500 disabled:opacity-60 text-white text-[10.5px] font-black rounded-lg shadow-lg border border-indigo-300/60 transition flex items-center justify-center gap-1.5"
           >
-            <Zap className={`w-4 h-4 text-amber-300 ${mt5Syncing ? 'animate-spin' : ''}`} />
+            <Zap className={`w-3.5 h-3.5 text-amber-300 ${mt5Syncing ? 'animate-spin' : ''}`} />
             <span>
               {mt5Syncing
                 ? '1. Starting Cloudflare & Pushing URL to Git/Vercel...'
@@ -957,7 +1107,7 @@ export default function LiveSignalNotificationPanel({
             </span>
           </button>
 
-          {/* BUTTON 2: PLACE ORDER / TRADE NOW (Executes Live Trade on MT5 for Any Pair) */}
+          {/* BUTTON 2: PLACE ORDER / TRADE NOW (Executes Live Trade on MT5 for Any Pair with Auto TP/SL) */}
           <button
             type="button"
             disabled={mt5Ordering}
@@ -978,7 +1128,7 @@ export default function LiveSignalNotificationPanel({
             <span>
               {mt5Ordering
                 ? `Executing ${isSellTrade ? 'SELL' : 'BUY'} ${symbol} (${lotSize} Lot)...`
-                : `2. PLACE ORDER / TRADE NOW (${isSellTrade ? 'SELL' : 'BUY'} ${symbol} · ${lotSize} Lot)`}
+                : `2. PLACE ORDER / TRADE NOW (${isSellTrade ? 'SELL' : 'BUY'} ${symbol} · TP${selectedTpIndex + 1})`}
             </span>
           </button>
 
@@ -1000,7 +1150,7 @@ export default function LiveSignalNotificationPanel({
               className="py-1.5 px-2 bg-emerald-900/80 hover:bg-emerald-700 border border-emerald-500/60 text-emerald-100 text-[10px] font-extrabold rounded-md transition flex items-center justify-center gap-1 disabled:opacity-50"
             >
               <ArrowUpRight className="w-3 h-3 text-emerald-300" />
-              <span> Instant BUY {symbol}</span>
+              <span>Instant BUY {symbol}</span>
             </button>
             <button
               type="button"
@@ -1018,8 +1168,37 @@ export default function LiveSignalNotificationPanel({
               className="py-1.5 px-2 bg-rose-900/80 hover:bg-rose-700 border border-rose-500/60 text-rose-100 text-[10px] font-extrabold rounded-md transition flex items-center justify-center gap-1 disabled:opacity-50"
             >
               <ArrowDownRight className="w-3 h-3 text-rose-300" />
-              <span> Instant SELL {symbol}</span>
+              <span>Instant SELL {symbol}</span>
             </button>
+          </div>
+
+          {/* BUTTON 3 (CANCEL / CLOSE PAIR TRADE) & BUTTON 4 (STOP BOT / CLOSE ALL) */}
+          <div className="grid grid-cols-2 gap-1.5 pt-1 border-t border-indigo-900/80">
+            <button
+              type="button"
+              disabled={mt5Cancelling}
+              onClick={() => handleCancelOrCloseTrade(false)}
+              className="py-2 px-2 bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-slate-950 text-[10px] font-black rounded-lg shadow border border-amber-300 transition flex items-center justify-center gap-1"
+              title="Immediately closes open MT5 position(s) & cancels pending orders for this pair"
+            >
+              <XCircle className="w-3.5 h-3.5" />
+              <span>{mt5Cancelling ? 'Closing...' : `3. CANCEL / CLOSE (${symbol})`}</span>
+            </button>
+            <button
+              type="button"
+              disabled={mt5Stopping}
+              onClick={handleStopAutoBot}
+              className="py-2 px-2 bg-rose-700 hover:bg-rose-600 disabled:opacity-50 text-white text-[10px] font-black rounded-lg shadow border border-rose-400 transition flex items-center justify-center gap-1"
+              title="Stops the Auto-Bot and immediately closes ALL open MT5 positions across all pairs"
+            >
+              <Square className="w-3 h-3 fill-white" />
+              <span>{mt5Stopping ? 'Stopping...' : '4. STOP BOT (CLOSE ALL)'}</span>
+            </button>
+          </div>
+
+          {/* Auto-Stop & Server-Side TP/SL Protection Note */}
+          <div className="text-[8.5px] text-slate-300 bg-slate-900/90 border border-slate-800 rounded px-2 py-1 font-sans leading-tight">
+            🛡️ <strong>Auto-Stop Built-In:</strong> Every order attaches hard <strong>SL (${displaySL.toFixed(precision)})</strong> &amp; <strong>TP{selectedTpIndex + 1} (${(displayTpLevels[selectedTpIndex] ?? displayTp1).toFixed(precision)})</strong> on the Exness MT5 server, so trades close automatically on their own at profit/stop even if your PC is off.
           </div>
 
           {/* Instant MT5 Execution Receipt */}
@@ -1028,14 +1207,18 @@ export default function LiveSignalNotificationPanel({
               className={`p-2 rounded-lg border text-[9.5px] font-mono space-y-1 ${
                 mt5OrderReceipt.status === 'executed'
                   ? 'bg-emerald-950/95 border-emerald-400 text-emerald-200'
+                  : mt5OrderReceipt.status === 'stopped' || mt5OrderReceipt.status === 'notice'
+                  ? 'bg-amber-950/95 border-amber-400 text-amber-200'
                   : 'bg-rose-950/95 border-rose-400 text-rose-200'
               }`}
             >
               <div className="flex items-center justify-between font-bold">
                 <span>
                   {mt5OrderReceipt.status === 'executed'
-                    ? `✅ MT5 ORDER EXECUTED (${mt5OrderReceipt.direction})`
-                    : `⚠️ MT5: ${String(mt5OrderReceipt.status || 'NOTICE').toUpperCase()}`}
+                    ? `✅ MT5 ACTION COMPLETED (${mt5OrderReceipt.direction})`
+                    : mt5OrderReceipt.status === 'stopped'
+                    ? '🛑 AUTO-BOT STOPPED & TRADES CLOSED'
+                    : `ℹ️ MT5: ${String(mt5OrderReceipt.status || 'NOTICE').toUpperCase()}`}
                 </span>
                 {mt5OrderReceipt.deal_ticket && (
                   <span className="bg-emerald-900 px-1.5 py-0.5 rounded text-white">
