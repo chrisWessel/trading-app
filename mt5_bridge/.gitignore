@@ -2,6 +2,7 @@
 .env
 *.log
 *.exe
+tunnel_state.json
 __pycache__/
 *.pyc
 .venv/

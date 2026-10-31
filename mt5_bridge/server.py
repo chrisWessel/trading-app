@@ -21,11 +21,16 @@ if str(BRIDGE_DIR) not in sys.path:
 from config import settings  # noqa: E402
 from schemas import WebhookOrderRequest, OrderExecutionResponse  # noqa: E402
 from mt5_client import bridge_client  # noqa: E402
+from tunnel_manager import (  # noqa: E402
+    read_saved_tunnel_url,
+    start_or_get_cloudflare_tunnel,
+    persist_and_push_tunnel,
+)
 
 app = FastAPI(
     title="WesSignal Local MT5 Execution Bridge",
     description="Zero-trust FastAPI + MetaTrader5 IPC webhook bridge for Vercel trade signals.",
-    version="1.0.0",
+    version="1.1.0",
 )
 
 app.add_middleware(
@@ -44,10 +49,6 @@ def verify_secret_token(
     """
     Hard security constraint: blocks any request that does not carry the exact
     MT5_BRIDGE_SECRET_TOKEN configured in `mt5_bridge/.env`.
-    Accepts either:
-      - `Authorization: Bearer <token>`
-      - `Authorization: <token>`
-      - `X-Bridge-Token: <token>`
     """
     extracted = ""
     if authorization:
@@ -72,11 +73,49 @@ def verify_secret_token(
 def bridge_health():
     """Authenticated health endpoint verifying live IPC connectivity to the Windows MT5 terminal."""
     ok, meta = bridge_client.ensure_connected()
+    tunnel_url = read_saved_tunnel_url()
     return {
         "bridge": "online",
         "port": settings.port,
+        "tunnel_url": tunnel_url,
+        "webhook_url": f"{tunnel_url}/webhook/mt5" if tunnel_url else None,
         "mt5_ipc_connected": ok,
         "mt5_terminal": meta,
+    }
+
+
+@app.post("/bridge/execute-sync", dependencies=[Depends(verify_secret_token)])
+def execute_bridge_and_sync_git():
+    """
+    Button 1 ("Execute Bridge & Sync to Git/Vercel"):
+      1. Verifies MT5 IPC connection to the local Windows MT5 terminal.
+      2. Starts (or verifies) the Cloudflare Quick Tunnel (`cloudflared tunnel --url http://127.0.0.1:8001`).
+      3. Writes the generated `https://*.trycloudflare.com` URL to `frontend/public/mt5_tunnel.json`.
+      4. Commits and pushes `frontend/public/mt5_tunnel.json` to `origin/main` so Vercel automatically
+         receives the new tunnel URL and redeploys!
+    """
+    mt5_ok, mt5_meta = bridge_client.ensure_connected()
+    tunnel_ok, tunnel_url, tunnel_msg = start_or_get_cloudflare_tunnel()
+    if not tunnel_ok or not tunnel_url:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={
+                "status": "error",
+                "message": tunnel_msg,
+                "mt5_terminal": mt5_meta,
+            },
+        )
+
+    sync_data = persist_and_push_tunnel(tunnel_url, mt5_meta)
+    return {
+        "status": "synced",
+        "message": tunnel_msg,
+        "tunnel_url": sync_data["tunnel_url"],
+        "webhook_url": sync_data["webhook_url"],
+        "mt5_ipc_connected": mt5_ok,
+        "mt5_terminal": mt5_meta,
+        "git_sync": sync_data["git_sync"],
+        "updated_at_utc": sync_data["updated_at_utc"],
     }
 
 
@@ -127,7 +166,7 @@ def get_open_positions(symbol: Optional[str] = None):
 )
 def execute_webhook_signal(payload: WebhookOrderRequest):
     """
-    Primary webhook ingress endpoint called by the Vercel app.
+    Button 2 ("Place Order / Trade Now") & Primary Webhook Endpoint:
     Validates secret token, resolves symbol, checks live ask/bid tick,
     applies volumetric fallbacks, and dispatches `TRADE_ACTION_DEAL` via MT5 IPC.
     """
@@ -145,4 +184,3 @@ if __name__ == "__main__":
         workers=1,
         reload=False,
     )
-

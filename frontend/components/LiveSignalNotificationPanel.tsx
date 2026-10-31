@@ -173,6 +173,181 @@ export default function LiveSignalNotificationPanel({
   const signalLockRef = useRef<LockedSignalState | null>(null);
   const [holdRemainingSec, setHoldRemainingSec] = useState<number>(TIMEFRAME_HOLD_SECONDS[timeframe] || 300);
 
+  // ── MT5 Bridge & Cloudflare Tunnel 2-Button Execution Console State ──
+  const [mt5Syncing, setMt5Syncing] = useState<boolean>(false);
+  const [mt5Ordering, setMt5Ordering] = useState<boolean>(false);
+  const [mt5BridgeState, setMt5BridgeState] = useState<{
+    online: boolean;
+    tunnelUrl: string;
+    accountLogin?: number | string;
+    accountServer?: string;
+    accountBalance?: number;
+    terminalName?: string;
+    gitSynced?: boolean;
+    message?: string;
+  } | null>(null);
+  const [mt5OrderReceipt, setMt5OrderReceipt] = useState<any | null>(null);
+
+  const MT5_LOCAL_TOKEN = 'wessignal_mt5_9f8e7d6c5b4a3f2e1d0c9b8a7f6e5d4c3b2a1f0e9d8c7b6a5f4e3d2c1b0a';
+
+  const checkMt5BridgeHealth = async () => {
+    try {
+      let json: any = null;
+      try {
+        const localRes = await fetchWithFastTimeout(
+          'http://127.0.0.1:8001/health',
+          1500,
+          { headers: { Authorization: `Bearer ${MT5_LOCAL_TOKEN}` } }
+        );
+        if (localRes.ok) json = await localRes.json();
+      } catch {}
+
+      if (!json) {
+        const apiRes = await fetchWithFastTimeout('/api/mt5', 4000);
+        if (apiRes.ok) json = await apiRes.json();
+      }
+
+      if (json && json.bridge === 'online') {
+        const term = json.mt5_terminal || {};
+        setMt5BridgeState((prev) => ({
+          online: Boolean(json.mt5_ipc_connected),
+          tunnelUrl: json.tunnel_url || json.resolved_bridge_url || prev?.tunnelUrl || '',
+          accountLogin: term.account_login,
+          accountServer: term.account_server,
+          accountBalance: term.account_balance,
+          terminalName: term.terminal_name,
+          gitSynced: prev?.gitSynced,
+          message: term.connected
+            ? `Connected: ${term.terminal_name || 'MT5'} (#${term.account_login} · ${term.account_server})`
+            : term.hint || 'MT5 Bridge online',
+        }));
+      }
+    } catch {}
+  };
+
+  useEffect(() => {
+    checkMt5BridgeHealth();
+  }, []);
+
+  // BUTTON 1: Execute Bridge (Start Cloudflare Tunnel + Push New URL to GitHub & Vercel)
+  const handleExecuteBridgeSync = async () => {
+    setMt5Syncing(true);
+    try {
+      let json: any = null;
+      try {
+        const localRes = await fetchWithFastTimeout(
+          'http://127.0.0.1:8001/bridge/execute-sync',
+          25000,
+          {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${MT5_LOCAL_TOKEN}`,
+              'Content-Type': 'application/json',
+            },
+          }
+        );
+        if (localRes.ok) json = await localRes.json();
+      } catch {}
+
+      if (!json) {
+        const apiRes = await fetchWithFastTimeout(
+          '/api/mt5',
+          25000,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ mode: 'execute_sync' }),
+          }
+        );
+        json = await apiRes.json();
+      }
+
+      const term = json?.mt5_terminal || {};
+      const pushed = Boolean(json?.git_sync?.pushed || json?.status === 'synced');
+      setMt5BridgeState({
+        online: Boolean(json?.mt5_ipc_connected),
+        tunnelUrl: json?.tunnel_url || json?.resolved_bridge_url || '',
+        accountLogin: term.account_login,
+        accountServer: term.account_server,
+        accountBalance: term.account_balance,
+        terminalName: term.terminal_name,
+        gitSynced: pushed,
+        message: pushed
+          ? `✅ Tunnel active & pushed to GitHub/Vercel! (${json?.tunnel_url || 'Synced'})`
+          : json?.message || json?.error || 'Bridge sync completed.',
+      });
+    } catch (err: any) {
+      setMt5BridgeState((prev) => ({
+        online: prev?.online || false,
+        tunnelUrl: prev?.tunnelUrl || '',
+        message: `⚠️ Bridge sync error: ${err?.message || 'Ensure start_bridge.bat or server.py is running on your PC.'}`,
+      }));
+    } finally {
+      setMt5Syncing(false);
+    }
+  };
+
+  // BUTTON 2: Place Order / Trade Now (Executes real TRADE_ACTION_DEAL on MT5)
+  const handlePlaceMt5Order = async (directionOverride?: 'BUY' | 'SELL', selectedTpPrice?: number, slPrice?: number) => {
+    setMt5Ordering(true);
+    setMt5OrderReceipt(null);
+    const dir = directionOverride || (isSellTrade ? 'SELL' : 'BUY');
+    const payload = {
+      mode: 'place_order',
+      symbol,
+      action: dir,
+      volume: lotSize,
+      stop_loss: slPrice && slPrice > 0 ? slPrice : undefined,
+      take_profit: selectedTpPrice && selectedTpPrice > 0 ? selectedTpPrice : undefined,
+      timeframe,
+      dry_run: false,
+    };
+
+    try {
+      let json: any = null;
+      // 1. Try direct local port 8001 first for sub-10ms execution when on the trading PC
+      try {
+        const localRes = await fetchWithFastTimeout(
+          'http://127.0.0.1:8001/webhook/mt5',
+          10000,
+          {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${MT5_LOCAL_TOKEN}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(payload),
+          }
+        );
+        json = await localRes.json();
+      } catch {}
+
+      // 2. Otherwise route via Next.js /api/mt5 -> active Cloudflare Tunnel URL
+      if (!json) {
+        const apiRes = await fetchWithFastTimeout(
+          '/api/mt5',
+          12000,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          }
+        );
+        json = await apiRes.json();
+      }
+
+      setMt5OrderReceipt(json);
+      checkMt5BridgeHealth();
+    } catch (err: any) {
+      setMt5OrderReceipt({
+        status: 'error',
+        retcode_name: err?.message || 'Failed to reach MT5 Bridge.',
+      });
+    } finally {
+      setMt5Ordering(false);
+    }
+  };
+
   const isHighValue = (analysis?.latest_price || 0) > 10.0;
   const precision = isHighValue ? 2 : 4;
 
@@ -1006,6 +1181,134 @@ export default function LiveSignalNotificationPanel({
             <p className="text-[10px] text-slate-300 leading-snug">
               Signals remain <strong>100% live & active</strong>. Despite any news hold recommendations, you can execute trades at any time at your discretion.
             </p>
+          </div>
+
+          {/* ── MT5 LIVE EXECUTION CONSOLE (2-BUTTON SYSTEM: 1. EXECUTE BRIDGE & SYNC | 2. PLACE ORDER / TRADE NOW) ── */}
+          <div className="bg-slate-950/95 border border-indigo-500/60 p-3 rounded-xl space-y-2.5 shadow-lg">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-1.5">
+              <div className="flex items-center gap-1.5">
+                <span
+                  className={`w-2 h-2 rounded-full ${
+                    mt5BridgeState?.online ? 'bg-emerald-400 animate-ping' : 'bg-amber-400'
+                  }`}
+                />
+                <span className="text-[10px] font-extrabold text-indigo-300 uppercase tracking-wider">
+                  MT5 Live Bridge Console
+                </span>
+              </div>
+              <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-indigo-950 border border-indigo-700 text-indigo-200">
+                {mt5BridgeState?.accountServer
+                  ? `${mt5BridgeState.accountServer} · #${mt5BridgeState.accountLogin}`
+                  : 'Port 8001 · Cloudflare'}
+              </span>
+            </div>
+
+            {mt5BridgeState && (
+              <div className="text-[9.5px] bg-slate-900/90 border border-slate-800 rounded-lg px-2.5 py-1.5 space-y-0.5 font-mono">
+                <div className="flex items-center justify-between text-slate-300">
+                  <span>
+                    Status:{' '}
+                    <strong className={mt5BridgeState.online ? 'text-emerald-400' : 'text-amber-400'}>
+                      {mt5BridgeState.online ? 'MT5 IPC CONNECTED' : 'STANDBY'}
+                    </strong>
+                  </span>
+                  {mt5BridgeState.accountBalance !== undefined && (
+                    <span className="text-emerald-300 font-bold">
+                      Bal: ${Number(mt5BridgeState.accountBalance).toFixed(2)}
+                    </span>
+                  )}
+                </div>
+                {mt5BridgeState.tunnelUrl && (
+                  <div className="text-[8.5px] text-sky-300 truncate" title={mt5BridgeState.tunnelUrl}>
+                    Tunnel: {mt5BridgeState.tunnelUrl}
+                  </div>
+                )}
+                {mt5BridgeState.message && (
+                  <div className="text-[9px] text-slate-400 leading-tight font-sans">
+                    {mt5BridgeState.message}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* BUTTON 1: EXECUTE (Start Cloudflare Tunnel + Push New URL to GitHub & Vercel) */}
+            <button
+              type="button"
+              disabled={mt5Syncing}
+              onClick={handleExecuteBridgeSync}
+              className="w-full py-2 px-3 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-60 text-white text-[11px] font-extrabold rounded-lg shadow-md border border-indigo-400/50 transition flex items-center justify-center gap-1.5"
+            >
+              <Zap className={`w-3.5 h-3.5 ${mt5Syncing ? 'animate-spin' : ''}`} />
+              <span>
+                {mt5Syncing
+                  ? '1. Starting Cloudflare Tunnel & Pushing to Git/Vercel...'
+                  : '1. EXECUTE (Start Tunnel & Sync URL to Git/Vercel)'}
+              </span>
+            </button>
+
+            {/* BUTTON 2: PLACE ORDER / TRADE NOW (Executes Live Trade on MT5) */}
+            <button
+              type="button"
+              disabled={mt5Ordering}
+              onClick={() =>
+                handlePlaceMt5Order(
+                  isSellTrade ? 'SELL' : 'BUY',
+                  displayTpLevels[selectedTpIndex] ?? displayTp1,
+                  displaySL
+                )
+              }
+              className={`w-full py-2.5 px-3 text-white text-xs font-black rounded-lg shadow-xl border transition flex items-center justify-center gap-1.5 ${
+                isSellTrade
+                  ? 'bg-gradient-to-r from-rose-600 to-red-600 hover:from-rose-500 hover:to-red-500 border-rose-400/60'
+                  : 'bg-gradient-to-r from-emerald-600 to-green-600 hover:from-emerald-500 hover:to-green-500 border-emerald-400/60'
+              } disabled:opacity-60`}
+            >
+              <Play className="w-3.5 h-3.5 fill-white" />
+              <span>
+                {mt5Ordering
+                  ? `Executing ${isSellTrade ? 'SELL' : 'BUY'} (${lotSize} Lot) on MT5...`
+                  : `2. PLACE ORDER / TRADE NOW (${isSellTrade ? 'SELL' : 'BUY'} ${lotSize} Lot · TP${selectedTpIndex + 1})`}
+              </span>
+            </button>
+
+            {/* Instant MT5 Execution Receipt */}
+            {mt5OrderReceipt && (
+              <div
+                className={`p-2 rounded-lg border text-[9.5px] font-mono space-y-1 ${
+                  mt5OrderReceipt.status === 'executed'
+                    ? 'bg-emerald-950/90 border-emerald-500 text-emerald-200'
+                    : 'bg-rose-950/90 border-rose-500 text-rose-200'
+                }`}
+              >
+                <div className="flex items-center justify-between font-bold">
+                  <span>
+                    {mt5OrderReceipt.status === 'executed'
+                      ? `✅ MT5 ORDER EXECUTED (${mt5OrderReceipt.direction})`
+                      : `⚠️ MT5 RESPONSE: ${String(mt5OrderReceipt.status || 'ERROR').toUpperCase()}`}
+                  </span>
+                  {mt5OrderReceipt.deal_ticket && (
+                    <span className="bg-emerald-900 px-1.5 py-0.5 rounded text-white">
+                      Deal #{mt5OrderReceipt.deal_ticket}
+                    </span>
+                  )}
+                </div>
+                {mt5OrderReceipt.symbol_resolved && (
+                  <div className="flex justify-between text-[9px]">
+                    <span>
+                      Symbol: <strong>{mt5OrderReceipt.symbol_resolved}</strong> ({mt5OrderReceipt.volume_normalized} Lot)
+                    </span>
+                    {mt5OrderReceipt.executed_price && (
+                      <span>
+                        Price: <strong>${mt5OrderReceipt.executed_price}</strong>
+                      </span>
+                    )}
+                  </div>
+                )}
+                <div className="text-[8.5px] opacity-90">
+                  {mt5OrderReceipt.retcode_name || mt5OrderReceipt.broker_comment || mt5OrderReceipt.error}
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Quick Auto-Fill Execution Button — always shown for BUY/SELL signals */}
