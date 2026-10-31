@@ -683,7 +683,37 @@ export default function LiveSignalNotificationPanel({
     return () => clearInterval(tick);
   }, []);
 
-  const fallbackPrice = currentPrice && currentPrice > 0 ? currentPrice : (symbol.toUpperCase().includes('XAU') ? 4125.0 : 1.085);
+  const getFallbackPairPrice = (sym: string): number => {
+    const s = sym.toUpperCase();
+    if (s.includes('XAU') || s.includes('GOLD')) return 4125.0;
+    if (s.includes('XAG')) return 31.45;
+    if (s.includes('OIL')) return 71.25;
+    if (s.includes('BTC')) return 79450.0;
+    if (s.includes('ETH')) return 3480.0;
+    if (s.includes('SOL')) return 148.5;
+    if (s.includes('BNB')) return 595.0;
+    if (s.includes('XRP')) return 0.548;
+    if (s.includes('DOGE')) return 0.145;
+    if (s.includes('ADA')) return 0.365;
+    if (s.includes('US30') || s.includes('DJ30')) return 42350.0;
+    if (s.includes('NAS') || s.includes('USTEC') || s.includes('US100')) return 20380.0;
+    if (s.includes('SPX') || s.includes('US500')) return 5840.0;
+    if (s.includes('GER') || s.includes('DE30') || s.includes('DE40')) return 19450.0;
+    if (s.includes('GBPJPY')) return 197.6;
+    if (s.includes('EURJPY')) return 165.3;
+    if (s.includes('JPY')) return 152.45;
+    if (s.includes('GBP')) return 1.2965;
+    if (s.includes('EURGBP')) return 0.8365;
+    if (s.includes('EUR')) return 1.0845;
+    if (s.includes('AUD')) return 0.664;
+    if (s.includes('CAD')) return 1.378;
+    if (s.includes('CHF')) return 0.8845;
+    if (s.includes('NZD')) return 0.604;
+    if (s.includes('REXT')) return 0.045;
+    return 1.0845;
+  };
+  const fallbackPrice = currentPrice && currentPrice > 0 ? currentPrice : getFallbackPairPrice(symbol);
+  const initStep = fallbackPrice > 500 ? 3.0 : fallbackPrice > 20 ? 0.15 : 0.0015;
   const latestNotif: NotificationItem = notifications[0] || {
     id: 'instant-init',
     time_harare: 'LIVE SYNC',
@@ -692,11 +722,17 @@ export default function LiveSignalNotificationPanel({
     title: `⚡ SYNCING [${timeframe.toUpperCase()}] SIGNAL FOR ${symbol}...`,
     message: `Calculating institutional entry, fixed stop loss, and 7 take-profit targets for ${symbol} (${timeframe.toUpperCase()})...`,
     entry: fallbackPrice,
-    entry_zones: [fallbackPrice, fallbackPrice - 1, fallbackPrice - 2, fallbackPrice - 3, fallbackPrice - 4],
-    stop_loss: fallbackPrice - 4.0,
-    tp1: fallbackPrice + 3.0,
-    tp2: fallbackPrice + 7.0,
-    tp_levels: [fallbackPrice + 3, fallbackPrice + 5, fallbackPrice + 7, fallbackPrice + 9, fallbackPrice + 11, fallbackPrice + 13, fallbackPrice + 15],
+    entry_zones: [
+      fallbackPrice,
+      Number((fallbackPrice - initStep * 0.3).toFixed(precision)),
+      Number((fallbackPrice - initStep * 0.6).toFixed(precision)),
+      Number((fallbackPrice - initStep * 0.9).toFixed(precision)),
+      Number((fallbackPrice - initStep * 1.2).toFixed(precision)),
+    ],
+    stop_loss: Number((fallbackPrice - initStep * 1.5).toFixed(precision)),
+    tp1: Number((fallbackPrice + initStep).toFixed(precision)),
+    tp2: Number((fallbackPrice + initStep * 2).toFixed(precision)),
+    tp_levels: [1, 2, 3, 4, 5, 6, 7].map((idx) => Number((fallbackPrice + initStep * idx).toFixed(precision))),
     rationale: `Syncing live ${timeframe.toUpperCase()} market structure & order flow...`,
   };
 
@@ -842,6 +878,188 @@ export default function LiveSignalNotificationPanel({
               </button>
             ))}
           </div>
+        </div>
+
+        {/* ── TOP-LEVEL MT5 2-BUTTON EXECUTION CONSOLE (ALWAYS VISIBLE FOR ALL PAIRS) ── */}
+        <div className="bg-gradient-to-b from-indigo-950/90 to-slate-950 border-2 border-indigo-500/80 p-3 rounded-xl space-y-2.5 shadow-xl">
+          <div className="flex items-center justify-between border-b border-indigo-800/70 pb-1.5">
+            <div className="flex items-center gap-1.5">
+              <span
+                className={`w-2.5 h-2.5 rounded-full ${
+                  mt5BridgeState?.online ? 'bg-emerald-400 animate-ping' : 'bg-amber-400'
+                }`}
+              />
+              <span className="text-[11px] font-black text-white uppercase tracking-wider">
+                MT5 Auto-Bridge ({symbol})
+              </span>
+            </div>
+            <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-indigo-900/90 border border-indigo-600 text-indigo-100 font-bold">
+              {mt5BridgeState?.accountServer
+                ? `${mt5BridgeState.accountServer} · #${mt5BridgeState.accountLogin}`
+                : 'Exness MT5 · All Pairs'}
+            </span>
+          </div>
+
+          {/* Quick Lot Size & Active Tunnel Status Row */}
+          <div className="flex items-center justify-between gap-2 bg-slate-900/90 border border-slate-800 rounded-lg px-2.5 py-1.5 text-[10px]">
+            <div className="flex items-center gap-1.5">
+              <span className="text-slate-400">Lot:</span>
+              <select
+                value={lotSize}
+                onChange={(e) => setLotSize(Number(e.target.value))}
+                className="bg-slate-950 border border-indigo-700 rounded px-1.5 py-0.5 text-white font-mono text-[10px] font-bold"
+              >
+                <option value={0.01}>0.01</option>
+                <option value={0.02}>0.02</option>
+                <option value={0.05}>0.05</option>
+                <option value={0.10}>0.10</option>
+                <option value={0.20}>0.20</option>
+                <option value={0.50}>0.50</option>
+                <option value={1.00}>1.00</option>
+              </select>
+            </div>
+            <div className="text-right font-mono text-[9.5px]">
+              {mt5BridgeState?.accountBalance !== undefined ? (
+                <span className="text-emerald-300 font-bold">
+                  MT5 Bal: ${Number(mt5BridgeState.accountBalance).toFixed(2)}
+                </span>
+              ) : (
+                <span className={mt5BridgeState?.online ? 'text-emerald-400 font-bold' : 'text-amber-300 font-bold'}>
+                  {mt5BridgeState?.online ? 'IPC ONLINE' : 'READY TO SYNC'}
+                </span>
+              )}
+            </div>
+          </div>
+
+          {mt5BridgeState?.tunnelUrl && (
+            <div className="text-[8.5px] text-sky-300 font-mono bg-slate-950/90 px-2 py-1 rounded border border-slate-800 truncate" title={mt5BridgeState.tunnelUrl}>
+              🌐 Tunnel: {mt5BridgeState.tunnelUrl}
+            </div>
+          )}
+          {mt5BridgeState?.message && (
+            <div className="text-[9px] text-indigo-200 leading-tight font-sans bg-indigo-950/50 px-2 py-1 rounded">
+              {mt5BridgeState.message}
+            </div>
+          )}
+
+          {/* BUTTON 1: EXECUTE (Start Cloudflare Tunnel + Push New URL to GitHub & Vercel) */}
+          <button
+            type="button"
+            disabled={mt5Syncing}
+            onClick={handleExecuteBridgeSync}
+            className="w-full py-2.5 px-3 bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-500 hover:to-blue-500 disabled:opacity-60 text-white text-[11px] font-black rounded-lg shadow-lg border border-indigo-300/60 transition flex items-center justify-center gap-1.5"
+          >
+            <Zap className={`w-4 h-4 text-amber-300 ${mt5Syncing ? 'animate-spin' : ''}`} />
+            <span>
+              {mt5Syncing
+                ? '1. Starting Cloudflare & Pushing URL to Git/Vercel...'
+                : '1. EXECUTE (Start Tunnel & Push URL to Git/Vercel)'}
+            </span>
+          </button>
+
+          {/* BUTTON 2: PLACE ORDER / TRADE NOW (Executes Live Trade on MT5 for Any Pair) */}
+          <button
+            type="button"
+            disabled={mt5Ordering}
+            onClick={() =>
+              handlePlaceMt5Order(
+                isSellTrade ? 'SELL' : 'BUY',
+                displayTpLevels[selectedTpIndex] ?? displayTp1,
+                displaySL
+              )
+            }
+            className={`w-full py-2.5 px-3 text-white text-xs font-black rounded-lg shadow-xl border transition flex items-center justify-center gap-1.5 ${
+              isSellTrade
+                ? 'bg-gradient-to-r from-rose-600 to-red-600 hover:from-rose-500 hover:to-red-500 border-rose-300/70'
+                : 'bg-gradient-to-r from-emerald-600 to-green-600 hover:from-emerald-500 hover:to-green-500 border-emerald-300/70'
+            } disabled:opacity-60`}
+          >
+            <Play className="w-3.5 h-3.5 fill-white" />
+            <span>
+              {mt5Ordering
+                ? `Executing ${isSellTrade ? 'SELL' : 'BUY'} ${symbol} (${lotSize} Lot)...`
+                : `2. PLACE ORDER / TRADE NOW (${isSellTrade ? 'SELL' : 'BUY'} ${symbol} · ${lotSize} Lot)`}
+            </span>
+          </button>
+
+          {/* Direct Manual Override BUY / SELL Buttons for Any Selected Pair */}
+          <div className="grid grid-cols-2 gap-1.5 pt-0.5">
+            <button
+              type="button"
+              disabled={mt5Ordering}
+              onClick={() => {
+                const step = displayEntry > 500 ? 3.5 : displayEntry > 20 ? 0.15 : 0.0015;
+                const buyTp = isBuyTrade
+                  ? (displayTpLevels[selectedTpIndex] ?? displayTp1)
+                  : Number((displayEntry + step * 2).toFixed(precision));
+                const buySl = isBuyTrade
+                  ? displaySL
+                  : Number((displayEntry - step * 1.5).toFixed(precision));
+                handlePlaceMt5Order('BUY', buyTp, buySl);
+              }}
+              className="py-1.5 px-2 bg-emerald-900/80 hover:bg-emerald-700 border border-emerald-500/60 text-emerald-100 text-[10px] font-extrabold rounded-md transition flex items-center justify-center gap-1 disabled:opacity-50"
+            >
+              <ArrowUpRight className="w-3 h-3 text-emerald-300" />
+              <span> Instant BUY {symbol}</span>
+            </button>
+            <button
+              type="button"
+              disabled={mt5Ordering}
+              onClick={() => {
+                const step = displayEntry > 500 ? 3.5 : displayEntry > 20 ? 0.15 : 0.0015;
+                const sellTp = isSellTrade
+                  ? (displayTpLevels[selectedTpIndex] ?? displayTp1)
+                  : Number((displayEntry - step * 2).toFixed(precision));
+                const sellSl = isSellTrade
+                  ? displaySL
+                  : Number((displayEntry + step * 1.5).toFixed(precision));
+                handlePlaceMt5Order('SELL', sellTp, sellSl);
+              }}
+              className="py-1.5 px-2 bg-rose-900/80 hover:bg-rose-700 border border-rose-500/60 text-rose-100 text-[10px] font-extrabold rounded-md transition flex items-center justify-center gap-1 disabled:opacity-50"
+            >
+              <ArrowDownRight className="w-3 h-3 text-rose-300" />
+              <span> Instant SELL {symbol}</span>
+            </button>
+          </div>
+
+          {/* Instant MT5 Execution Receipt */}
+          {mt5OrderReceipt && (
+            <div
+              className={`p-2 rounded-lg border text-[9.5px] font-mono space-y-1 ${
+                mt5OrderReceipt.status === 'executed'
+                  ? 'bg-emerald-950/95 border-emerald-400 text-emerald-200'
+                  : 'bg-rose-950/95 border-rose-400 text-rose-200'
+              }`}
+            >
+              <div className="flex items-center justify-between font-bold">
+                <span>
+                  {mt5OrderReceipt.status === 'executed'
+                    ? `✅ MT5 ORDER EXECUTED (${mt5OrderReceipt.direction})`
+                    : `⚠️ MT5: ${String(mt5OrderReceipt.status || 'NOTICE').toUpperCase()}`}
+                </span>
+                {mt5OrderReceipt.deal_ticket && (
+                  <span className="bg-emerald-900 px-1.5 py-0.5 rounded text-white">
+                    Deal #{mt5OrderReceipt.deal_ticket}
+                  </span>
+                )}
+              </div>
+              {mt5OrderReceipt.symbol_resolved && (
+                <div className="flex justify-between text-[9px]">
+                  <span>
+                    Symbol: <strong>{mt5OrderReceipt.symbol_resolved}</strong> ({mt5OrderReceipt.volume_normalized} Lot)
+                  </span>
+                  {mt5OrderReceipt.executed_price && (
+                    <span>
+                      Price: <strong>${mt5OrderReceipt.executed_price}</strong>
+                    </span>
+                  )}
+                </div>
+              )}
+              <div className="text-[8.5px] opacity-90">
+                {mt5OrderReceipt.retcode_name || mt5OrderReceipt.broker_comment || mt5OrderReceipt.error}
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Risk & Lot Size Management Panel */}
@@ -1091,10 +1309,8 @@ export default function LiveSignalNotificationPanel({
             </p>
           </div>
 
-          {/* Trade Parameters — FROZEN (constant across polls) */}
-          {latestNotif.type !== 'CLOSED' && (
-            <>
-              <div className="space-y-2 pt-2 border-t border-slate-800 text-[11px]">
+          {/* Trade Parameters — FROZEN (constant across polls, always visible for all pairs) */}
+          <div className="space-y-2 pt-2 border-t border-slate-800 text-[11px]">
 
             {/* Stop Loss — single constant value */}
             <div className="flex justify-between bg-slate-950/80 px-2 py-1.5 rounded border border-rose-950">
@@ -1183,140 +1399,12 @@ export default function LiveSignalNotificationPanel({
             </p>
           </div>
 
-          {/* ── MT5 LIVE EXECUTION CONSOLE (2-BUTTON SYSTEM: 1. EXECUTE BRIDGE & SYNC | 2. PLACE ORDER / TRADE NOW) ── */}
-          <div className="bg-slate-950/95 border border-indigo-500/60 p-3 rounded-xl space-y-2.5 shadow-lg">
-            <div className="flex items-center justify-between border-b border-slate-800 pb-1.5">
-              <div className="flex items-center gap-1.5">
-                <span
-                  className={`w-2 h-2 rounded-full ${
-                    mt5BridgeState?.online ? 'bg-emerald-400 animate-ping' : 'bg-amber-400'
-                  }`}
-                />
-                <span className="text-[10px] font-extrabold text-indigo-300 uppercase tracking-wider">
-                  MT5 Live Bridge Console
-                </span>
-              </div>
-              <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-indigo-950 border border-indigo-700 text-indigo-200">
-                {mt5BridgeState?.accountServer
-                  ? `${mt5BridgeState.accountServer} · #${mt5BridgeState.accountLogin}`
-                  : 'Port 8001 · Cloudflare'}
-              </span>
-            </div>
-
-            {mt5BridgeState && (
-              <div className="text-[9.5px] bg-slate-900/90 border border-slate-800 rounded-lg px-2.5 py-1.5 space-y-0.5 font-mono">
-                <div className="flex items-center justify-between text-slate-300">
-                  <span>
-                    Status:{' '}
-                    <strong className={mt5BridgeState.online ? 'text-emerald-400' : 'text-amber-400'}>
-                      {mt5BridgeState.online ? 'MT5 IPC CONNECTED' : 'STANDBY'}
-                    </strong>
-                  </span>
-                  {mt5BridgeState.accountBalance !== undefined && (
-                    <span className="text-emerald-300 font-bold">
-                      Bal: ${Number(mt5BridgeState.accountBalance).toFixed(2)}
-                    </span>
-                  )}
-                </div>
-                {mt5BridgeState.tunnelUrl && (
-                  <div className="text-[8.5px] text-sky-300 truncate" title={mt5BridgeState.tunnelUrl}>
-                    Tunnel: {mt5BridgeState.tunnelUrl}
-                  </div>
-                )}
-                {mt5BridgeState.message && (
-                  <div className="text-[9px] text-slate-400 leading-tight font-sans">
-                    {mt5BridgeState.message}
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* BUTTON 1: EXECUTE (Start Cloudflare Tunnel + Push New URL to GitHub & Vercel) */}
-            <button
-              type="button"
-              disabled={mt5Syncing}
-              onClick={handleExecuteBridgeSync}
-              className="w-full py-2 px-3 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-60 text-white text-[11px] font-extrabold rounded-lg shadow-md border border-indigo-400/50 transition flex items-center justify-center gap-1.5"
-            >
-              <Zap className={`w-3.5 h-3.5 ${mt5Syncing ? 'animate-spin' : ''}`} />
-              <span>
-                {mt5Syncing
-                  ? '1. Starting Cloudflare Tunnel & Pushing to Git/Vercel...'
-                  : '1. EXECUTE (Start Tunnel & Sync URL to Git/Vercel)'}
-              </span>
-            </button>
-
-            {/* BUTTON 2: PLACE ORDER / TRADE NOW (Executes Live Trade on MT5) */}
-            <button
-              type="button"
-              disabled={mt5Ordering}
-              onClick={() =>
-                handlePlaceMt5Order(
-                  isSellTrade ? 'SELL' : 'BUY',
-                  displayTpLevels[selectedTpIndex] ?? displayTp1,
-                  displaySL
-                )
-              }
-              className={`w-full py-2.5 px-3 text-white text-xs font-black rounded-lg shadow-xl border transition flex items-center justify-center gap-1.5 ${
-                isSellTrade
-                  ? 'bg-gradient-to-r from-rose-600 to-red-600 hover:from-rose-500 hover:to-red-500 border-rose-400/60'
-                  : 'bg-gradient-to-r from-emerald-600 to-green-600 hover:from-emerald-500 hover:to-green-500 border-emerald-400/60'
-              } disabled:opacity-60`}
-            >
-              <Play className="w-3.5 h-3.5 fill-white" />
-              <span>
-                {mt5Ordering
-                  ? `Executing ${isSellTrade ? 'SELL' : 'BUY'} (${lotSize} Lot) on MT5...`
-                  : `2. PLACE ORDER / TRADE NOW (${isSellTrade ? 'SELL' : 'BUY'} ${lotSize} Lot · TP${selectedTpIndex + 1})`}
-              </span>
-            </button>
-
-            {/* Instant MT5 Execution Receipt */}
-            {mt5OrderReceipt && (
-              <div
-                className={`p-2 rounded-lg border text-[9.5px] font-mono space-y-1 ${
-                  mt5OrderReceipt.status === 'executed'
-                    ? 'bg-emerald-950/90 border-emerald-500 text-emerald-200'
-                    : 'bg-rose-950/90 border-rose-500 text-rose-200'
-                }`}
-              >
-                <div className="flex items-center justify-between font-bold">
-                  <span>
-                    {mt5OrderReceipt.status === 'executed'
-                      ? `✅ MT5 ORDER EXECUTED (${mt5OrderReceipt.direction})`
-                      : `⚠️ MT5 RESPONSE: ${String(mt5OrderReceipt.status || 'ERROR').toUpperCase()}`}
-                  </span>
-                  {mt5OrderReceipt.deal_ticket && (
-                    <span className="bg-emerald-900 px-1.5 py-0.5 rounded text-white">
-                      Deal #{mt5OrderReceipt.deal_ticket}
-                    </span>
-                  )}
-                </div>
-                {mt5OrderReceipt.symbol_resolved && (
-                  <div className="flex justify-between text-[9px]">
-                    <span>
-                      Symbol: <strong>{mt5OrderReceipt.symbol_resolved}</strong> ({mt5OrderReceipt.volume_normalized} Lot)
-                    </span>
-                    {mt5OrderReceipt.executed_price && (
-                      <span>
-                        Price: <strong>${mt5OrderReceipt.executed_price}</strong>
-                      </span>
-                    )}
-                  </div>
-                )}
-                <div className="text-[8.5px] opacity-90">
-                  {mt5OrderReceipt.retcode_name || mt5OrderReceipt.broker_comment || mt5OrderReceipt.error}
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* Quick Auto-Fill Execution Button — always shown for BUY/SELL signals */}
-          {onExecuteTradeParams && latestNotif.type !== 'MONITORING' && (
+          {/* Quick Auto-Fill Execution Button — always shown */}
+          {onExecuteTradeParams && (
             <button
               onClick={() =>
                 onExecuteTradeParams({
-                  signal_type: latestNotif.type === 'BUY_NOW' ? 'BUY/LONG' : 'SELL/SHORT',
+                  signal_type: isSellTrade ? 'SELL/SHORT' : 'BUY/LONG',
                   entry: displayEntry,
                   stop_loss: displaySL,
                   tp1: displayTpLevels[selectedTpIndex] ?? displayTp1,
@@ -1326,21 +1414,19 @@ export default function LiveSignalNotificationPanel({
                 })
               }
               className={`w-full py-2 text-white text-xs font-bold rounded-lg shadow-lg transition flex items-center justify-center gap-1.5 ${
-                latestNotif.type === 'BUY_NOW'
-                  ? 'bg-emerald-600 hover:bg-emerald-500'
-                  : 'bg-rose-600 hover:bg-rose-500'
+                isSellTrade
+                  ? 'bg-rose-600 hover:bg-rose-500'
+                  : 'bg-emerald-600 hover:bg-emerald-500'
               }`}
             >
               <Play className="w-3.5 h-3.5 fill-white" />
               <span>Auto-Fill Paper Order ({latestNotif.timeframe}) — TP{selectedTpIndex + 1}</span>
             </button>
           )}
-          </>
-          )}
           
           {latestNotif.type === 'CLOSED' && (
-            <div className="bg-slate-950/90 border border-slate-700/60 p-2.5 rounded-lg text-[10px] space-y-1 text-slate-400 font-sans text-center">
-              Waiting for Asia market open on Monday.
+            <div className="bg-slate-950/90 border border-slate-700/60 p-2 rounded-lg text-[9.5px] text-slate-400 font-sans text-center">
+              Weekend session for OTC/Forex (Crypto 24/7 active on Exness MT5).
             </div>
           )}
           

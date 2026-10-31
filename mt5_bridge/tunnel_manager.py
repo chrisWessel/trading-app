@@ -189,3 +189,4 @@ def persist_and_push_tunnel(tunnel_url: str, mt5_meta: dict[str, Any]) -> dict[s
         **payload,
         "git_sync": git_result,
     }
+

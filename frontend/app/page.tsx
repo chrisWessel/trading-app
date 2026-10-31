@@ -15,34 +15,51 @@ import AuditReportSection from '@/components/AuditReportSection';
 import MarketSessionClocks from '@/components/MarketSessionClocks';
 import PositionSizingGuide from '@/components/PositionSizingGuide';
 import TrendCandlePanel from '@/components/TrendCandlePanel';
-import { Activity, ShieldCheck, Cpu, Radio, Coins, Search, Globe, Eye, Monitor, Calculator, Sparkles } from 'lucide-react';
+import { Activity, ShieldCheck, Cpu, Radio, Coins, Search, Globe, Eye, Monitor, Calculator, Sparkles, Zap, Play, ArrowUpRight, ArrowDownRight } from 'lucide-react';
 
 interface AssetOption {
   symbol: string;
   label: string;
-  category: 'Forex' | 'Gold' | 'Crypto';
+  category: 'Forex' | 'Gold' | 'Indices' | 'Crypto';
 }
 
 const PRESET_ASSETS: AssetOption[] = [
-  // Forex Currency Pairs
+  // Gold, Metals & Commodities
+  { symbol: 'XAU/USD', label: 'XAU / USD (Gold)', category: 'Gold' },
+  { symbol: 'XAG/USD', label: 'XAG / USD (Silver)', category: 'Gold' },
+  { symbol: 'USOIL', label: 'USOIL (WTI Crude)', category: 'Gold' },
+  // Forex Majors & Crosses
   { symbol: 'EUR/USD', label: 'EUR / USD', category: 'Forex' },
   { symbol: 'GBP/USD', label: 'GBP / USD', category: 'Forex' },
   { symbol: 'USD/JPY', label: 'USD / JPY', category: 'Forex' },
+  { symbol: 'USD/CHF', label: 'USD / CHF', category: 'Forex' },
   { symbol: 'AUD/USD', label: 'AUD / USD', category: 'Forex' },
   { symbol: 'USD/CAD', label: 'USD / CAD', category: 'Forex' },
-  // Gold & Commodities
-  { symbol: 'XAU/USD', label: 'XAU / USD (Gold)', category: 'Gold' },
-  // Crypto
-  { symbol: 'REXT/USDT', label: 'REXT / USDT', category: 'Crypto' },
-  { symbol: 'REXT/USD', label: 'REXT / USD', category: 'Crypto' },
-  { symbol: 'BTC/USDT', label: 'BTC / USDT', category: 'Crypto' },
-  { symbol: 'ETH/USDT', label: 'ETH / USDT', category: 'Crypto' },
+  { symbol: 'NZD/USD', label: 'NZD / USD', category: 'Forex' },
+  { symbol: 'EUR/GBP', label: 'EUR / GBP', category: 'Forex' },
+  { symbol: 'EUR/JPY', label: 'EUR / JPY', category: 'Forex' },
+  { symbol: 'GBP/JPY', label: 'GBP / JPY', category: 'Forex' },
+  // Global Indices (Exness MT5)
+  { symbol: 'US30', label: 'US30 (Dow Jones)', category: 'Indices' },
+  { symbol: 'NAS100', label: 'NAS100 (USTEC)', category: 'Indices' },
+  { symbol: 'SPX500', label: 'SPX500 (S&P 500)', category: 'Indices' },
+  { symbol: 'GER40', label: 'GER40 (DAX)', category: 'Indices' },
+  // Crypto (24/7 Exness MT5 & Spot)
+  { symbol: 'BTC/USDT', label: 'BTC / USD', category: 'Crypto' },
+  { symbol: 'ETH/USDT', label: 'ETH / USD', category: 'Crypto' },
   { symbol: 'SOL/USDT', label: 'SOL / USD', category: 'Crypto' },
+  { symbol: 'XRP/USDT', label: 'XRP / USD', category: 'Crypto' },
+  { symbol: 'BNB/USDT', label: 'BNB / USD', category: 'Crypto' },
+  { symbol: 'DOGE/USDT', label: 'DOGE / USD', category: 'Crypto' },
+  { symbol: 'ADA/USDT', label: 'ADA / USD', category: 'Crypto' },
+  { symbol: 'REXT/USDT', label: 'REXT / USDT', category: 'Crypto' },
 ];
+
+const MT5_LOCAL_TOKEN = 'wessignal_mt5_9f8e7d6c5b4a3f2e1d0c9b8a7f6e5d4c3b2a1f0e9d8c7b6a5f4e3d2c1b0a';
 
 export default function DashboardPage() {
   const [symbol, setSymbol] = useState<string>('XAU/USD');
-  const [activeCategory, setActiveCategory] = useState<'All' | 'Forex' | 'Gold' | 'Crypto'>('All');
+  const [activeCategory, setActiveCategory] = useState<'All' | 'Forex' | 'Gold' | 'Indices' | 'Crypto'>('All');
   const [customSymbol, setCustomSymbol] = useState<string>('');
   const [timeframe, setTimeframe] = useState<string>('5m');
   const [currentPrice, setCurrentPrice] = useState<number>(0);
@@ -55,6 +72,99 @@ export default function DashboardPage() {
   const [telegramStatus, setTelegramStatus] = useState<'unknown' | 'configured' | 'simulation'>('unknown');
   const [goldFeedLabel, setGoldFeedLabel] = useState<string>('CHECKING');
   const [goldFeedMessage, setGoldFeedMessage] = useState<string>('');
+
+  // Top-level MT5 2-Button Execution Bar State
+  const [topLotSize, setTopLotSize] = useState<number>(0.01);
+  const [topDirection, setTopDirection] = useState<'BUY' | 'SELL'>('BUY');
+  const [topMt5Syncing, setTopMt5Syncing] = useState<boolean>(false);
+  const [topMt5Ordering, setTopMt5Ordering] = useState<boolean>(false);
+  const [topMt5Status, setTopMt5Status] = useState<string>('MT5 Bridge Ready (Port 8001 + Cloudflare Tunnel)');
+  const [topMt5Receipt, setTopMt5Receipt] = useState<any | null>(null);
+
+  const handleTopExecuteSync = async () => {
+    setTopMt5Syncing(true);
+    setTopMt5Status('1. Starting Cloudflare Tunnel & Pushing new URL to GitHub/Vercel...');
+    try {
+      let json: any = null;
+      try {
+        const localRes = await fetch('http://127.0.0.1:8001/bridge/execute-sync', {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${MT5_LOCAL_TOKEN}`,
+            'Content-Type': 'application/json',
+          },
+        });
+        if (localRes.ok) json = await localRes.json();
+      } catch {}
+
+      if (!json) {
+        const apiRes = await fetch('/api/mt5', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ mode: 'execute_sync' }),
+        });
+        json = await apiRes.json();
+      }
+
+      const url = json?.tunnel_url || json?.resolved_bridge_url || '';
+      const pushed = Boolean(json?.git_sync?.pushed || json?.status === 'synced');
+      setTopMt5Status(
+        pushed
+          ? `✅ Tunnel Active & Pushed to GitHub/Vercel! URL: ${url}`
+          : json?.message || json?.error || `Tunnel: ${url || 'Active'}`
+      );
+    } catch (e: any) {
+      setTopMt5Status(`⚠️ Sync notice: ${e?.message || 'Ensure start_bridge.bat is running on your PC.'}`);
+    } finally {
+      setTopMt5Syncing(false);
+    }
+  };
+
+  const handleTopPlaceOrder = async (dirOverride?: 'BUY' | 'SELL') => {
+    const dir = dirOverride || topDirection;
+    setTopDirection(dir);
+    setTopMt5Ordering(true);
+    setTopMt5Receipt(null);
+    const payload = {
+      mode: 'place_order',
+      symbol,
+      action: dir,
+      volume: topLotSize,
+      timeframe,
+      dry_run: false,
+    };
+    try {
+      let json: any = null;
+      try {
+        const localRes = await fetch('http://127.0.0.1:8001/webhook/mt5', {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${MT5_LOCAL_TOKEN}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(payload),
+        });
+        json = await localRes.json();
+      } catch {}
+
+      if (!json) {
+        const apiRes = await fetch('/api/mt5', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        json = await apiRes.json();
+      }
+      setTopMt5Receipt(json);
+    } catch (e: any) {
+      setTopMt5Receipt({
+        status: 'error',
+        retcode_name: e?.message || 'Could not reach MT5 bridge.',
+      });
+    } finally {
+      setTopMt5Ordering(false);
+    }
+  };
 
   useEffect(() => {
     let mounted = true;
@@ -181,11 +291,8 @@ export default function DashboardPage() {
   const handleAssetSelect = (selectedSymbol: string) => {
     setSymbol(selectedSymbol);
     setCurrentPrice(0);
-    if (selectedSymbol.toUpperCase().includes('REXT') || selectedSymbol.toUpperCase().includes('XAU') || selectedSymbol.toUpperCase().includes('GOLD')) {
-      setChartMode('CustomEngine');
-    } else {
-      setChartMode('TradingViewDirect');
-    }
+    // Keep CustomEngine active for ALL pairs so all 8 strategy tabs and Signal Lines work on every pair
+    setChartMode('CustomEngine');
   };
 
   const handleDataUpdate = (data: { price: number; support: number; resistance: number }) => {
@@ -204,11 +311,7 @@ export default function DashboardPage() {
       const sym = customSymbol.trim().toUpperCase();
       setSymbol(sym);
       setCurrentPrice(0);
-      if (sym.includes('REXT') || sym.includes('XAU') || sym.includes('GOLD')) {
-        setChartMode('CustomEngine');
-      } else {
-        setChartMode('TradingViewDirect');
-      }
+      setChartMode('CustomEngine');
       setCustomSymbol('');
     }
   };
@@ -240,11 +343,11 @@ export default function DashboardPage() {
             <h1 className="text-xl font-extrabold tracking-tight text-white flex items-center gap-2">
               <span>WesSignal Terminal</span>
               <span className="text-[10px] bg-blue-950 text-blue-400 border border-blue-800 px-2.5 py-0.5 rounded-full font-mono font-bold uppercase">
-                Pro v4.0 Sidebar Navigation
+                Pro v4.0 · All Markets + MT5 Auto-Bridge
               </span>
             </h1>
             <p className="text-xs text-slate-400">
-              Institutional Navigation Sidebar • Zimbabwe Local Time • Live Market Data • Telegram Dispatcher
+              Multi-Asset Signal Engine (Forex • Metals • Indices • Crypto) • Exness MT5 Live Execution Bridge
             </p>
           </div>
         </div>
@@ -284,9 +387,9 @@ export default function DashboardPage() {
             <Calculator className="w-4 h-4 text-amber-300" />
             <span>📐 MT4/MT5 Orders & Risk Guide</span>
           </button>
-          <div title={goldFeedMessage} className={`flex items-center gap-1.5 bg-slate-950 border border-slate-800 px-3 py-1.5 rounded-lg ${goldFeedLabel === 'OANDA API' ? 'text-emerald-400' : 'text-amber-300'}`}>
+          <div title={goldFeedMessage} className="flex items-center gap-1.5 bg-slate-950 border border-slate-800 px-3 py-1.5 rounded-lg text-emerald-400">
             <Activity className="w-4 h-4" />
-            <span>Gold signal feed: <strong>{goldFeedLabel}</strong></span>
+            <span>Active Pair: <strong>{symbol}</strong> (All Pairs Enabled)</span>
           </div>
           <div className="flex items-center gap-1.5 bg-slate-950 border border-slate-800 px-3 py-1.5 rounded-lg text-slate-300">
             <Cpu className={`w-4 h-4 ${engineStatus === 'online' ? 'text-emerald-400' : 'text-rose-400'}`} />
@@ -307,7 +410,7 @@ export default function DashboardPage() {
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 pb-2.5">
           <div className="flex items-center gap-2 text-xs font-bold text-white">
             <Globe className="w-4 h-4 text-blue-400" />
-            <span>Market Selector & Chart Engine Mode:</span>
+            <span>Market Selector & Chart Engine Mode (All 355 Exness MT5 Pairs Supported):</span>
           </div>
 
           {/* Chart Engine Mode Switcher */}
@@ -320,7 +423,7 @@ export default function DashboardPage() {
                   ? 'bg-blue-600 text-white shadow-md shadow-blue-900/50'
                   : 'text-slate-400 hover:text-white hover:bg-slate-800 disabled:opacity-40 disabled:cursor-not-allowed'
               }`}
-              title={isGoldAsset ? 'TradingView OANDA:XAUUSD reference chart' : isRextAsset ? 'TradingView does not index REXT; rendered using Technical Signal Engine' : 'External TradingView reference feed'}
+              title="External TradingView reference feed"
             >
               <Monitor className="w-3.5 h-3.5 text-blue-300" />
               <span>🌐 TradingView Chart Only</span>
@@ -334,13 +437,13 @@ export default function DashboardPage() {
               }`}
             >
               <Eye className="w-3.5 h-3.5 text-emerald-300" />
-              <span>⚡ OANDA Chart + Signal Lines & Structure</span>
+              <span>⚡ 8-Tab Strategy Engine + Signal Lines (All Pairs)</span>
             </button>
           </div>
 
           {/* Category Tabs */}
           <div className="flex items-center gap-1.5 bg-slate-950 p-1 rounded-lg border border-slate-800 text-xs">
-            {(['All', 'Forex', 'Gold', 'Crypto'] as const).map((cat) => (
+            {(['All', 'Forex', 'Gold', 'Indices', 'Crypto'] as const).map((cat) => (
               <button
                 key={cat}
                 onClick={() => setActiveCategory(cat)}
@@ -350,7 +453,15 @@ export default function DashboardPage() {
                     : 'text-slate-400 hover:text-white hover:bg-slate-800'
                 }`}
               >
-                {cat === 'Forex' ? '💵 Forex Pairs' : cat === 'Gold' ? '🥇 Gold & Commodities' : cat === 'Crypto' ? '⚡ Crypto' : '🌐 All Markets'}
+                {cat === 'Forex'
+                  ? '💵 Forex'
+                  : cat === 'Gold'
+                  ? '🥇 Metals & Oil'
+                  : cat === 'Indices'
+                  ? '📊 Indices'
+                  : cat === 'Crypto'
+                  ? '⚡ Crypto'
+                  : '🌐 All Pairs'}
               </button>
             ))}
           </div>
@@ -360,7 +471,7 @@ export default function DashboardPage() {
             <div className="relative">
               <input
                 type="text"
-                placeholder="Custom Pair (e.g. REXT/USD)"
+                placeholder="Any MT5 Pair (e.g. GBP/JPY)"
                 value={customSymbol}
                 onChange={(e) => setCustomSymbol(e.target.value)}
                 className="bg-slate-950 border border-slate-800 text-white text-xs px-3 py-1.5 pr-8 rounded-lg focus:outline-none focus:border-blue-500 font-mono w-48"
@@ -392,6 +503,124 @@ export default function DashboardPage() {
             </button>
           ))}
         </div>
+
+        {/* ── HIGH-VISIBILITY TOP 2-BUTTON MT5 BRIDGE & ORDER EXECUTION BAR ── */}
+        <div className="mt-3 pt-3 border-t border-slate-800 flex flex-wrap items-center justify-between gap-3 bg-gradient-to-r from-indigo-950/80 via-slate-950 to-emerald-950/60 p-3 rounded-xl border border-indigo-500/60">
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="flex items-center gap-2">
+              <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping" />
+              <span className="text-xs font-black text-white uppercase tracking-wider font-mono">
+                MT5 Live Bridge ({symbol}):
+              </span>
+            </div>
+
+            {/* Lot Size Selector */}
+            <div className="flex items-center gap-1.5 bg-slate-900 border border-slate-700 px-2.5 py-1 rounded-lg text-xs font-mono">
+              <span className="text-slate-400">Lot:</span>
+              <select
+                value={topLotSize}
+                onChange={(e) => setTopLotSize(Number(e.target.value))}
+                className="bg-transparent text-white font-bold focus:outline-none"
+              >
+                <option value={0.01} className="bg-slate-900">0.01</option>
+                <option value={0.02} className="bg-slate-900">0.02</option>
+                <option value={0.05} className="bg-slate-900">0.05</option>
+                <option value={0.10} className="bg-slate-900">0.10</option>
+                <option value={0.20} className="bg-slate-900">0.20</option>
+                <option value={0.50} className="bg-slate-900">0.50</option>
+                <option value={1.00} className="bg-slate-900">1.00</option>
+              </select>
+            </div>
+
+            {/* Direction Selector */}
+            <div className="flex items-center gap-1 bg-slate-900 border border-slate-700 p-0.5 rounded-lg text-xs font-mono">
+              <button
+                type="button"
+                onClick={() => setTopDirection('BUY')}
+                className={`px-2.5 py-1 rounded font-extrabold transition ${
+                  topDirection === 'BUY'
+                    ? 'bg-emerald-600 text-white'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                BUY
+              </button>
+              <button
+                type="button"
+                onClick={() => setTopDirection('SELL')}
+                className={`px-2.5 py-1 rounded font-extrabold transition ${
+                  topDirection === 'SELL'
+                    ? 'bg-rose-600 text-white'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                SELL
+              </button>
+            </div>
+
+            <span className="text-[11px] text-indigo-200 font-mono truncate max-w-md">
+              {topMt5Status}
+            </span>
+          </div>
+
+          {/* THE 2 CORE BUTTONS: 1. EXECUTE & 2. PLACE ORDER / TRADE NOW */}
+          <div className="flex flex-wrap items-center gap-2.5">
+            <button
+              type="button"
+              disabled={topMt5Syncing}
+              onClick={handleTopExecuteSync}
+              className="px-4 py-2 bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-500 hover:to-blue-500 disabled:opacity-60 text-white text-xs font-black rounded-lg shadow-lg border border-indigo-300/70 transition flex items-center gap-1.5 font-mono"
+            >
+              <Zap className={`w-4 h-4 text-amber-300 ${topMt5Syncing ? 'animate-spin' : ''}`} />
+              <span>
+                {topMt5Syncing
+                  ? '1. Starting Cloudflare & Pushing to Git/Vercel...'
+                  : '1. EXECUTE (Start Tunnel & Push URL to Git/Vercel)'}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              disabled={topMt5Ordering}
+              onClick={() => handleTopPlaceOrder(topDirection)}
+              className={`px-4 py-2 text-white text-xs font-black rounded-lg shadow-xl border transition flex items-center gap-1.5 font-mono ${
+                topDirection === 'SELL'
+                  ? 'bg-gradient-to-r from-rose-600 to-red-600 hover:from-rose-500 hover:to-red-500 border-rose-300/80'
+                  : 'bg-gradient-to-r from-emerald-600 to-green-600 hover:from-emerald-500 hover:to-green-500 border-emerald-300/80'
+              } disabled:opacity-60`}
+            >
+              <Play className="w-4 h-4 fill-white" />
+              <span>
+                {topMt5Ordering
+                  ? `Executing ${topDirection} ${symbol}...`
+                  : `2. PLACE ORDER / TRADE NOW (${topDirection} ${symbol} · ${topLotSize} Lot)`}
+              </span>
+            </button>
+          </div>
+        </div>
+
+        {topMt5Receipt && (
+          <div
+            className={`px-3 py-2 rounded-lg border text-xs font-mono flex flex-wrap items-center justify-between gap-2 ${
+              topMt5Receipt.status === 'executed'
+                ? 'bg-emerald-950/90 border-emerald-500 text-emerald-200'
+                : 'bg-rose-950/90 border-rose-500 text-rose-200'
+            }`}
+          >
+            <span>
+              {topMt5Receipt.status === 'executed'
+                ? `✅ MT5 LIVE ORDER EXECUTED: ${topMt5Receipt.direction} ${topMt5Receipt.volume_normalized} Lot ${topMt5Receipt.symbol_resolved} @ $${topMt5Receipt.executed_price} (Deal #${topMt5Receipt.deal_ticket})`
+                : `⚠️ MT5 Bridge Response: ${topMt5Receipt.retcode_name || topMt5Receipt.broker_comment || topMt5Receipt.error || JSON.stringify(topMt5Receipt)}`}
+            </span>
+            <button
+              type="button"
+              onClick={() => setTopMt5Receipt(null)}
+              className="text-[10px] underline opacity-80 hover:opacity-100"
+            >
+              Dismiss
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Main Grid: LEFT SIDEBAR NAVIGATION PANEL (3 cols) + MAIN CONTENT AREA (9 cols) */}

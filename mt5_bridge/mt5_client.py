@@ -112,19 +112,51 @@ class MT5BridgeClient:
 
     def resolve_broker_symbol(self, raw_symbol: str) -> tuple[Optional[str], Optional[Any]]:
         """
-        Resolves a canonical symbol like 'XAU/USD' or 'BTC/USDT' to the broker's exact
-        Market Watch symbol (e.g., 'XAUUSD', 'XAUUSDm', 'XAUUSD.pro', 'GOLD') and enables it.
+        Resolves any canonical symbol (Forex, Gold/Silver, Oil, Indices, Crypto, Stocks)
+        such as 'EUR/USD', 'GBP/JPY', 'XAU/USD', 'NAS100', 'US30', 'BTC/USDT', 'SOL/USD'
+        to the broker's exact Market Watch symbol (e.g., 'EURUSDm', 'XAUUSDm', 'USTECm', 'BTCUSDm')
+        and enables it in Market Watch.
         """
-        clean = raw_symbol.upper().replace("/", "").replace("-", "").replace("_", "").strip()
-        # Map USDT suffix to USD for MT5 CFDs if needed
-        candidates = [clean]
+        clean = raw_symbol.upper().replace("/", "").replace("-", "").replace("_", "").replace(" ", "").strip()
+
+        # Multi-asset alias map for common index/commodity/crypto tickers across MT5 brokers (Exness, IC Markets, FTMO, etc.)
+        alias_map: dict[str, list[str]] = {
+            "XAUUSD": ["XAUUSDm", "XAUUSD", "GOLDm", "GOLD", "XAUUSD.a", "XAUUSD.pro"],
+            "GOLD": ["XAUUSDm", "XAUUSD", "GOLDm", "GOLD"],
+            "XAGUSD": ["XAGUSDm", "XAGUSD", "SILVERm", "SILVER"],
+            "SILVER": ["XAGUSDm", "XAGUSD", "SILVERm", "SILVER"],
+            "USOIL": ["USOILm", "USOIL", "XTIUSDm", "XTIUSD", "WTIm", "WTI"],
+            "UKOIL": ["UKOILm", "UKOIL", "XBRUSDm", "XBRUSD", "BRENTm", "BRENT"],
+            "NAS100": ["USTECm", "USTEC", "NAS100m", "NAS100", "US100m", "US100", "NDX100m"],
+            "USTEC": ["USTECm", "USTEC", "NAS100m", "NAS100"],
+            "US100": ["USTECm", "USTEC", "US100m", "US100", "NAS100m"],
+            "US30": ["US30m", "US30", "DJ30m", "DJ30", "WS30m"],
+            "SPX500": ["US500m", "US500", "SPX500m", "SPX500", "SP500m"],
+            "US500": ["US500m", "US500", "SPX500m", "SPX500"],
+            "GER40": ["DE30m", "DE40m", "GER40m", "GER40", "DE30", "DE40", "DAX40m"],
+            "UK100": ["UK100m", "UK100", "FTSE100m"],
+            "JP225": ["JP225m", "JP225", "JPN225m"],
+            "DXY": ["DXYm", "DXY", "USDXm"],
+        }
+
+        candidates: list[str] = []
+        if clean in alias_map:
+            candidates.extend(alias_map[clean])
+
+        # Also handle USDT -> USD for MT5 Crypto CFDs (e.g. BTCUSDT -> BTCUSDm, BTCUSDTm, BTCUSD)
+        bases = [clean]
         if clean.endswith("USDT"):
-            candidates.append(clean[:-1])  # e.g., BTCUSDT -> BTCUSD
-        if clean in {"XAUUSD", "GOLD"}:
-            candidates.extend(["XAUUSD", "GOLD", "XAUUSDm", "XAUUSD.a", "XAUUSD.pro", "XAUUSD.raw", "XAUUSD+"])
-        else:
-            for suffix in ("m", ".a", ".pro", ".raw", "+", ".ecn", "_i"):
-                candidates.append(f"{clean}{suffix}")
+            bases.append(clean[:-1])  # BTCUSDT -> BTCUSD
+
+        for b in bases:
+            if b in alias_map:
+                for a in alias_map[b]:
+                    if a not in candidates:
+                        candidates.append(a)
+            for suffix in ("m", "", ".a", ".pro", ".raw", "+", ".ecn", "_i", "c"):
+                cand = f"{b}{suffix}"
+                if cand not in candidates:
+                    candidates.append(cand)
 
         for cand in candidates:
             info = mt5.symbol_info(cand)
@@ -134,15 +166,15 @@ class MT5BridgeClient:
                     info = mt5.symbol_info(cand)
                 return cand, info
 
-        # Fallback: scan all broker symbols for a prefix match
+        # Fallback: scan all broker symbols for a case-insensitive prefix or substring match
         all_symbols = mt5.symbols_get() or []
-        base_core = clean[:6]
-        for sym in all_symbols:
-            sym_name = getattr(sym, "name", "")
-            if sym_name.upper().startswith(base_core):
-                if not sym.visible:
-                    mt5.symbol_select(sym_name, True)
-                return sym_name, mt5.symbol_info(sym_name)
+        for b in bases:
+            for sym in all_symbols:
+                sym_name = getattr(sym, "name", "")
+                if sym_name.upper().startswith(b):
+                    if not sym.visible:
+                        mt5.symbol_select(sym_name, True)
+                    return sym_name, mt5.symbol_info(sym_name)
 
         return None, None
 
