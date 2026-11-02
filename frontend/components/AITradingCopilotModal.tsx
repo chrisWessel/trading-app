@@ -471,7 +471,10 @@ export default function AITradingCopilotModal({
           ? activeGlobalLock.signal_type === 'SELL/SHORT'
           : analysis.signal_type === 'SELL/SHORT';
         const direction: 'BUY' | 'SELL' = isSell ? 'SELL' : 'BUY';
-        const entryPrice = analysis.trade_params.entry || analysis.latest_price;
+        const entryPrice =
+          useGlobalLock && activeGlobalLock.entry
+            ? activeGlobalLock.entry
+            : analysis.trade_params.entry || analysis.latest_price;
         const smc = (analysis as any)?.smc_principles || (analysis.trade_params as any)?.smc_principles;
 
         const riskCalc = calculateRiskBasedLevels({
@@ -486,6 +489,13 @@ export default function AITradingCopilotModal({
           structuralSwingHigh: (analysis.trade_params as any)?.swing_high ?? analysis.resistance,
           atr: (analysis.trade_params as any)?.atr,
         });
+
+        const effectiveStopLoss =
+          useGlobalLock && activeGlobalLock.stop_loss ? activeGlobalLock.stop_loss : riskCalc.stopLoss;
+        const effectiveTp1 =
+          useGlobalLock && activeGlobalLock.tp1 ? activeGlobalLock.tp1 : riskCalc.tp1;
+        const effectiveTp2 =
+          useGlobalLock && activeGlobalLock.tp2 ? activeGlobalLock.tp2 : riskCalc.tp2;
 
         // 5. Compute Overall AI Clearance Verdict & Score
         let score = analysis.probability || 91;
@@ -596,9 +606,9 @@ export default function AITradingCopilotModal({
           signalConfidence: weekendClosed ? 0 : analysis.probability || 91,
           latestPrice: analysis.latest_price,
           entryPrice,
-          stopLoss: riskCalc.stopLoss,
-          takeProfit1: riskCalc.tp1,
-          takeProfit2: riskCalc.tp2,
+          stopLoss: effectiveStopLoss,
+          takeProfit1: effectiveTp1,
+          takeProfit2: effectiveTp2,
           slDistance: riskCalc.slDistance,
           maxRiskDollars: riskCalc.actualDollarRisk,
           accountBalance: lp.accountBalance,

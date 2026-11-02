@@ -622,61 +622,57 @@ export default function LiveSignalNotificationPanel({
         const isCrypto = symbol.includes('BTC') || symbol.includes('ETH') || symbol.includes('SOL') || symbol.includes('REXT') || symbol.includes('USDT');
         const isWeekend = (harareDate.getDay() === 0 || harareDate.getDay() === 6) && !isCrypto;
 
-        // ── ENFORCE TIMEFRAME HOLD LOCK WITH REAL-TIME DIRECTION REVERSAL OVERRIDE ──
-        // Hold the locked direction for the timeframe window UNLESS:
-        //   1. The 6-Factor Direction Engine detects a live market direction reversal (BUY <-> SELL), OR
-        //   2. A Runaway Trend occurs in the opposite direction (>= threshold_pts), OR
-        //   3. Price moves against the locked entry or breaches the Risk-Calculated Stop Loss.
-        // Market Direction Reversal ALWAYS takes precedence so the bot never stays stuck in a BUY when market turns SELL!
+        // ── INSTITUTIONAL STRUCTURE & MILESTONE-DRIVEN TRADE LIFECYCLE ──
+        // A setup is established from SMC/FVG confluence and pinned.
+        // It NEVER flips or resets because of a timer! Market fluctuations toward TP are protected.
+        // The lifecycle completes ONLY when:
+        //   1. Take Profit TP1 is reached -> Profit banked, Stop Loss moved to Breakeven.
+        //   2. Stop Loss is breached -> Controlled exit.
+        //   3. A confirmed multi-candle Change of Character (CHoCH) structural reversal forms.
         const lockKey = `${symbol.toUpperCase()}:${timeframe}`;
         const tfHoldSec = TIMEFRAME_HOLD_SECONDS[timeframe] || a.hold_total_sec || 300;
-        // Minimum institutional confirmation window before a non-SL reversal can flip the locked signal (stops fast whipsaw!)
-        const minConfirmSec = Math.max(45, Math.min(Math.round(tfHoldSec * 0.65), 900));
         const existingLock = signalLockRef.current;
-        const rt = a.runaway_trend || a.trade_params?.runaway_trend;
-        const runawayThreshold = rt?.threshold_pts || (symbol.toUpperCase().includes('XAU') ? 2.5 : 0.0012);
 
+        let lockActive = false;
         if (
           existingLock &&
           existingLock.key === lockKey &&
-          existingLock.signal_type !== 'NEUTRAL' &&
-          nowMs < existingLock.lockedAtMs + existingLock.holdTotalSec * 1000
+          existingLock.signal_type !== 'NEUTRAL'
         ) {
-          const elapsedLockSec = (nowMs - existingLock.lockedAtMs) / 1000;
+          const prevIsBuy = existingLock.signal_type === 'BUY/LONG';
           const directionReversedByEngine =
             a.signal_type !== 'NEUTRAL' && a.signal_type !== existingLock.signal_type;
 
           const slHit =
-            (existingLock.signal_type === 'BUY/LONG' && a.latest_price <= existingLock.stop_loss) ||
-            (existingLock.signal_type === 'SELL/SHORT' && a.latest_price >= existingLock.stop_loss);
+            (prevIsBuy && a.latest_price <= existingLock.stop_loss) ||
+            (!prevIsBuy && a.latest_price >= existingLock.stop_loss);
 
-          const adverseMove =
-            (existingLock.signal_type === 'BUY/LONG' && (a.latest_price - existingLock.entry) <= -runawayThreshold) ||
-            (existingLock.signal_type === 'SELL/SHORT' && (a.latest_price - existingLock.entry) >= runawayThreshold);
+          const tp1Hit =
+            (prevIsBuy && a.latest_price >= existingLock.tp1) ||
+            (!prevIsBuy && a.latest_price <= existingLock.tp1);
 
-          const smcExhaustionFlip =
-            ((a as any)?.smc_principles?.trendExhaustion?.action === 'TAKE_PROFIT_AND_SELL' &&
-              existingLock.signal_type === 'BUY/LONG') ||
-            ((a as any)?.smc_principles?.trendExhaustion?.action === 'TAKE_PROFIT_AND_BUY' &&
-              existingLock.signal_type === 'SELL/SHORT');
+          const beTriggerDist = Math.max(1.8, Math.abs(existingLock.entry - existingLock.stop_loss) * 0.65);
+          const breakevenHit =
+            (prevIsBuy && a.latest_price >= existingLock.entry + beTriggerDist) ||
+            (!prevIsBuy && a.latest_price <= existingLock.entry - beTriggerDist);
 
-          // Only break the timeframe lock if SL is hit, a real runaway impulse occurs, or the timeframe confirmation window has passed!
-          const opposingRunaway =
-            (directionReversedByEngine && (elapsedLockSec >= minConfirmSec || (smcExhaustionFlip && elapsedLockSec >= 40))) ||
-            (existingLock.signal_type === 'BUY/LONG' && Boolean(rt?.detected) && rt?.direction === 'BEARISH') ||
-            (existingLock.signal_type === 'SELL/SHORT' && Boolean(rt?.detected) && rt?.direction === 'BULLISH');
+          // Confirmed Structural Reversal requires a genuine opposing market move (not a minor 1-candle noise)
+          const confirmedOpposingReversal =
+            (prevIsBuy && directionReversedByEngine && a.latest_price < existingLock.entry - 4.5) ||
+            (!prevIsBuy && directionReversedByEngine && a.latest_price > existingLock.entry + 4.5);
 
-          const favorableRunawayReanchor =
-            (existingLock.signal_type === 'BUY/LONG' && (a.latest_price - existingLock.entry) >= runawayThreshold * 1.5) ||
-            (existingLock.signal_type === 'SELL/SHORT' && (existingLock.entry - a.latest_price) >= runawayThreshold * 1.5);
+          if (!slHit && !confirmedOpposingReversal) {
+            lockActive = true;
+            // Auto Breakeven Lock: Once price passes 65% of the distance to TP1, move SL to Entry (risk-free!)
+            if (breakevenHit || tp1Hit) {
+              existingLock.stop_loss = prevIsBuy
+                ? Math.max(existingLock.stop_loss, existingLock.entry)
+                : Math.min(existingLock.stop_loss, existingLock.entry);
+            }
 
-          if (!slHit && !adverseMove && !opposingRunaway && !favorableRunawayReanchor) {
-            const remSec = Math.max(1, Math.ceil((existingLock.lockedAtMs + existingLock.holdTotalSec * 1000 - nowMs) / 1000));
             a.signal_type = existingLock.signal_type;
-            a.trend = existingLock.signal_type === 'BUY/LONG' ? 'UPTREND' : 'DOWNTREND';
+            a.trend = prevIsBuy ? 'UPTREND' : 'DOWNTREND';
             a.probability = existingLock.probability;
-            a.hold_remaining_sec = remSec;
-            a.hold_total_sec = existingLock.holdTotalSec;
             a.trade_params = {
               ...a.trade_params,
               entry: existingLock.entry,
@@ -687,12 +683,9 @@ export default function LiveSignalNotificationPanel({
               tp_levels: existingLock.tp_levels,
               rationale: existingLock.rationale,
               probability: existingLock.probability,
-              hold_remaining_sec: remSec,
-              hold_total_sec: existingLock.holdTotalSec,
             };
-            setHoldRemainingSec(remSec);
-          } else if (slHit || adverseMove || opposingRunaway) {
-            // Break the old lock immediately so Market Reversal / Runaway Trend takes precedence!
+          } else {
+            // Signal reached SL or confirmed CHoCH reversal: clear lock so fresh structure forms cleanly
             signalLockRef.current = null;
             if (soundEnabled && typeof window !== 'undefined') {
               try {
@@ -720,68 +713,69 @@ export default function LiveSignalNotificationPanel({
         const isSell = isWeekend ? false : a.signal_type === 'SELL/SHORT';
         const notifType: 'BUY_NOW' | 'SELL_NOW' | 'MONITORING' | 'CLOSED' = isWeekend ? 'CLOSED' : isBuy ? 'BUY_NOW' : isSell ? 'SELL_NOW' : 'MONITORING';
 
-        // Ensure entry and structural swing levels are anchored to the live chart price if there is any feed gap
-        const rawEntry = a.trade_params.entry || a.latest_price;
-        const chartAnchor = currentPrice && currentPrice > 0 ? currentPrice : rawEntry;
-        const feedDelta = chartAnchor && rawEntry ? chartAnchor - rawEntry : 0;
-        const shouldShiftToChart = Math.abs(feedDelta) > (symbol.toUpperCase().includes('XAU') ? 0.5 : rawEntry * 0.0005);
-        const syncedEntry = shouldShiftToChart ? Number(chartAnchor.toFixed(precision)) : rawEntry;
-        const rawSwingLow = (a.trade_params as any)?.swing_low ?? a.support;
-        const rawSwingHigh = (a.trade_params as any)?.swing_high ?? a.resistance;
-        const syncedSwingLow =
-          typeof rawSwingLow === 'number' && rawSwingLow > 0
-            ? Number((shouldShiftToChart ? rawSwingLow + feedDelta : rawSwingLow).toFixed(precision))
-            : undefined;
-        const syncedSwingHigh =
-          typeof rawSwingHigh === 'number' && rawSwingHigh > 0
-            ? Number((shouldShiftToChart ? rawSwingHigh + feedDelta : rawSwingHigh).toFixed(precision))
-            : undefined;
+        let incoming_zones: number[] = [];
+        let effectiveSL = 0;
+        let effectiveTpLevels: number[] = [];
+        let effectiveTp1 = 0;
+        let effectiveTp2 = 0;
 
-        // Recalculate Stop Loss, Entry Zones, and 7 Take Profits using BOTH Chart Swing Structure & Risk Calculator
-        // so the Stop Loss sits just below the chart's Swing Low (for BUY) or above the Swing High (for SELL)
-        // AND scales dynamically with Account Balance ($40 vs $1,000), Lot Size, and Risk %!
-        const riskBased = calculateRiskBasedLevels({
-          symbol,
-          entryPrice: syncedEntry,
-          isBuy: !isSell,
-          accountBalance,
-          lotSize,
-          riskPercent,
-          precision,
-          structuralSwingLow: syncedSwingLow,
-          structuralSwingHigh: syncedSwingHigh,
-          atr: (a.trade_params as any)?.atr,
-        });
+        if (lockActive && existingLock) {
+          incoming_zones = existingLock.entry_zones;
+          effectiveSL = existingLock.stop_loss;
+          effectiveTpLevels = existingLock.tp_levels;
+          effectiveTp1 = existingLock.tp1;
+          effectiveTp2 = existingLock.tp2;
+          a.trade_params.entry = existingLock.entry;
+        } else {
+          // Ensure entry and structural swing levels are anchored to the live chart price if starting a fresh setup
+          const rawEntry = a.trade_params.entry || a.latest_price;
+          const chartAnchor = currentPrice && currentPrice > 0 ? currentPrice : rawEntry;
+          const feedDelta = chartAnchor && rawEntry ? chartAnchor - rawEntry : 0;
+          const shouldShiftToChart = Math.abs(feedDelta) > (symbol.toUpperCase().includes('XAU') ? 0.5 : rawEntry * 0.0005);
+          const syncedEntry = shouldShiftToChart ? Number(chartAnchor.toFixed(precision)) : rawEntry;
+          const rawSwingLow = (a.trade_params as any)?.swing_low ?? a.support;
+          const rawSwingHigh = (a.trade_params as any)?.swing_high ?? a.resistance;
+          const syncedSwingLow =
+            typeof rawSwingLow === 'number' && rawSwingLow > 0
+              ? Number((shouldShiftToChart ? rawSwingLow + feedDelta : rawSwingLow).toFixed(precision))
+              : undefined;
+          const syncedSwingHigh =
+            typeof rawSwingHigh === 'number' && rawSwingHigh > 0
+              ? Number((shouldShiftToChart ? rawSwingHigh + feedDelta : rawSwingHigh).toFixed(precision))
+              : undefined;
 
-        const incoming_zones: number[] = riskBased.entryZones;
-        const effectiveSL: number = riskBased.stopLoss;
-        const effectiveTpLevels: number[] = riskBased.tpLevels;
-        const effectiveTp1: number = riskBased.tp1;
-        const effectiveTp2: number = riskBased.tp2;
+          const riskBased = calculateRiskBasedLevels({
+            symbol,
+            entryPrice: syncedEntry,
+            isBuy: !isSell,
+            accountBalance,
+            lotSize,
+            riskPercent,
+            precision,
+            structuralSwingLow: syncedSwingLow,
+            structuralSwingHigh: syncedSwingHigh,
+            atr: (a.trade_params as any)?.atr,
+          });
 
-        a.latest_price = syncedEntry;
-        a.trade_params = {
-          ...a.trade_params,
-          entry: syncedEntry,
-          entry_zones: incoming_zones,
-          stop_loss: effectiveSL,
-          tp1: effectiveTp1,
-          tp2: effectiveTp2,
-          tp_levels: effectiveTpLevels,
-          ...(syncedSwingLow ? { swing_low: syncedSwingLow } : {}),
-          ...(syncedSwingHigh ? { swing_high: syncedSwingHigh } : {}),
-        } as any;
+          incoming_zones = riskBased.entryZones;
+          effectiveSL = riskBased.stopLoss;
+          effectiveTpLevels = riskBased.tpLevels;
+          effectiveTp1 = riskBased.tp1;
+          effectiveTp2 = riskBased.tp2;
 
-        // Create or update the timeframe lock when starting a new window
-        const currentLock = signalLockRef.current;
-        if (
-          !currentLock ||
-          currentLock.key !== lockKey ||
-          currentLock.signal_type !== a.signal_type ||
-          nowMs >= currentLock.lockedAtMs + currentLock.holdTotalSec * 1000
-        ) {
-          const initialRemSec = a.hold_remaining_sec && a.hold_remaining_sec > 10 ? a.hold_remaining_sec : tfHoldSec;
-          const lockedAt = nowMs - (tfHoldSec - initialRemSec) * 1000;
+          a.latest_price = syncedEntry;
+          a.trade_params = {
+            ...a.trade_params,
+            entry: syncedEntry,
+            entry_zones: incoming_zones,
+            stop_loss: effectiveSL,
+            tp1: effectiveTp1,
+            tp2: effectiveTp2,
+            tp_levels: effectiveTpLevels,
+            ...(syncedSwingLow ? { swing_low: syncedSwingLow } : {}),
+            ...(syncedSwingHigh ? { swing_high: syncedSwingHigh } : {}),
+          } as any;
+
           const newLock: LockedSignalState = {
             key: lockKey,
             symbol,
@@ -796,18 +790,10 @@ export default function LiveSignalNotificationPanel({
             tp_levels: effectiveTpLevels,
             probability: a.probability ?? a.trade_params.probability ?? 91,
             rationale: a.trade_params.rationale,
-            lockedAtMs: lockedAt,
+            lockedAtMs: nowMs,
             holdTotalSec: tfHoldSec,
           };
           signalLockRef.current = newLock;
-          setHoldRemainingSec(initialRemSec);
-        } else {
-          // Keep active lock's SL & TPs updated with latest Risk Calculator settings
-          currentLock.entry_zones = incoming_zones;
-          currentLock.stop_loss = effectiveSL;
-          currentLock.tp1 = effectiveTp1;
-          currentLock.tp2 = effectiveTp2;
-          currentLock.tp_levels = effectiveTpLevels;
         }
 
         // Broadcast active lock globally so ICT Strategy & Trend panels stay 100% synchronized
@@ -995,18 +981,26 @@ export default function LiveSignalNotificationPanel({
     rationale: `Syncing live ${timeframe.toUpperCase()} market structure & order flow...`,
   };
 
-  // Use live backend params as the single source of truth; fall back to frozen or latestNotif
-  const rawDisplayEntry = analysis?.trade_params?.entry ?? latestNotif?.entry ?? frozenParams?.entry ?? fallbackPrice;
-  const displayEntry =
-    currentPrice && currentPrice > 0 && Math.abs(currentPrice - rawDisplayEntry) > (symbol.toUpperCase().includes('XAU') ? 1.5 : rawDisplayEntry * 0.001)
-      ? Number(currentPrice.toFixed(precision))
-      : rawDisplayEntry;
-  const isSellTrade = (analysis?.signal_type === 'SELL/SHORT') || (!analysis && (latestNotif?.type === 'SELL_NOW' || frozenParams?.signal_type === 'SELL/SHORT'));
+  // Active locked setup takes absolute precedence to keep entry, SL and TPs stable during fluctuations
+  const activeLock = signalLockRef.current;
+  const isLocked = Boolean(
+    activeLock &&
+    activeLock.key === `${symbol.toUpperCase()}:${timeframe}` &&
+    activeLock.signal_type !== 'NEUTRAL'
+  );
+
+  const displayEntry = isLocked && activeLock
+    ? activeLock.entry
+    : (analysis?.trade_params?.entry ?? latestNotif?.entry ?? frozenParams?.entry ?? fallbackPrice);
+
+  const isSellTrade = isLocked && activeLock
+    ? activeLock.signal_type === 'SELL/SHORT'
+    : (analysis?.signal_type === 'SELL/SHORT') || (!analysis && (latestNotif?.type === 'SELL_NOW' || frozenParams?.signal_type === 'SELL/SHORT'));
   const isBuyTrade = !isSellTrade;
 
   // Real-time Risk Calculator + Chart Swing Structure computation:
-  // Changing Account Balance ($40 vs $1000), Lot Size, or Risk % IMMEDIATELY updates Stop Loss, Entry Zones, and TPs
-  // while anchoring Stop Loss below the chart's Swing Low (BUY) or above the chart's Swing High (SELL)!
+  // Changing Account Balance ($40 vs $1000), Lot Size, or Risk % updates sizing
+  // while anchoring Stop Loss outside market wicks and below/above swing structure!
   const liveRiskCalc = calculateRiskBasedLevels({
     symbol,
     entryPrice: displayEntry > 0 ? displayEntry : fallbackPrice,
@@ -1020,11 +1014,11 @@ export default function LiveSignalNotificationPanel({
     atr: (analysis?.trade_params as any)?.atr,
   });
 
-  const displayEntryZones = liveRiskCalc.entryZones;
-  const displaySL = liveRiskCalc.stopLoss;
-  const displayTpLevels = liveRiskCalc.tpLevels;
-  const displayTp1 = liveRiskCalc.tp1;
-  const displayTp2 = liveRiskCalc.tp2;
+  const displayEntryZones = isLocked && activeLock?.entry_zones?.length ? activeLock.entry_zones : liveRiskCalc.entryZones;
+  const displaySL = isLocked && activeLock?.stop_loss ? activeLock.stop_loss : liveRiskCalc.stopLoss;
+  const displayTpLevels = isLocked && activeLock?.tp_levels?.length ? activeLock.tp_levels : liveRiskCalc.tpLevels;
+  const displayTp1 = isLocked && activeLock?.tp1 ? activeLock.tp1 : liveRiskCalc.tp1;
+  const displayTp2 = isLocked && activeLock?.tp2 ? activeLock.tp2 : liveRiskCalc.tp2;
 
   // Broadcast live direction & Risk-Calculated SL/TP to page.tsx Top Bar so both consoles stay 100% synced
   useEffect(() => {
@@ -1305,8 +1299,13 @@ export default function LiveSignalNotificationPanel({
             </div>
 
             <div className="flex items-center justify-between pt-1 border-t border-slate-800 font-mono text-[9px]">
-              <span className="text-rose-300 font-bold">
-                Dynamic SL: ${displaySL.toFixed(precision)} (Dist: {liveRiskCalc.slDistance.toFixed(precision)})
+              <span className="text-rose-300 font-bold flex items-center gap-1">
+                <span>Dynamic SL: ${displaySL.toFixed(precision)} (Dist: {liveRiskCalc.slDistance.toFixed(precision)})</span>
+                {liveRiskCalc.slDistance >= 3.8 && symbol.toUpperCase().includes('XAU') && (
+                  <span className="text-emerald-400 text-[8px] bg-emerald-950/80 px-1 rounded border border-emerald-800">
+                    🛡️ Shielded
+                  </span>
+                )}
               </span>
               <span className="text-emerald-300 font-bold">
                 {mt5BridgeState?.accountBalance !== undefined
@@ -1662,16 +1661,23 @@ export default function LiveSignalNotificationPanel({
             </span>
           </div>
 
-          {/* Predictive Probability & Candle Hold Window Bar */}
+          {/* Predictive Probability & Active Target Progress Bar (Replaces timer countdown!) */}
           {latestNotif.type !== 'CLOSED' && (
             <div className="flex items-center justify-between bg-slate-950/90 border border-slate-800 px-2.5 py-1.5 rounded-lg text-[10px]">
               <span className="text-emerald-400 font-bold flex items-center gap-1">
                 <Target className="w-3 h-3" />
                 <span>PROBABILITY: {analysis?.probability ?? analysis?.trade_params?.probability ?? 84}%</span>
               </span>
-              <span className="text-blue-300 font-mono font-bold flex items-center gap-1">
-                <Clock className="w-3 h-3 text-blue-400" />
-                <span>HOLD: {formatHoldTimer(holdRemainingSec)} ({timeframe.toUpperCase()})</span>
+              <span className="text-amber-300 font-mono font-bold flex items-center gap-1">
+                <Target className="w-3 h-3 text-amber-400" />
+                <span>
+                  {displaySL === displayEntry ? '🛡️ BE LOCKED' : '🎯 TARGET'}: TP1 ${displayTp1.toFixed(precision)}
+                  <span className="text-slate-400 font-normal ml-1">
+                    ({isBuyTrade
+                      ? `${(currentPrice || displayEntry) - displayEntry >= 0 ? '+' : ''}${((currentPrice || displayEntry) - displayEntry).toFixed(precision)}`
+                      : `${displayEntry - (currentPrice || displayEntry) >= 0 ? '+' : ''}${(displayEntry - (currentPrice || displayEntry)).toFixed(precision)}`} pts)
+                  </span>
+                </span>
               </span>
             </div>
           )}
@@ -1780,8 +1786,13 @@ export default function LiveSignalNotificationPanel({
               </div>
               <div className="flex justify-between text-[9px] text-slate-400 font-mono">
                 <span>Bal: ${accountBalance} · {lotSize} Lot · {riskPercent}% Risk</span>
-                <span className="text-rose-400">
-                  Dist: {liveRiskCalc.slDistance.toFixed(precision)} (-${liveRiskCalc.actualDollarRisk.toFixed(2)})
+                <span className="text-rose-400 flex items-center gap-1">
+                  <span>Dist: {liveRiskCalc.slDistance.toFixed(precision)} (-${liveRiskCalc.actualDollarRisk.toFixed(2)})</span>
+                  {liveRiskCalc.slDistance >= 3.8 && symbol.toUpperCase().includes('XAU') && (
+                    <span className="text-emerald-400 text-[8px] bg-emerald-950/80 px-1 rounded border border-emerald-800" title="Protected against broker spread & 1m tick fluctuations">
+                      🛡️ Wick Shield
+                    </span>
+                  )}
                 </span>
               </div>
             </div>

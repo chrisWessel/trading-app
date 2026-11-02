@@ -1332,28 +1332,31 @@ def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m",
     clean_sym_u = clean_symbol_string(symbol)
     if is_gold:
         contract_size = 100.0
-        min_broker_stop = 0.45
+        # Anti-Wick / Anti-Fluctuation Breathing Floor:
+        # Minimum Stop Loss distance MUST sit outside normal 1m/5m spread and tick wicks (at least $3.80-$4.50 on Gold / 1.45x ATR)
+        # so small accounts ($40) NEVER experience instant stop-outs upon entry!
+        min_broker_stop = max(3.80, (atr if atr > 0 else 2.5) * 1.45)
     elif 'XAG' in clean_sym_u:
         contract_size = 5000.0
-        min_broker_stop = 0.05
+        min_broker_stop = max(0.18, (atr if atr > 0 else 0.12) * 1.4)
     elif 'OIL' in clean_sym_u:
         contract_size = 1000.0
-        min_broker_stop = 0.05
+        min_broker_stop = max(0.35, (atr if atr > 0 else 0.25) * 1.4)
     elif 'JPY' in clean_sym_u:
         contract_size = 670.0
-        min_broker_stop = 0.04
+        min_broker_stop = max(0.15, (atr if atr > 0 else 0.10) * 1.4)
     elif is_forex_symbol(symbol):
         contract_size = 100000.0
-        min_broker_stop = 0.0004
+        min_broker_stop = max(0.0015, (atr if atr > 0 else 0.0010) * 1.4)
     elif 'BTC' in clean_sym_u:
         contract_size = 1.0
-        min_broker_stop = 15.0
+        min_broker_stop = max(120.0, (atr if atr > 0 else 85.0) * 1.4)
     elif 'ETH' in clean_sym_u:
         contract_size = 10.0
-        min_broker_stop = 1.5
+        min_broker_stop = max(8.5, (atr if atr > 0 else 6.0) * 1.4)
     else:
         contract_size = 100.0
-        min_broker_stop = max(entry_price * 0.0005, 0.01)
+        min_broker_stop = max(entry_price * 0.0018, (atr if atr > 0 else entry_price * 0.001) * 1.4, 0.02)
 
     if is_gold:
         cfg = tf_gold_config.get(timeframe, tf_gold_config['1m'])
@@ -1502,54 +1505,53 @@ def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m",
             act_sig = active_state["signal_type"]
             act_sl = active_state["stop_loss"]
             act_entry = active_state["entry"]
+            act_tp1 = active_state.get("tp1", active_state["entry"])
 
-            # 1. Check Stop Loss breach against LIVE market price
+            # 1. Structural Exit Checks: TP Target Hit or Stop Loss Hit
+            tp1_hit = (act_sig == "BUY/LONG" and live_spot_price >= act_tp1) or (act_sig == "SELL/SHORT" and live_spot_price <= act_tp1)
             sl_hit = (act_sig == "BUY/LONG" and live_spot_price <= act_sl) or (act_sig == "SELL/SHORT" and live_spot_price >= act_sl)
 
-            # 2. Check Adverse Excursion or Immediate Market Direction Reversal
+            # 2. Check Adverse Runaway Excursion or Confirmed Major Impulsive Reversal
             if act_sig == "BUY/LONG":
                 adverse_excursion_pts = round(live_spot_price - act_entry, precision)
-                adverse_runaway = adverse_excursion_pts <= -min(runaway_threshold_pts, min_effective_risk)
-                opposing_runaway = runaway_bearish or immediate_bearish_reversal
+                adverse_runaway = adverse_excursion_pts <= -min(runaway_threshold_pts * 1.6, min_effective_risk * 1.5)
+                opposing_runaway = runaway_bearish and adverse_excursion_pts < -runaway_threshold_pts
             else:
                 adverse_excursion_pts = round(live_spot_price - act_entry, precision)
-                adverse_runaway = adverse_excursion_pts >= min(runaway_threshold_pts, min_effective_risk)
-                opposing_runaway = runaway_bullish or immediate_bullish_reversal
-
-            # 3. Check Same-Direction Runaway Continuation
-            favorable_runaway = (
-                (act_sig == "BUY/LONG" and (live_spot_price - act_entry) >= runaway_threshold_pts * 1.5)
-                or (act_sig == "SELL/SHORT" and (act_entry - live_spot_price) >= runaway_threshold_pts * 1.5)
-            )
+                adverse_runaway = adverse_excursion_pts >= min(runaway_threshold_pts * 1.6, min_effective_risk * 1.5)
+                opposing_runaway = runaway_bullish and adverse_excursion_pts > runaway_threshold_pts
 
             if sl_hit or adverse_runaway or opposing_runaway:
-                # MARKET DIRECTION REVERSAL OR RUNAWAY TAKES PRECEDENCE OVER THE HOLD TIMER!
+                # CONFIRMED STRUCTURAL INVALIDATION OR MAJOR RUNAWAY REVERSAL
                 runaway_override_triggered = True
-                if act_sig == "BUY/LONG" and (sl_hit or adverse_runaway or opposing_runaway):
+                if act_sig == "BUY/LONG":
                     signal_type = "SELL/SHORT"
                     trend = "DOWNTREND"
                     runaway_bearish = True
                     runaway_bullish = False
-                elif act_sig == "SELL/SHORT" and (sl_hit or adverse_runaway or opposing_runaway):
+                else:
                     signal_type = "BUY/LONG"
                     trend = "UPTREND"
                     runaway_bullish = True
                     runaway_bearish = False
                 entry_price = live_spot_price
                 triggered_at = now_ts
-            elif favorable_runaway:
-                signal_type = act_sig
-                trend = active_state["trend"]
-                entry_price = live_spot_price
-                triggered_at = active_state["triggered_at"]
-            elif elapsed < min_hold_sec:
+            elif tp1_hit:
+                # TP TARGET REACHED: Harvest profit! Allow re-anchor or continuation
                 signal_type = act_sig
                 trend = active_state["trend"]
                 entry_price = active_state["entry"]
                 prob_score = active_state["probability"]
                 triggered_at = active_state["triggered_at"]
             else:
-                triggered_at = now_ts
+                # ── PRICE TARGET & STRUCTURE LIFECYCLE (NO TIME-BASED FLIPPING!) ──
+                # While price is between Stop Loss and TP, NEVER change direction simply because time passed!
+                # Price must be allowed to fluctuate while holding the direction toward the TP target.
+                signal_type = act_sig
+                trend = active_state["trend"]
+                entry_price = active_state["entry"]
+                prob_score = active_state["probability"]
+                triggered_at = active_state["triggered_at"]
         else:
             triggered_at = now_ts
 

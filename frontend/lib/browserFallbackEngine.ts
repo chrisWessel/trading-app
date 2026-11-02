@@ -550,36 +550,50 @@ export interface SMCPrinciplesSummary {
   };
 }
 
-// Shared anti-whipsaw hysteresis lock across all browser components (Signal Navigator, AI Copilot, Strategy Tabs)
-const BROWSER_SIGNAL_HYSTERESIS_MAP: Record<
-  string,
-  {
-    signalType: 'BUY/LONG' | 'SELL/SHORT';
-    entry: number;
-    stopLoss: number;
-    lockedAtMs: number;
-    bullPoints: number;
-    bearPoints: number;
-  }
-> = {};
+// Shared anti-whipsaw persistent setup state across all browser components (Signal Navigator, AI Copilot, Strategy Tabs)
+export interface BrowserActiveSetup {
+  symbol: string;
+  timeframe: string;
+  signalType: 'BUY/LONG' | 'SELL/SHORT';
+  entry: number;
+  entryZones: number[];
+  stopLoss: number;
+  tpLevels: number[];
+  tp1: number;
+  tp2: number;
+  slDistance: number;
+  actualDollarRisk: number;
+  breakevenTrigger: number;
+  fvgMagnetTarget: number;
+  reversalTrigger: number;
+  lockedAtMs: number;
+  breakevenLocked: boolean;
+  tp1Hit: boolean;
+  bullPoints: number;
+  bearPoints: number;
+  probability: number;
+  rationale: string;
+}
+
+const BROWSER_SIGNAL_HYSTERESIS_MAP: Record<string, BrowserActiveSetup> = {};
 
 // Minimum institutional confirmation window before allowing a non-SL direction flip (prevents 3-second whipsaws!)
 const TF_MIN_REVERSAL_COOLDOWN_SEC: Record<string, number> = {
-  '1s': 20,
-  '5s': 25,
-  '15s': 35,
-  '30s': 45,
-  '1m': 75,
-  '2m': 110,
-  '3m': 150,
-  '5m': 210,
-  '15m': 420,
-  '30m': 600,
-  '45m': 900,
-  '1h': 1200,
-  '2h': 1800,
-  '4h': 3600,
-  '1d': 7200,
+  '1s': 30,
+  '5s': 45,
+  '15s': 60,
+  '30s': 90,
+  '1m': 180,
+  '2m': 240,
+  '3m': 300,
+  '5m': 600,
+  '15m': 1200,
+  '30m': 1800,
+  '45m': 2400,
+  '1h': 3600,
+  '2h': 7200,
+  '4h': 14400,
+  '1d': 28800,
 };
 
 export function detectFairValueGapsAndSMC(
@@ -1019,103 +1033,161 @@ export function computeBrowserSignalAnalysis(
   if (runawayBearish) rawIsBuy = false;
   else if (runawayBullish) rawIsBuy = true;
 
-  // ── TIMEFRAME-SCALED ANTI-WHIPSAW HYSTERESIS LOCK (STOPS FAST FLIPPING!) ──
-  // Once a BUY or SELL direction is established on a timeframe, keep it locked until:
-  //   1. The minimum timeframe confirmation cooldown has elapsed AND the opposing direction has a strong >= 25 pt lead, OR
-  //   2. Price hits the structural Stop Loss, OR
-  //   3. A confirmed Trend Exhaustion / FVG Rejection or Runaway Move (>= 1.25x threshold) triggers!
+  // ── INSTITUTIONAL STRUCTURE & MILESTONE-DRIVEN TRADE LIFECYCLE ──
+  // A setup is established from SMC/FVG confluence and pinned.
+  // It NEVER flips or resets because of a timer! Market fluctuations toward TP are protected.
+  // The lifecycle completes ONLY when:
+  //   1. Take Profit TP1 is reached -> Profit banked, Stop Loss moved to Breakeven.
+  //   2. Stop Loss is breached -> Controlled exit.
+  //   3. A confirmed multi-candle Change of Character (CHoCH) structural reversal forms.
   const hysteresisKey = `${symbol.toUpperCase()}:${timeframe}`;
   const prevLock = BROWSER_SIGNAL_HYSTERESIS_MAP[hysteresisKey];
   const nowMs = Date.now();
-  const minCooldownMs = (TF_MIN_REVERSAL_COOLDOWN_SEC[timeframe] || 180) * 1000;
 
   let isBuy = rawIsBuy;
+  let entry = Number(latestPrice.toFixed(prec));
+  let entryZones: number[] = [];
+  let stopLoss = 0;
+  let tpLevels: number[] = [];
+  let slDistance = 0;
+  let actualDollarRisk = 0;
+  let breakevenTrigger = 0;
+  let fvgMagnetTarget = 0;
+  let reversalTrigger = 0;
+  let isPinnedActiveTrade = false;
+
   if (prevLock) {
     const prevIsBuy = prevLock.signalType === 'BUY/LONG';
-    const elapsedMs = nowMs - prevLock.lockedAtMs;
     const slBreached =
       (prevIsBuy && latestPrice <= prevLock.stopLoss) ||
       (!prevIsBuy && latestPrice >= prevLock.stopLoss);
-    const highConvictionFlip =
+
+    // Genuine Structural Reversal: Price breaks beyond the opposing swing structure with dominant institutional score
+    const confirmedCHoCHReversal =
       (prevIsBuy &&
         !rawIsBuy &&
-        (runawayBearish ||
-          smc.trendExhaustion.action === 'TAKE_PROFIT_AND_SELL' ||
-          bearPoints - bullPoints >= 35)) ||
+        latestPrice < recentSwingLow &&
+        (bearPoints - bullPoints >= 30 || smc.trendExhaustion.action === 'TAKE_PROFIT_AND_SELL')) ||
       (!prevIsBuy &&
         rawIsBuy &&
-        (runawayBullish ||
-          smc.trendExhaustion.action === 'TAKE_PROFIT_AND_BUY' ||
-          bullPoints - bearPoints >= 35));
+        latestPrice > recentSwingHigh &&
+        (bullPoints - bearPoints >= 30 || smc.trendExhaustion.action === 'TAKE_PROFIT_AND_BUY'));
 
-    if (prevIsBuy !== rawIsBuy) {
-      // Only allow flipping if SL breached, or high-conviction structural reversal after minimum 35s, or full cooldown elapsed with >=20pt lead
-      const canFlipNow =
-        slBreached ||
-        (highConvictionFlip && elapsedMs >= 35000) ||
-        (elapsedMs >= minCooldownMs && Math.abs(bullPoints - bearPoints) >= 20);
+    const tp1Reached =
+      (prevIsBuy && latestPrice >= prevLock.tp1) ||
+      (!prevIsBuy && latestPrice <= prevLock.tp1);
 
-      if (!canFlipNow) {
-        isBuy = prevIsBuy; // Hold the locked direction — prevent fast whipsaw flipping!
+    const breakevenHit =
+      (prevIsBuy && latestPrice >= prevLock.breakevenTrigger) ||
+      (!prevIsBuy && latestPrice <= prevLock.breakevenTrigger);
+
+    // If neither Stop Loss breached nor confirmed opposing CHoCH reversal, KEEP THE SETUP PINNED!
+    if (!slBreached && !confirmedCHoCHReversal) {
+      isPinnedActiveTrade = true;
+      isBuy = prevIsBuy;
+      entry = prevLock.entry;
+      entryZones = prevLock.entryZones;
+      tpLevels = prevLock.tpLevels;
+      slDistance = prevLock.slDistance;
+      actualDollarRisk = prevLock.actualDollarRisk;
+      breakevenTrigger = prevLock.breakevenTrigger;
+      fvgMagnetTarget = prevLock.fvgMagnetTarget;
+      reversalTrigger = prevLock.reversalTrigger;
+
+      // Breakeven Lock: Once price triggers breakeven or TP1, protect the trade at entry!
+      if (breakevenHit || tp1Reached || prevLock.breakevenLocked) {
+        prevLock.breakevenLocked = true;
+        stopLoss = prevIsBuy
+          ? Math.max(prevLock.stopLoss, prevLock.entry)
+          : Math.min(prevLock.stopLoss, prevLock.entry);
+        prevLock.stopLoss = stopLoss;
+      } else {
+        stopLoss = prevLock.stopLoss;
+      }
+
+      if (tp1Reached) {
+        prevLock.tp1Hit = true;
       }
     }
+  }
+
+  // If starting fresh setup or previous setup was cleanly terminated by SL or confirmed CHoCH:
+  if (!isPinnedActiveTrade) {
+    const riskCalc = calculateRiskBasedLevels({
+      symbol,
+      entryPrice: entry,
+      isBuy,
+      accountBalance,
+      lotSize,
+      riskPercent,
+      precision: prec,
+      structuralSwingLow: recentSwingLow,
+      structuralSwingHigh: recentSwingHigh,
+      atr,
+    });
+
+    entryZones = riskCalc.entryZones;
+    stopLoss = riskCalc.stopLoss;
+    tpLevels = riskCalc.tpLevels;
+    actualDollarRisk = riskCalc.actualDollarRisk;
+    slDistance = riskCalc.slDistance;
+
+    breakevenTrigger = Number(
+      (isBuy ? entry + slDistance * 0.65 : entry - slDistance * 0.65).toFixed(prec)
+    );
+    fvgMagnetTarget = isBuy
+      ? Number(Math.max(tpLevels[0], smc.bearishFvg?.midpoint || tpLevels[1]).toFixed(prec))
+      : Number(Math.min(tpLevels[0], smc.bullishFvg?.midpoint || tpLevels[1]).toFixed(prec));
+    reversalTrigger = isBuy
+      ? Number(Math.max(smc.bearishOrderBlock.low, tpLevels[1]).toFixed(prec))
+      : Number(Math.min(smc.bullishOrderBlock.high, tpLevels[1]).toFixed(prec));
+
+    const signalType = isBuy ? 'BUY/LONG' : 'SELL/SHORT';
+    BROWSER_SIGNAL_HYSTERESIS_MAP[hysteresisKey] = {
+      symbol,
+      timeframe,
+      signalType,
+      entry,
+      entryZones,
+      stopLoss,
+      tpLevels,
+      tp1: tpLevels[0],
+      tp2: tpLevels[2],
+      slDistance,
+      actualDollarRisk,
+      breakevenTrigger,
+      fvgMagnetTarget,
+      reversalTrigger,
+      lockedAtMs: nowMs,
+      breakevenLocked: false,
+      tp1Hit: false,
+      bullPoints,
+      bearPoints,
+      probability: Math.min(96, Math.max(90, 90 + Math.round(Math.abs(bullPoints - bearPoints) / 15))),
+      rationale: '',
+    };
   }
 
   const signalType = isBuy ? 'BUY/LONG' : 'SELL/SHORT';
   const bias = isBuy ? 'BULLISH' : 'BEARISH';
   const trend = isBuy ? 'UPTREND' : 'DOWNTREND';
 
-  const entry = Number(latestPrice.toFixed(prec));
-  const riskCalc = calculateRiskBasedLevels({
-    symbol,
-    entryPrice: entry,
-    isBuy,
-    accountBalance,
-    lotSize,
-    riskPercent,
-    precision: prec,
-    structuralSwingLow: recentSwingLow,
-    structuralSwingHigh: recentSwingHigh,
-    atr,
-  });
-
-  const { entryZones, stopLoss, tpLevels, actualDollarRisk, slDistance } = riskCalc;
-
-  // Update the shared anti-whipsaw lock
-  if (!prevLock || prevLock.signalType !== signalType) {
-    BROWSER_SIGNAL_HYSTERESIS_MAP[hysteresisKey] = {
-      signalType,
-      entry,
-      stopLoss,
-      lockedAtMs: nowMs,
-      bullPoints,
-      bearPoints,
-    };
-  } else {
-    prevLock.stopLoss = stopLoss;
-    prevLock.bullPoints = bullPoints;
-    prevLock.bearPoints = bearPoints;
-  }
-
   // Populate Profit Maximizer ("We Should Take Money") targets using FVG magnets & Risk-Reward milestones
-  const breakevenTrigger = Number(
-    (isBuy ? entry + slDistance * 0.65 : entry - slDistance * 0.65).toFixed(prec)
-  );
-  const fvgMagnetTarget = isBuy
-    ? Number(Math.max(tpLevels[0], smc.bearishFvg?.midpoint || tpLevels[1]).toFixed(prec))
-    : Number(Math.min(tpLevels[0], smc.bullishFvg?.midpoint || tpLevels[1]).toFixed(prec));
-  const reversalTrigger = isBuy
-    ? Number(Math.max(smc.bearishOrderBlock.low, tpLevels[1]).toFixed(prec))
-    : Number(Math.min(smc.bullishOrderBlock.high, tpLevels[1]).toFixed(prec));
+  const ptsFloating = Number((isBuy ? latestPrice - entry : entry - latestPrice).toFixed(prec));
+  const ptsToTp1 = Number(Math.abs(tpLevels[0] - latestPrice).toFixed(prec));
+  const beLocked = prevLock?.breakevenLocked || false;
+  const tp1Hit = prevLock?.tp1Hit || false;
 
   smc.profitMaximizer = {
     breakevenTriggerPrice: breakevenTrigger,
     partialTakeProfitPrice: tpLevels[0],
     fvgMagnetTargetPrice: fvgMagnetTarget,
     maxRunTargetPrice: tpLevels[2],
-    takeMoneyDirective: isBuy
-      ? `💰 TAKE MONEY PLAN (${timeframe.toUpperCase()}): 1) Move SL to Breakeven at $${breakevenTrigger.toFixed(prec)}. 2) Lock 50–75% profit at TP1 ($${tpLevels[0].toFixed(prec)}). 3) Full exit / Watch SELL reversal at Supply FVG ($${(smc.bearishFvg?.bottom ?? reversalTrigger).toFixed(prec)}–$${(smc.bearishFvg?.top ?? reversalTrigger).toFixed(prec)}).`
-      : `💰 TAKE MONEY PLAN (${timeframe.toUpperCase()}): 1) Move SL to Breakeven at $${breakevenTrigger.toFixed(prec)}. 2) Lock 50–75% profit at TP1 ($${tpLevels[0].toFixed(prec)}). 3) Full exit / Watch BUY reversal at Demand FVG ($${(smc.bullishFvg?.bottom ?? reversalTrigger).toFixed(prec)}–$${(smc.bullishFvg?.top ?? reversalTrigger).toFixed(prec)}).`,
+    takeMoneyDirective: tp1Hit
+      ? `🎉 TP1 HIT (${isBuy ? '+' : ''}${ptsFloating.toFixed(prec)} pts)! Banked 50–75% profit. Stop Loss locked at Entry ($${entry.toFixed(prec)}). Letting runners hunt TP2 ($${tpLevels[1].toFixed(prec)}).`
+      : beLocked
+      ? `🛡️ BREAKEVEN LOCKED at $${entry.toFixed(prec)} (Zero Risk Trade). Price is running +${ptsFloating.toFixed(prec)} pts toward TP1 ($${tpLevels[0].toFixed(prec)}).`
+      : `🎯 TARGETING TP1 ($${tpLevels[0].toFixed(prec)}): ${ptsToTp1.toFixed(prec)} pts to target (${ptsFloating >= 0 ? '+' : ''}${ptsFloating.toFixed(prec)} pts floating). Breakeven trigger at $${breakevenTrigger.toFixed(prec)}. Hold steady through normal fluctuations.`,
     principlesActive: activePrinciples.length > 0 ? activePrinciples : [smc.structureLabel, smc.dealingRange.zoneLabel],
   };
 
@@ -1162,7 +1234,7 @@ export function computeBrowserSignalAnalysis(
     symbol,
     timeframe,
     data_source: isGold ? 'TradingView (OANDA:XAUUSD)' : 'LIVE SPOT FEED',
-    latest_price: entry,
+    latest_price: Number(latestPrice.toFixed(prec)),
     support: Number(support.toFixed(prec)),
     resistance: Number(resistance.toFixed(prec)),
     trend,
