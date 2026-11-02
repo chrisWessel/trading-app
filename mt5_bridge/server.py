@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-from fastapi import Body, Depends, FastAPI, Header, HTTPException, status
+from fastapi import Body, Depends, FastAPI, Header, HTTPException, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 
@@ -44,8 +44,30 @@ app.add_middleware(
     allow_origins=["*"],
     allow_credentials=False,
     allow_methods=["GET", "POST", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "X-Bridge-Token"],
+    allow_headers=["Authorization", "Content-Type", "X-Bridge-Token", "Access-Control-Request-Private-Network"],
 )
+
+
+@app.middleware("http")
+async def add_private_network_cors_headers(request: Request, call_next):
+    """
+    Allows Chrome/Edge on an HTTPS Vercel domain to directly call http://127.0.0.1:8001
+    via Private Network Access (PNA) preflight headers.
+    """
+    if request.method == "OPTIONS":
+        return Response(
+            status_code=204,
+            headers={
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+                "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Bridge-Token, Access-Control-Request-Private-Network",
+                "Access-Control-Allow-Private-Network": "true",
+            },
+        )
+    response = await call_next(request)
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Private-Network"] = "true"
+    return response
 
 
 def verify_secret_token(

@@ -214,10 +214,16 @@ export async function POST(req: NextRequest) {
       { status: orderRes.ok ? 200 : orderRes.status }
     );
   } catch (err: any) {
+    const rawMsg = String(err?.message || '');
+    const friendlyError =
+      rawMsg.toLowerCase().includes('fetch failed') || rawMsg.toLowerCase().includes('abort')
+        ? 'Local MT5 Bridge is offline on your PC (or Cloudflare tunnel expired after PC restart). Start mt5_bridge/start_bridge.bat on your PC, then click "1. EXECUTE"!'
+        : rawMsg || 'MT5 Bridge request failed.';
     return NextResponse.json(
       {
         status: 'error',
-        error: err?.message || 'MT5 Bridge request failed.',
+        error: friendlyError,
+        retcode_name: friendlyError,
       },
       { status: 503 }
     );
