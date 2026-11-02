@@ -860,12 +860,12 @@ class MT5BridgeClient:
         Exness MetaTrader 5 terminal so the frontend Signal Navigator and Stop Loss
         always match the live chart price to the exact cent.
         """
-        with self._lock:
+        with _mt5_lock:
             ok, meta = self.ensure_connected()
             if not ok:
                 return {"status": "offline", "bars": [], "meta": meta}
 
-            resolved_symbol, sym_info = self.resolve_symbol(symbol)
+            resolved_symbol, sym_info = self.resolve_broker_symbol(symbol)
             if not resolved_symbol or sym_info is None:
                 return {
                     "status": "symbol_not_found",
