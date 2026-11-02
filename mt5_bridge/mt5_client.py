@@ -290,12 +290,22 @@ class MT5BridgeClient:
         clean_sl = 0.0
         clean_tp = 0.0
 
+        # Calculate default protective stops (Anti-Wick Floor + Swing Structure)
+        if is_buy:
+            safe_max_sl = exit_ref_price - min_sl_breathing_dist
+            struct_sl = swing_low - structural_buffer if (exit_ref_price - swing_low) <= min_sl_breathing_dist * 2.2 else safe_max_sl
+            default_sl = round(min(safe_max_sl, struct_sl), digits)
+            default_tp = round(price + max(min_tp_dist, min_sl_breathing_dist * 1.2), digits)
+        else:
+            safe_min_sl = exit_ref_price + min_sl_breathing_dist
+            struct_sl = swing_high + structural_buffer if (swing_high - exit_ref_price) <= min_sl_breathing_dist * 2.2 else safe_min_sl
+            default_sl = round(max(safe_min_sl, struct_sl), digits)
+            default_tp = round(price - max(min_tp_dist, min_sl_breathing_dist * 1.2), digits)
+
         if sl is not None and sl > 0:
             req_sl = float(sl)
             if is_buy:
                 # Place SL safely below both (exit_ref_price - min_sl_breathing_dist) and recent Swing Low
-                safe_max_sl = exit_ref_price - min_sl_breathing_dist
-                struct_sl = swing_low - structural_buffer if (exit_ref_price - swing_low) <= min_sl_breathing_dist * 2.2 else safe_max_sl
                 target_sl = min(safe_max_sl, struct_sl)
                 # Only use req_sl if it is already safely below safe_max_sl and within reasonable range (not a stale quote)
                 if req_sl <= safe_max_sl and (exit_ref_price - req_sl) <= min_sl_breathing_dist * 3.5:
@@ -304,13 +314,14 @@ class MT5BridgeClient:
                     clean_sl = round(target_sl, digits)
             else:
                 # SELL: Place SL safely above both (exit_ref_price + min_sl_breathing_dist) and recent Swing High
-                safe_min_sl = exit_ref_price + min_sl_breathing_dist
-                struct_sl = swing_high + structural_buffer if (swing_high - exit_ref_price) <= min_sl_breathing_dist * 2.2 else safe_min_sl
                 target_sl = max(safe_min_sl, struct_sl)
                 if req_sl >= safe_min_sl and (req_sl - exit_ref_price) <= min_sl_breathing_dist * 3.5:
                     clean_sl = round(req_sl, digits)
                 else:
                     clean_sl = round(target_sl, digits)
+        else:
+            # MANDATORY GUARANTEED SL: A position on MT5 is NEVER left unprotected!
+            clean_sl = default_sl
 
         if tp is not None and tp > 0:
             req_tp = float(tp)
@@ -326,6 +337,9 @@ class MT5BridgeClient:
                     clean_tp = round(req_tp, digits)
                 else:
                     clean_tp = round(price - max(min_tp_dist, min_sl_breathing_dist * 0.85), digits)
+        else:
+            # MANDATORY GUARANTEED TP:
+            clean_tp = default_tp
 
         return clean_sl, clean_tp
 

@@ -435,6 +435,11 @@ export default function AutonomousBotLiveWindow({
           setActiveTrade(null);
           playBeep(pnl >= 0 ? 960 : 480, pnl < 0);
 
+          if (reason === 'STOP_REVERSE') {
+            // Immediate eligibility to catch the new reversed trend direction
+            lastAutoEntryMsRef.current = 0;
+          }
+
           const title =
             reason === 'TAKE_PROFIT'
               ? `💰 AI AUTO-HARVESTED PROFIT: ${ pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)} on ${current.symbol}`
@@ -632,6 +637,34 @@ export default function AutonomousBotLiveWindow({
             status: 'OPEN',
           };
           setActiveTrade(trade);
+
+          // AUTO-HEAL: If MT5 position has no Stop Loss on the broker, plug it in immediately!
+          if (matchingMt5Pos.ticket && Number(matchingMt5Pos.sl || 0) === 0) {
+            const healPayload = {
+              ticket: Number(matchingMt5Pos.ticket),
+              sl: pSl,
+              tp: pTp,
+            };
+            fetch('http://127.0.0.1:8001/bridge/modify-position', {
+              method: 'POST',
+              headers: {
+                Authorization: `Bearer ${MT5_LOCAL_TOKEN}`,
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify(healPayload),
+            }).catch(() => {
+              fetch('/api/mt5', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ mode: 'modify_position', ...healPayload }),
+              }).catch(() => {});
+            });
+            appendDirectiveLog(
+              'AUTO_ENTER',
+              `🛡️ AUTO-PLUGGED MISSING STOP LOSS ON MT5 (${pDir})`,
+              `Position #${matchingMt5Pos.ticket} had no SL on Exness MT5. Attached hard SL at $${pSl.toFixed(precision)}.`
+            );
+          }
         } else if (trade && !trade.isRealMt5) {
           // Update Live Mimic Trade with latest market tick
           const ptsMoved = Number(
