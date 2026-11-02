@@ -1099,17 +1099,28 @@ def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m",
 
     _, precision = get_asset_base_config(symbol)
 
-    # Always fetch the true live market price first so a locked signal entry echoed
-    # from the client can NEVER freeze `latest_price` in a feedback loop!
-    live_spot_price = get_synchronized_live_price(symbol)
-    if (not live_spot_price or live_spot_price <= 0) and current_price and current_price > 0:
+    # Always prioritize live spot price: caller's live chart price first, then synchronized broker quote
+    if current_price and current_price > 0:
         live_spot_price = round(current_price, precision)
+    else:
+        live_spot_price = get_synchronized_live_price(symbol)
+        if not live_spot_price or live_spot_price <= 0:
+            live_spot_price = 0.0
 
     df = fetch_ohlcv(symbol=symbol, timeframe=timeframe, limit=100)
     if df is not None and not df.empty:
-        candle_close = round(float(df['close'].iloc[-1]), precision)
-        if candle_close > 0:
-            live_spot_price = candle_close
+        if live_spot_price <= 0:
+            candle_close = round(float(df['close'].iloc[-1]), precision)
+            if candle_close > 0:
+                live_spot_price = candle_close
+        else:
+            # Sync the forming bar's close to live_spot_price so indicators reflect actual market
+            last_idx = df.index[-1]
+            df.at[last_idx, 'close'] = live_spot_price
+            if live_spot_price > float(df.at[last_idx, 'high']):
+                df.at[last_idx, 'high'] = live_spot_price
+            if live_spot_price < float(df.at[last_idx, 'low']):
+                df.at[last_idx, 'low'] = live_spot_price
 
     latest_price = round(float(live_spot_price), precision)
     UNIVERSAL_PRICE_HUB[clean_sym] = latest_price
@@ -1507,9 +1518,10 @@ def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m",
             act_entry = active_state["entry"]
             act_tp1 = active_state.get("tp1", active_state["entry"])
 
-            # 1. Structural Exit Checks: TP Target Hit or Stop Loss Hit
+            # 1. Structural Exit Checks: TP Target Hit, Stop Loss Hit, or Stale Drift (> 2.5x risk)
             tp1_hit = (act_sig == "BUY/LONG" and live_spot_price >= act_tp1) or (act_sig == "SELL/SHORT" and live_spot_price <= act_tp1)
             sl_hit = (act_sig == "BUY/LONG" and live_spot_price <= act_sl) or (act_sig == "SELL/SHORT" and live_spot_price >= act_sl)
+            stale_drift = abs(live_spot_price - act_entry) >= max(min_effective_risk * 2.5, 3.5 if is_gold else 0.005)
 
             # 2. Check Adverse Runaway Excursion or Confirmed Major Impulsive Reversal
             if act_sig == "BUY/LONG":
@@ -1521,8 +1533,9 @@ def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m",
                 adverse_runaway = adverse_excursion_pts >= min(runaway_threshold_pts * 1.6, min_effective_risk * 1.5)
                 opposing_runaway = runaway_bullish and adverse_excursion_pts > runaway_threshold_pts
 
-            if sl_hit or adverse_runaway or opposing_runaway:
-                # CONFIRMED STRUCTURAL INVALIDATION OR MAJOR RUNAWAY REVERSAL
+            if sl_hit or adverse_runaway or opposing_runaway or stale_drift:
+                # CONFIRMED STRUCTURAL INVALIDATION OR MAJOR RUNAWAY REVERSAL: Purge stale setup
+                ACTIVE_SIGNAL_REGISTRY.pop(registry_key, None)
                 runaway_override_triggered = True
                 if act_sig == "BUY/LONG":
                     signal_type = "SELL/SHORT"
@@ -1609,6 +1622,9 @@ def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m",
         swing_gap = min(max(0.0, recent_swing_high - entry_price), max_struct_cap)
         effective_sl_dist = round(max(min_effective_risk, swing_gap + max(min_effective_risk * 0.85, 0.35 if is_gold else min_effective_risk * 0.5)), precision)
         stop_loss = round(entry_price + effective_sl_dist, precision)
+        # INVARIANT: For SELL, Stop Loss can NEVER be <= latest market price!
+        if stop_loss <= latest_price:
+            stop_loss = round(latest_price + effective_sl_dist, precision)
         risk_dist = round(abs(stop_loss - entry_price), precision)
 
         tp_levels = [round(entry_price - (effective_sl_dist * m), precision) for m in tp_multipliers]
@@ -1626,6 +1642,9 @@ def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m",
         swing_gap = min(max(0.0, entry_price - recent_swing_low), max_struct_cap)
         effective_sl_dist = round(max(min_effective_risk, swing_gap + max(min_effective_risk * 0.85, 0.35 if is_gold else min_effective_risk * 0.5)), precision)
         stop_loss = round(entry_price - effective_sl_dist, precision)
+        # INVARIANT: For BUY, Stop Loss can NEVER be >= latest market price!
+        if stop_loss >= latest_price:
+            stop_loss = round(latest_price - effective_sl_dist, precision)
         risk_dist = round(abs(entry_price - stop_loss), precision)
 
         tp_levels = [round(entry_price + (effective_sl_dist * m), precision) for m in tp_multipliers]

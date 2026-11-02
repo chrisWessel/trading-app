@@ -452,8 +452,18 @@ export function calculateRiskBasedLevels(params: {
     Number((isBuy ? entryPrice - zoneStep * i : entryPrice + zoneStep * i).toFixed(precision))
   );
 
-  const stopLoss = Number(
+  const rawStopLoss = Number(
     (isBuy ? entryPrice - slDistance : entryPrice + slDistance).toFixed(precision)
+  );
+
+  // ABSOLUTE DIRECTIONAL SAFETY INVARIANT:
+  // For SELL: Stop Loss MUST be strictly above entryPrice by at least slDistance (never lower!)
+  // For BUY: Stop Loss MUST be strictly below entryPrice by at least slDistance (never higher!)
+  const stopLoss = Number(
+    (isBuy
+      ? Math.min(rawStopLoss, entryPrice - slDistance)
+      : Math.max(rawStopLoss, entryPrice + slDistance)
+    ).toFixed(precision)
   );
 
   // 7 Take Profit levels scaled smoothly from the risk distance (TP1 = 1.2R quick high-win lock, up to TP7 = 6.0R)

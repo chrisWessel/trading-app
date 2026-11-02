@@ -98,7 +98,16 @@ export default function AutonomousBotLiveWindow({
   );
 
   // Synced Risk Calculator & Signal State
-  const [accountBalance, setAccountBalance] = useState<number>(40.45);
+  const [accountBalance, setAccountBalance] = useState<number>(() => {
+    if (typeof window !== 'undefined') {
+      const s = localStorage.getItem('wessignal_last_mt5_balance');
+      if (s) {
+        const n = parseFloat(s);
+        if (!isNaN(n) && n > 0) return n;
+      }
+    }
+    return 16.72;
+  });
   const [liveMt5Equity, setLiveMt5Equity] = useState<number | null>(null);
   const [lotSize, setLotSize] = useState<number>(0.01);
   const [riskPercent, setRiskPercent] = useState<number>(2.0);
@@ -568,6 +577,9 @@ export default function AutonomousBotLiveWindow({
           if (term?.account_balance !== undefined && Number(term.account_balance) > 0) {
             const realBal = Number(Number(term.account_balance).toFixed(2));
             setAccountBalance(realBal);
+            if (typeof window !== 'undefined') {
+              localStorage.setItem('wessignal_last_mt5_balance', String(realBal));
+            }
           }
           if (term?.account_equity !== undefined && Number(term.account_equity) > 0) {
             setLiveMt5Equity(Number(Number(term.account_equity).toFixed(2)));

@@ -157,9 +157,24 @@ export default function LiveSignalNotificationPanel({
   const [selectedTpIndex, setSelectedTpIndex] = useState<number>(0); // which TP level is highlighted
   
   // Risk management parameters: customizable Lot Size, Risk %, and Account Balance
-  const [accountBalance, setAccountBalance] = useState<number>(40.45);
+  const [accountBalance, setAccountBalance] = useState<number>(() => {
+    if (typeof window !== 'undefined') {
+      const s = localStorage.getItem('wessignal_last_mt5_balance');
+      if (s) {
+        const n = parseFloat(s);
+        if (!isNaN(n) && n > 0) return n;
+      }
+    }
+    return 16.72;
+  });
   // balanceInput is a raw string so the user can freely clear & type any amount
-  const [balanceInput, setBalanceInput] = useState<string>('40.45');
+  const [balanceInput, setBalanceInput] = useState<string>(() => {
+    if (typeof window !== 'undefined') {
+      const s = localStorage.getItem('wessignal_last_mt5_balance');
+      if (s) return s;
+    }
+    return '16.72';
+  });
   const userEditedBalanceRef = useRef<boolean>(false);
   const [lotSize, setLotSize] = useState<number>(0.01);
   const [riskPercent, setRiskPercent] = useState<number>(2.0); // default 2%
@@ -223,6 +238,9 @@ export default function LiveSignalNotificationPanel({
           const liveBal = Number(Number(term.account_balance).toFixed(2));
           setAccountBalance(liveBal);
           setBalanceInput(String(liveBal));
+          if (typeof window !== 'undefined') {
+            localStorage.setItem('wessignal_last_mt5_balance', String(liveBal));
+          }
         }
         setMt5BridgeState((prev) => ({
           online: Boolean(json.mt5_ipc_connected),
@@ -244,6 +262,8 @@ export default function LiveSignalNotificationPanel({
 
   useEffect(() => {
     checkMt5BridgeHealth();
+    const interval = setInterval(checkMt5BridgeHealth, 3000);
+    return () => clearInterval(interval);
   }, []);
 
   // Helper to resolve active tunnel URL in browser
@@ -631,6 +651,7 @@ export default function LiveSignalNotificationPanel({
         const lockKey = `${symbol.toUpperCase()}:${timeframe}`;
         const tfHoldSec = TIMEFRAME_HOLD_SECONDS[timeframe] || a.hold_total_sec || 300;
         const existingLock = signalLockRef.current;
+        const effectiveCurrentPrice = currentPrice && currentPrice > 0 ? currentPrice : a.latest_price;
 
         let lockActive = false;
         if (
@@ -643,24 +664,28 @@ export default function LiveSignalNotificationPanel({
             a.signal_type !== 'NEUTRAL' && a.signal_type !== existingLock.signal_type;
 
           const slHit =
-            (prevIsBuy && a.latest_price <= existingLock.stop_loss) ||
-            (!prevIsBuy && a.latest_price >= existingLock.stop_loss);
+            (prevIsBuy && effectiveCurrentPrice <= existingLock.stop_loss) ||
+            (!prevIsBuy && effectiveCurrentPrice >= existingLock.stop_loss);
 
           const tp1Hit =
-            (prevIsBuy && a.latest_price >= existingLock.tp1) ||
-            (!prevIsBuy && a.latest_price <= existingLock.tp1);
+            (prevIsBuy && effectiveCurrentPrice >= existingLock.tp1) ||
+            (!prevIsBuy && effectiveCurrentPrice <= existingLock.tp1);
+
+          const isGold = symbol.toUpperCase().includes('XAU') || symbol.toUpperCase().includes('GOLD');
+          const maxDrift = isGold ? 3.50 : existingLock.entry * 0.003;
+          const staleDrift = Math.abs(effectiveCurrentPrice - existingLock.entry) > maxDrift;
 
           const beTriggerDist = Math.max(1.8, Math.abs(existingLock.entry - existingLock.stop_loss) * 0.65);
           const breakevenHit =
-            (prevIsBuy && a.latest_price >= existingLock.entry + beTriggerDist) ||
-            (!prevIsBuy && a.latest_price <= existingLock.entry - beTriggerDist);
+            (prevIsBuy && effectiveCurrentPrice >= existingLock.entry + beTriggerDist) ||
+            (!prevIsBuy && effectiveCurrentPrice <= existingLock.entry - beTriggerDist);
 
           // Confirmed Structural Reversal requires a genuine opposing market move (not a minor 1-candle noise)
           const confirmedOpposingReversal =
-            (prevIsBuy && directionReversedByEngine && a.latest_price < existingLock.entry - 4.5) ||
-            (!prevIsBuy && directionReversedByEngine && a.latest_price > existingLock.entry + 4.5);
+            (prevIsBuy && directionReversedByEngine && effectiveCurrentPrice < existingLock.entry - 4.5) ||
+            (!prevIsBuy && directionReversedByEngine && effectiveCurrentPrice > existingLock.entry + 4.5);
 
-          if (!slHit && !confirmedOpposingReversal) {
+          if (!slHit && !confirmedOpposingReversal && !staleDrift) {
             lockActive = true;
             // Auto Breakeven Lock: Once price passes 65% of the distance to TP1, move SL to Entry (risk-free!)
             if (breakevenHit || tp1Hit) {
@@ -1014,7 +1039,16 @@ export default function LiveSignalNotificationPanel({
   });
 
   const displayEntryZones = isLocked && activeLock?.entry_zones?.length ? activeLock.entry_zones : liveRiskCalc.entryZones;
-  const displaySL = isLocked && activeLock?.stop_loss ? activeLock.stop_loss : liveRiskCalc.stopLoss;
+  const rawSL = isLocked && activeLock?.stop_loss ? activeLock.stop_loss : liveRiskCalc.stopLoss;
+  const currentChartPrice = currentPrice && currentPrice > 0 ? currentPrice : displayEntry;
+
+  // ABSOLUTE SAFETY INVARIANT FOR ORDERS & DISPLAY:
+  // For SELL: Stop Loss CAN NEVER BE <= current market price! Must be strictly above currentChartPrice + slDistance.
+  // For BUY: Stop Loss CAN NEVER BE >= current market price! Must be strictly below currentChartPrice - slDistance.
+  const displaySL = isSellTrade
+    ? Math.max(rawSL, Number((currentChartPrice + liveRiskCalc.slDistance).toFixed(precision)))
+    : Math.min(rawSL, Number((currentChartPrice - liveRiskCalc.slDistance).toFixed(precision)));
+
   const displayTpLevels = isLocked && activeLock?.tp_levels?.length ? activeLock.tp_levels : liveRiskCalc.tpLevels;
   const displayTp1 = isLocked && activeLock?.tp1 ? activeLock.tp1 : liveRiskCalc.tp1;
   const displayTp2 = isLocked && activeLock?.tp2 ? activeLock.tp2 : liveRiskCalc.tp2;
