@@ -217,9 +217,8 @@ export default function LiveSignalNotificationPanel({
       if (json && json.bridge === 'online') {
         const term = json.mt5_terminal || {};
         if (
-          term.account_balance &&
-          Number(term.account_balance) > 0 &&
-          !userEditedBalanceRef.current
+          term.account_balance !== undefined &&
+          Number(term.account_balance) > 0
         ) {
           const liveBal = Number(Number(term.account_balance).toFixed(2));
           setAccountBalance(liveBal);

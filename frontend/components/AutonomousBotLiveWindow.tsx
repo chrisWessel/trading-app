@@ -99,6 +99,7 @@ export default function AutonomousBotLiveWindow({
 
   // Synced Risk Calculator & Signal State
   const [accountBalance, setAccountBalance] = useState<number>(40.45);
+  const [liveMt5Equity, setLiveMt5Equity] = useState<number | null>(null);
   const [lotSize, setLotSize] = useState<number>(0.01);
   const [riskPercent, setRiskPercent] = useState<number>(2.0);
   const [livePrice, setLivePrice] = useState<number>(currentPrice || 3909.1);
@@ -433,6 +434,7 @@ export default function AutonomousBotLiveWindow({
           setClosedTradesCount((c) => c + 1);
           if (pnl >= 0) setWinsCount((w) => w + 1);
           setSessionRealizedPnl((tot) => Number((tot + pnl).toFixed(2)));
+          setAccountBalance((prev) => Number((prev + pnl).toFixed(2)));
           setActiveTrade(null);
           playBeep(pnl >= 0 ? 960 : 480, pnl < 0);
 
@@ -536,20 +538,41 @@ export default function AutonomousBotLiveWindow({
 
     const runBotBrainCycle = async () => {
       try {
-        // 1. Check real open MT5 positions first
+        // 1. Check real open MT5 positions & sync live broker balance/equity
         let mt5Positions: any[] = [];
+        let hJson: any = null;
         try {
           const hRes = await fetch('http://127.0.0.1:8001/health', {
             headers: { Authorization: `Bearer ${MT5_LOCAL_TOKEN}` },
             cache: 'no-store',
           });
-          if (hRes.ok) {
-            const hJson = await hRes.json();
-            if (Array.isArray(hJson?.open_positions)) {
-              mt5Positions = hJson.open_positions;
-            }
-          }
+          if (hRes.ok) hJson = await hRes.json();
         } catch {}
+
+        if (!hJson) {
+          try {
+            const apiRes = await fetch('/api/mt5', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ mode: 'health' }),
+            });
+            if (apiRes.ok) hJson = await apiRes.json();
+          } catch {}
+        }
+
+        if (hJson) {
+          if (Array.isArray(hJson.open_positions)) {
+            mt5Positions = hJson.open_positions;
+          }
+          const term = hJson.mt5_terminal;
+          if (term?.account_balance !== undefined && Number(term.account_balance) > 0) {
+            const realBal = Number(Number(term.account_balance).toFixed(2));
+            setAccountBalance(realBal);
+          }
+          if (term?.account_equity !== undefined && Number(term.account_equity) > 0) {
+            setLiveMt5Equity(Number(Number(term.account_equity).toFixed(2)));
+          }
+        }
 
         // 2. Fetch live bars & SMC/FVG analysis
         const { bars, source } = await fetchBrowserLiveBars(symbol, timeframe);
@@ -1083,8 +1106,16 @@ export default function AutonomousBotLiveWindow({
                 >
                   {sessionRealizedPnl >= 0 ? '+' : ''}${sessionRealizedPnl.toFixed(2)}
                 </div>
-                <div className="text-[10px] text-slate-400 font-sans">
-                  Balance: ${accountBalance.toFixed(2)} · {lotSize} Lot
+                <div className="text-[10px] text-slate-400 font-sans flex items-center gap-1.5 flex-wrap">
+                  <span>
+                    Balance: <strong className="text-white font-bold">${accountBalance.toFixed(2)}</strong>
+                  </span>
+                  {liveMt5Equity !== null && (
+                    <span className="text-emerald-300 font-bold">
+                      · Equity: ${liveMt5Equity.toFixed(2)}
+                    </span>
+                  )}
+                  <span>· {lotSize} Lot</span>
                 </div>
               </div>
               <div className="text-right">
