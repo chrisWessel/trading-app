@@ -96,28 +96,15 @@ export default function SignalsStream({ symbol, timeframe, onPriceUpdate }: Sign
     }
 
     if (!success) {
-      setAnalysis(null);
-      const normalizedSymbol = symbol.toUpperCase();
-      if (normalizedSymbol.includes('XAU') || normalizedSymbol.includes('GOLD')) {
-        if (forceDispatch) setLoading(false);
-        return;
-      }
       try {
-        const symUpper = symbol.toUpperCase().replace('/', '').replace('_', '');
-        let bSym = 'PAXGUSDT';
-        if (symUpper.includes('BTC')) bSym = 'BTCUSDT';
-        else if (symUpper.includes('ETH')) bSym = 'ETHUSDT';
-        else if (symUpper.includes('SOL')) bSym = 'SOLUSDT';
-        else if (symUpper.includes('XAU') || symUpper.includes('GOLD')) bSym = 'PAXGUSDT';
-
-        const bRes = await fetch(`https://api.binance.com/api/v3/klines?symbol=${bSym}&interval=1m&limit=1`);
-        if (bRes.ok) {
-          const bData = await bRes.json();
-          if (Array.isArray(bData) && bData.length > 0) {
-            const livePrice = parseFloat(bData[0][4]);
-            if (livePrice > 0) {
-              if (onPriceUpdate) onPriceUpdate(livePrice);
-            }
+        const spotRes = await fetch(
+          `/api/spot-bars?symbol=${encodeURIComponent(symbol)}&timeframe=${encodeURIComponent(timeframe)}&limit=2`,
+          { cache: 'no-store' }
+        );
+        if (spotRes.ok) {
+          const spotData = await spotRes.json();
+          if (spotData?.status === 'success' && Number(spotData.latest_price) > 0) {
+            if (onPriceUpdate) onPriceUpdate(Number(spotData.latest_price));
           }
         }
       } catch (_) {}

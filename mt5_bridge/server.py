@@ -6,6 +6,7 @@ enforces constant-time secret Authorization token verification on all incoming w
 
 import secrets
 import sys
+import threading
 from pathlib import Path
 from typing import Optional
 
@@ -70,6 +71,23 @@ async def add_private_network_cors_headers(request: Request, call_next):
     return response
 
 
+@app.on_event("startup")
+def auto_start_tunnel_on_boot():
+    """
+    Automatically starts the Cloudflare Quick Tunnel and pushes the new URL to GitHub/Vercel
+    whenever server.py boots up, so the user never sees 'fetch failed' after a PC restart.
+    """
+    def _bg_boot():
+        try:
+            tunnel_ok, tunnel_url, _ = start_or_get_cloudflare_tunnel()
+            if tunnel_ok and tunnel_url:
+                persist_and_push_tunnel(tunnel_url)
+        except Exception:
+            pass
+
+    threading.Thread(target=_bg_boot, daemon=True).start()
+
+
 def verify_secret_token(
     authorization: Optional[str] = Header(default=None),
     x_bridge_token: Optional[str] = Header(default=None),
@@ -95,6 +113,15 @@ def verify_secret_token(
             headers={"WWW-Authenticate": "Bearer"},
         )
     return extracted
+
+
+@app.get("/bars")
+def bridge_live_bars(symbol: str = "XAU/USD", timeframe: str = "5m", limit: int = 120):
+    """
+    Read-only live OHLCV bars + Bid/Ask tick endpoint directly from the Exness MT5 terminal.
+    Ensures the Signal Navigator and Stop Loss always match the live MT5 chart price.
+    """
+    return bridge_client.get_live_bars(symbol=symbol, timeframe=timeframe, limit=limit)
 
 
 @app.get("/health", dependencies=[Depends(verify_secret_token)])

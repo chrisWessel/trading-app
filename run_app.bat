@@ -14,6 +14,10 @@ if not exist "%PYTHON_EXE%" set "PYTHON_EXE=python"
 echo Starting FastAPI Backend Engine (Port 8000)...
 start "FastAPI Backend Engine (Port 8000)" cmd /k ""%PYTHON_EXE%" -m uvicorn backend.main:app --host 127.0.0.1 --port 8000 --reload"
 
+:: 1b. Start Local MT5 Execution Bridge + Auto Cloudflare Tunnel (Port 8001)
+echo Starting Local MT5 Execution Bridge & Cloudflare Tunnel (Port 8001)...
+start "WesSignal MT5 Execution Bridge (Port 8001)" cmd /k "cd /d "%~dp0mt5_bridge" && "%PYTHON_EXE%" server.py"
+
 :: 2. Start Next.js Frontend Dev Server in new window
 echo Starting Next.js Frontend Dashboard (Port 3000)...
 start "Next.js Frontend Dashboard (Port 3000)" cmd /k "cd /d "%~dp0frontend" && npm run dev"

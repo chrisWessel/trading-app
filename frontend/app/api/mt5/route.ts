@@ -1,4 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { spawn } from 'child_process';
+import path from 'path';
+import fs from 'fs';
 
 export const dynamic = 'force-dynamic';
 
@@ -21,7 +24,48 @@ async function fetchWithTimeout(url: string, init: RequestInit = {}, timeoutMs =
   }
 }
 
-async function resolveActiveBridgeBaseUrl(): Promise<{ baseUrl: string; source: string }> {
+/**
+ * When running on the local Windows trading PC, if port 8001 is not running yet
+ * when the user clicks "1. EXECUTE" (or any MT5 button), automatically spawn
+ * `mt5_bridge/server.py` in the background and wait up to 4 seconds for it to listen!
+ */
+async function tryAutoSpawnLocalBridge(): Promise<boolean> {
+  if (process.platform !== 'win32' || process.env.VERCEL) {
+    return false;
+  }
+  try {
+    const repoRoot = path.resolve(process.cwd(), '..');
+    const serverScript = path.join(repoRoot, 'mt5_bridge', 'server.py');
+    const venvPython = path.join(repoRoot, '.venv', 'Scripts', 'python.exe');
+    if (!fs.existsSync(serverScript)) {
+      return false;
+    }
+    const pythonExe = fs.existsSync(venvPython) ? venvPython : 'python';
+    const child = spawn(pythonExe, [serverScript], {
+      cwd: path.join(repoRoot, 'mt5_bridge'),
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: true,
+    });
+    child.unref();
+
+    // Poll 127.0.0.1:8001/health for up to 4.5 seconds
+    for (let i = 0; i < 9; i++) {
+      await new Promise((r) => setTimeout(r, 500));
+      try {
+        const res = await fetchWithTimeout(
+          `${LOCAL_BRIDGE_BASE}/health`,
+          { headers: { Authorization: `Bearer ${DEFAULT_SECRET_TOKEN}` } },
+          800
+        );
+        if (res.ok) return true;
+      } catch {}
+    }
+  } catch {}
+  return false;
+}
+
+async function resolveActiveBridgeBaseUrl(hintTunnelUrl?: string): Promise<{ baseUrl: string; source: string }> {
   // 1. Check if running locally where 127.0.0.1:8001 is directly reachable
   try {
     const localRes = await fetchWithTimeout(
@@ -34,7 +78,18 @@ async function resolveActiveBridgeBaseUrl(): Promise<{ baseUrl: string; source: 
     }
   } catch {}
 
-  // 2. Fetch latest tunnel URL pushed to GitHub main branch (instant update even before Vercel rebuilds)
+  // 1b. If running on local Windows PC and port 8001 wasn't up yet, auto-start mt5_bridge/server.py!
+  const spawned = await tryAutoSpawnLocalBridge();
+  if (spawned) {
+    return { baseUrl: LOCAL_BRIDGE_BASE, source: 'local_8001_autospawned' };
+  }
+
+  // 2. If caller passed an explicit active tunnel URL
+  if (hintTunnelUrl && hintTunnelUrl.startsWith('https://')) {
+    return { baseUrl: hintTunnelUrl.replace(/\/+$/, ''), source: 'client_hint_tunnel' };
+  }
+
+  // 3. Fetch latest tunnel URL pushed to GitHub main branch (instant update even before Vercel rebuilds)
   try {
     const ghRes = await fetchWithTimeout(
       `${GITHUB_RAW_TUNNEL_JSON}?t=${Date.now()}`,
@@ -50,14 +105,14 @@ async function resolveActiveBridgeBaseUrl(): Promise<{ baseUrl: string; source: 
     }
   } catch {}
 
-  // 3. Fallback to MT5_BRIDGE_URL environment variable if set in Vercel
+  // 4. Fallback to MT5_BRIDGE_URL environment variable if set in Vercel
   const envUrl = (process.env.MT5_BRIDGE_URL || '').trim().replace(/\/webhook\/mt5\/?$/, '').replace(/\/+$/, '');
   if (envUrl.startsWith('http')) {
     return { baseUrl: envUrl, source: 'vercel_env' };
   }
 
   return {
-    baseUrl: 'https://minneapolis-citizen-varied-musical.trycloudflare.com',
+    baseUrl: 'https://julie-require-associations-undo.trycloudflare.com',
     source: 'default_tunnel',
   };
 }
@@ -99,7 +154,7 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
     const mode = body?.mode || 'place_order';
-    const { baseUrl, source } = await resolveActiveBridgeBaseUrl();
+    const { baseUrl, source } = await resolveActiveBridgeBaseUrl(body?.tunnel_url);
 
     if (mode === 'execute_sync') {
       // Button 1: Start/verify Cloudflare tunnel, write frontend/public/mt5_tunnel.json, push to GitHub/Vercel

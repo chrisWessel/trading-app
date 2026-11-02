@@ -247,11 +247,29 @@ export default function LiveSignalNotificationPanel({
     checkMt5BridgeHealth();
   }, []);
 
+  // Helper to resolve active tunnel URL in browser
+  const getBrowserTunnelUrl = async (): Promise<string> => {
+    if (mt5BridgeState?.tunnelUrl && mt5BridgeState.tunnelUrl.startsWith('https://')) {
+      return mt5BridgeState.tunnelUrl.replace(/\/+$/, '');
+    }
+    try {
+      const res = await fetchWithFastTimeout(`/mt5_tunnel.json?t=${Date.now()}`, 2000);
+      if (res.ok) {
+        const data = await res.json();
+        if (data?.tunnel_url && String(data.tunnel_url).startsWith('https://')) {
+          return String(data.tunnel_url).replace(/\/+$/, '');
+        }
+      }
+    } catch {}
+    return '';
+  };
+
   // BUTTON 1: Execute Bridge (Start Cloudflare Tunnel + Push New URL to GitHub & Vercel)
   const handleExecuteBridgeSync = async () => {
     setMt5Syncing(true);
     try {
       let json: any = null;
+      // 1. Direct local PC bridge (http://127.0.0.1:8001)
       try {
         const localRes = await fetchWithFastTimeout(
           'http://127.0.0.1:8001/bridge/execute-sync',
@@ -267,6 +285,28 @@ export default function LiveSignalNotificationPanel({
         if (localRes.ok) json = await localRes.json();
       } catch {}
 
+      // 2. Direct active Cloudflare Tunnel URL if available
+      if (!json) {
+        const tun = await getBrowserTunnelUrl();
+        if (tun) {
+          try {
+            const tunRes = await fetchWithFastTimeout(
+              `${tun}/bridge/execute-sync`,
+              25000,
+              {
+                method: 'POST',
+                headers: {
+                  Authorization: `Bearer ${MT5_LOCAL_TOKEN}`,
+                  'Content-Type': 'application/json',
+                },
+              }
+            );
+            if (tunRes.ok) json = await tunRes.json();
+          } catch {}
+        }
+      }
+
+      // 3. Next.js /api/mt5 route (auto-spawns mt5_bridge/server.py on local Windows PC!)
       if (!json) {
         const apiRes = await fetchWithFastTimeout(
           '/api/mt5',
@@ -274,7 +314,10 @@ export default function LiveSignalNotificationPanel({
           {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ mode: 'execute_sync' }),
+            body: JSON.stringify({
+              mode: 'execute_sync',
+              tunnel_url: mt5BridgeState?.tunnelUrl || undefined,
+            }),
           }
         );
         json = await apiRes.json();
@@ -320,6 +363,7 @@ export default function LiveSignalNotificationPanel({
       take_profit: selectedTpPrice && selectedTpPrice > 0 ? selectedTpPrice : undefined,
       timeframe,
       dry_run: false,
+      tunnel_url: mt5BridgeState?.tunnelUrl || undefined,
     };
 
     try {
@@ -338,10 +382,32 @@ export default function LiveSignalNotificationPanel({
             body: JSON.stringify(payload),
           }
         );
-        json = await localRes.json();
+        if (localRes.ok) json = await localRes.json();
       } catch {}
 
-      // 2. Otherwise route via Next.js /api/mt5 -> active Cloudflare Tunnel URL
+      // 2. Try active Cloudflare Tunnel URL directly from browser
+      if (!json) {
+        const tun = await getBrowserTunnelUrl();
+        if (tun) {
+          try {
+            const tunRes = await fetchWithFastTimeout(
+              `${tun}/webhook/mt5`,
+              10000,
+              {
+                method: 'POST',
+                headers: {
+                  Authorization: `Bearer ${MT5_LOCAL_TOKEN}`,
+                  'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(payload),
+              }
+            );
+            if (tunRes.ok) json = await tunRes.json();
+          } catch {}
+        }
+      }
+
+      // 3. Otherwise route via Next.js /api/mt5 -> active Cloudflare Tunnel URL
       if (!json) {
         const apiRes = await fetchWithFastTimeout(
           '/api/mt5',
@@ -557,6 +623,8 @@ export default function LiveSignalNotificationPanel({
         // Market Direction Reversal ALWAYS takes precedence so the bot never stays stuck in a BUY when market turns SELL!
         const lockKey = `${symbol.toUpperCase()}:${timeframe}`;
         const tfHoldSec = TIMEFRAME_HOLD_SECONDS[timeframe] || a.hold_total_sec || 300;
+        // Minimum institutional confirmation window before a non-SL reversal can flip the locked signal (stops fast whipsaw!)
+        const minConfirmSec = Math.max(45, Math.min(Math.round(tfHoldSec * 0.65), 900));
         const existingLock = signalLockRef.current;
         const rt = a.runaway_trend || a.trade_params?.runaway_trend;
         const runawayThreshold = rt?.threshold_pts || (symbol.toUpperCase().includes('XAU') ? 2.5 : 0.0012);
@@ -567,6 +635,7 @@ export default function LiveSignalNotificationPanel({
           existingLock.signal_type !== 'NEUTRAL' &&
           nowMs < existingLock.lockedAtMs + existingLock.holdTotalSec * 1000
         ) {
+          const elapsedLockSec = (nowMs - existingLock.lockedAtMs) / 1000;
           const directionReversedByEngine =
             a.signal_type !== 'NEUTRAL' && a.signal_type !== existingLock.signal_type;
 
@@ -578,9 +647,15 @@ export default function LiveSignalNotificationPanel({
             (existingLock.signal_type === 'BUY/LONG' && (a.latest_price - existingLock.entry) <= -runawayThreshold) ||
             (existingLock.signal_type === 'SELL/SHORT' && (a.latest_price - existingLock.entry) >= runawayThreshold);
 
+          const smcExhaustionFlip =
+            ((a as any)?.smc_principles?.trendExhaustion?.action === 'TAKE_PROFIT_AND_SELL' &&
+              existingLock.signal_type === 'BUY/LONG') ||
+            ((a as any)?.smc_principles?.trendExhaustion?.action === 'TAKE_PROFIT_AND_BUY' &&
+              existingLock.signal_type === 'SELL/SHORT');
+
+          // Only break the timeframe lock if SL is hit, a real runaway impulse occurs, or the timeframe confirmation window has passed!
           const opposingRunaway =
-            directionReversedByEngine ||
-            Boolean(rt?.override_triggered) ||
+            (directionReversedByEngine && (elapsedLockSec >= minConfirmSec || (smcExhaustionFlip && elapsedLockSec >= 40))) ||
             (existingLock.signal_type === 'BUY/LONG' && Boolean(rt?.detected) && rt?.direction === 'BEARISH') ||
             (existingLock.signal_type === 'SELL/SHORT' && Boolean(rt?.detected) && rt?.direction === 'BULLISH');
 
@@ -638,16 +713,37 @@ export default function LiveSignalNotificationPanel({
         const isSell = isWeekend ? false : a.signal_type === 'SELL/SHORT';
         const notifType: 'BUY_NOW' | 'SELL_NOW' | 'MONITORING' | 'CLOSED' = isWeekend ? 'CLOSED' : isBuy ? 'BUY_NOW' : isSell ? 'SELL_NOW' : 'MONITORING';
 
-        // Recalculate Stop Loss, Entry Zones, and 7 Take Profits directly from the Risk Calculator
-        // so a $40 account balance produces a tight $0.80 SL distance while a $1,000 balance produces a $20.00 SL distance!
+        // Ensure entry and structural swing levels are anchored to the live chart price if there is any feed gap
+        const rawEntry = a.trade_params.entry || a.latest_price;
+        const chartAnchor = currentPrice && currentPrice > 0 ? currentPrice : rawEntry;
+        const feedDelta = chartAnchor && rawEntry ? chartAnchor - rawEntry : 0;
+        const shouldShiftToChart = Math.abs(feedDelta) > (symbol.toUpperCase().includes('XAU') ? 0.5 : rawEntry * 0.0005);
+        const syncedEntry = shouldShiftToChart ? Number(chartAnchor.toFixed(precision)) : rawEntry;
+        const rawSwingLow = (a.trade_params as any)?.swing_low ?? a.support;
+        const rawSwingHigh = (a.trade_params as any)?.swing_high ?? a.resistance;
+        const syncedSwingLow =
+          typeof rawSwingLow === 'number' && rawSwingLow > 0
+            ? Number((shouldShiftToChart ? rawSwingLow + feedDelta : rawSwingLow).toFixed(precision))
+            : undefined;
+        const syncedSwingHigh =
+          typeof rawSwingHigh === 'number' && rawSwingHigh > 0
+            ? Number((shouldShiftToChart ? rawSwingHigh + feedDelta : rawSwingHigh).toFixed(precision))
+            : undefined;
+
+        // Recalculate Stop Loss, Entry Zones, and 7 Take Profits using BOTH Chart Swing Structure & Risk Calculator
+        // so the Stop Loss sits just below the chart's Swing Low (for BUY) or above the Swing High (for SELL)
+        // AND scales dynamically with Account Balance ($40 vs $1,000), Lot Size, and Risk %!
         const riskBased = calculateRiskBasedLevels({
           symbol,
-          entryPrice: a.trade_params.entry || a.latest_price,
+          entryPrice: syncedEntry,
           isBuy: !isSell,
           accountBalance,
           lotSize,
           riskPercent,
           precision,
+          structuralSwingLow: syncedSwingLow,
+          structuralSwingHigh: syncedSwingHigh,
+          atr: (a.trade_params as any)?.atr,
         });
 
         const incoming_zones: number[] = riskBased.entryZones;
@@ -656,14 +752,18 @@ export default function LiveSignalNotificationPanel({
         const effectiveTp1: number = riskBased.tp1;
         const effectiveTp2: number = riskBased.tp2;
 
+        a.latest_price = syncedEntry;
         a.trade_params = {
           ...a.trade_params,
+          entry: syncedEntry,
           entry_zones: incoming_zones,
           stop_loss: effectiveSL,
           tp1: effectiveTp1,
           tp2: effectiveTp2,
           tp_levels: effectiveTpLevels,
-        };
+          ...(syncedSwingLow ? { swing_low: syncedSwingLow } : {}),
+          ...(syncedSwingHigh ? { swing_high: syncedSwingHigh } : {}),
+        } as any;
 
         // Create or update the timeframe lock when starting a new window
         const currentLock = signalLockRef.current;
@@ -889,12 +989,17 @@ export default function LiveSignalNotificationPanel({
   };
 
   // Use live backend params as the single source of truth; fall back to frozen or latestNotif
-  const displayEntry = analysis?.trade_params?.entry ?? latestNotif?.entry ?? frozenParams?.entry ?? fallbackPrice;
+  const rawDisplayEntry = analysis?.trade_params?.entry ?? latestNotif?.entry ?? frozenParams?.entry ?? fallbackPrice;
+  const displayEntry =
+    currentPrice && currentPrice > 0 && Math.abs(currentPrice - rawDisplayEntry) > (symbol.toUpperCase().includes('XAU') ? 1.5 : rawDisplayEntry * 0.001)
+      ? Number(currentPrice.toFixed(precision))
+      : rawDisplayEntry;
   const isSellTrade = (analysis?.signal_type === 'SELL/SHORT') || (!analysis && (latestNotif?.type === 'SELL_NOW' || frozenParams?.signal_type === 'SELL/SHORT'));
   const isBuyTrade = !isSellTrade;
 
-  // Real-time Risk Calculator computation:
-  // Changing Account Balance ($40 vs $1000), Lot Size, or Risk % IMMEDIATELY updates Stop Loss, Entry Zones, and TPs!
+  // Real-time Risk Calculator + Chart Swing Structure computation:
+  // Changing Account Balance ($40 vs $1000), Lot Size, or Risk % IMMEDIATELY updates Stop Loss, Entry Zones, and TPs
+  // while anchoring Stop Loss below the chart's Swing Low (BUY) or above the chart's Swing High (SELL)!
   const liveRiskCalc = calculateRiskBasedLevels({
     symbol,
     entryPrice: displayEntry > 0 ? displayEntry : fallbackPrice,
@@ -903,6 +1008,9 @@ export default function LiveSignalNotificationPanel({
     lotSize,
     riskPercent,
     precision,
+    structuralSwingLow: (analysis?.trade_params as any)?.swing_low ?? analysis?.support,
+    structuralSwingHigh: (analysis?.trade_params as any)?.swing_high ?? analysis?.resistance,
+    atr: (analysis?.trade_params as any)?.atr,
   });
 
   const displayEntryZones = liveRiskCalc.entryZones;
@@ -1709,6 +1817,84 @@ export default function LiveSignalNotificationPanel({
                 </div>
               )}
             </div>
+
+            {/* INSTITUTIONAL SMC: FAIR VALUE GAPS (FVG), TREND REVERSAL ZONES & "TAKE MONEY" PROFIT MAXIMIZER */}
+            {(() => {
+              const smc = (analysis as any)?.smc_principles || (analysis?.trade_params as any)?.smc_principles;
+              const supp = analysis?.support ?? Number((displayEntry - liveRiskCalc.slDistance * 1.5).toFixed(precision));
+              const res = analysis?.resistance ?? Number((displayEntry + liveRiskCalc.slDistance * 1.5).toFixed(precision));
+              const bullFvgBottom = smc?.bullishFvg?.bottom ?? supp;
+              const bullFvgTop = smc?.bullishFvg?.top ?? Number((supp + liveRiskCalc.slDistance * 0.4).toFixed(precision));
+              const bearFvgBottom = smc?.bearishFvg?.bottom ?? Number((res - liveRiskCalc.slDistance * 0.4).toFixed(precision));
+              const bearFvgTop = smc?.bearishFvg?.top ?? res;
+              const rangePct = smc?.dealingRange?.positionPct ?? analysis?.price_position_pct ?? 50;
+              const breakevenAt = smc?.profitMaximizer?.breakevenTriggerPrice ?? Number((isSellTrade ? displayEntry - liveRiskCalc.slDistance * 0.65 : displayEntry + liveRiskCalc.slDistance * 0.65).toFixed(precision));
+              const reversalZone = isSellTrade ? bullFvgTop : bearFvgBottom;
+              const tp1Dollars = Number((liveRiskCalc.actualDollarRisk * 1.15).toFixed(2));
+
+              return (
+                <div className="bg-slate-950/95 px-2.5 py-2 rounded-lg border border-indigo-800/80 space-y-1.5 font-mono text-[9.5px]">
+                  <div className="flex items-center justify-between border-b border-indigo-900/70 pb-1">
+                    <span className="text-indigo-300 font-extrabold flex items-center gap-1">
+                      <Target className="w-3 h-3 text-amber-400" />
+                      <span>FAIR VALUE GAPS (FVG) &amp; TAKE MONEY ENGINE</span>
+                    </span>
+                    <span className="px-1.5 py-0.5 rounded bg-indigo-950 border border-indigo-700 text-indigo-200 text-[8.5px] font-bold">
+                      {rangePct}% Range
+                    </span>
+                  </div>
+
+                  {/* Bullish & Bearish Fair Value Gaps */}
+                  <div className="grid grid-cols-2 gap-1.5">
+                    <div className="bg-emerald-950/50 border border-emerald-800/70 rounded px-1.5 py-1">
+                      <div className="text-[8px] text-emerald-400 font-bold">BULLISH FVG (DEMAND BUY)</div>
+                      <div className="text-emerald-200 font-bold">
+                        ${bullFvgBottom.toFixed(precision)} – ${bullFvgTop.toFixed(precision)}
+                      </div>
+                      <div className="text-[8px] text-slate-400">
+                        {rangePct <= 38 ? '⚡ ACTIVE BUY BOUNCE ZONE' : 'Buy on Pullback / Take Sell Profit'}
+                      </div>
+                    </div>
+                    <div className="bg-rose-950/50 border border-rose-800/70 rounded px-1.5 py-1">
+                      <div className="text-[8px] text-rose-400 font-bold">BEARISH FVG (SUPPLY SELL)</div>
+                      <div className="text-rose-200 font-bold">
+                        ${bearFvgBottom.toFixed(precision)} – ${bearFvgTop.toFixed(precision)}
+                      </div>
+                      <div className="text-[8px] text-slate-400">
+                        {rangePct >= 62 ? '⚡ ACTIVE SELL REJECT ZONE' : 'Sell on Rally / Take Buy Profit'}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Trend Exhaustion & Profit-Taking Action Plan */}
+                  <div className="bg-amber-950/40 border border-amber-700/60 rounded px-2 py-1.5 space-y-1 font-sans">
+                    <div className="text-[9px] font-extrabold text-amber-300 flex items-center justify-between">
+                      <span>💰 TAKE MONEY &amp; TREND REVERSAL PLAN ({timeframe.toUpperCase()}):</span>
+                      <span className="font-mono text-emerald-300">TP1: +${tp1Dollars.toFixed(2)}</span>
+                    </div>
+                    <div className="text-[9px] text-slate-200 leading-snug space-y-0.5">
+                      <div>
+                        1. <strong>Breakeven Lock:</strong> Move SL to Entry (${displayEntry.toFixed(precision)}) once price hits <strong>${breakevenAt.toFixed(precision)}</strong>.
+                      </div>
+                      <div>
+                        2. <strong>Take Money at TP1:</strong> Harvest 50–100% profit at <strong>${displayTp1.toFixed(precision)}</strong> (+${tp1Dollars.toFixed(2)}).
+                      </div>
+                      <div>
+                        3. <strong>Trend Reversal Point:</strong> If trend reaches <strong>${reversalZone.toFixed(precision)}</strong> ({isSellTrade ? 'Demand FVG' : 'Supply FVG'}), take all profit &amp; prepare to <strong>{isSellTrade ? 'BUY' : 'SELL'}</strong>!
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      disabled={mt5Cancelling}
+                      onClick={() => handleCancelOrCloseTrade(false)}
+                      className="w-full mt-1 py-1 px-2 bg-emerald-700 hover:bg-emerald-600 disabled:opacity-50 text-white text-[9.5px] font-black rounded border border-emerald-400 transition flex items-center justify-center gap-1"
+                    >
+                      <span>💰 TAKE MONEY NOW (Close Open {symbol} Trade &amp; Lock Profit)</span>
+                    </button>
+                  </div>
+                </div>
+              );
+            })()}
           </div>
 
           {/* Trader Discretion Notice Box */}

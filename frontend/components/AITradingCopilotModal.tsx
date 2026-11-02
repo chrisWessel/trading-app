@@ -152,6 +152,7 @@ export default function AITradingCopilotModal({
   const prevVerdictRef = useRef<string>('');
   const prevDirectionRef = useRef<string>('');
   const prevSymbolRef = useRef<string>('');
+  const lastReversalAlertAtRef = useRef<number>(0);
   const currentPriceRef = useRef<number | undefined>(currentPrice);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
 
@@ -457,10 +458,21 @@ export default function AITradingCopilotModal({
         // 3. Session Quality
         const sessionInfo = evaluateSessionQuality(symbol);
 
-        // 4. Synchronize Direction & Risk Calculator Stop Loss
-        const isSell = analysis.signal_type === 'SELL/SHORT';
+        // 4. Synchronize Direction, FVG/SMC Structure & Risk Calculator Stop Loss
+        const activeGlobalLock =
+          typeof window !== 'undefined' ? (window as any).__wessignalActiveSignal : null;
+        const useGlobalLock =
+          activeGlobalLock &&
+          String(activeGlobalLock.symbol || '').toUpperCase() === symbol.toUpperCase() &&
+          activeGlobalLock.timeframe === timeframe &&
+          (activeGlobalLock.signal_type === 'BUY/LONG' || activeGlobalLock.signal_type === 'SELL/SHORT');
+
+        const isSell = useGlobalLock
+          ? activeGlobalLock.signal_type === 'SELL/SHORT'
+          : analysis.signal_type === 'SELL/SHORT';
         const direction: 'BUY' | 'SELL' = isSell ? 'SELL' : 'BUY';
         const entryPrice = analysis.trade_params.entry || analysis.latest_price;
+        const smc = (analysis as any)?.smc_principles || (analysis.trade_params as any)?.smc_principles;
 
         const riskCalc = calculateRiskBasedLevels({
           symbol,
@@ -470,6 +482,9 @@ export default function AITradingCopilotModal({
           lotSize: lp.lotSize,
           riskPercent: lp.riskPercent,
           precision,
+          structuralSwingLow: (analysis.trade_params as any)?.swing_low ?? analysis.support,
+          structuralSwingHigh: (analysis.trade_params as any)?.swing_high ?? analysis.resistance,
+          atr: (analysis.trade_params as any)?.atr,
         });
 
         // 5. Compute Overall AI Clearance Verdict & Score
@@ -489,8 +504,18 @@ export default function AITradingCopilotModal({
           );
         } else {
           reasons.push(
-            `Direction Confluence: ${direction} (${analysis.signal_type}) with ${analysis.probability}% 6-factor alignment.`
+            `SMC & FVG Direction: ${direction} (${analysis.probability}% Confluence) — ${smc?.structureLabel || 'Institutional Order Flow'}.`
           );
+
+          if (smc?.bullishFvg && smc?.bearishFvg) {
+            reasons.push(
+              `Fair Value Gaps (FVG): Bullish Demand FVG $${smc.bullishFvg.bottom.toFixed(precision)}–$${smc.bullishFvg.top.toFixed(precision)} | Bearish Supply FVG $${smc.bearishFvg.bottom.toFixed(precision)}–$${smc.bearishFvg.top.toFixed(precision)} (${smc.dealingRange?.positionPct ?? 50}% Dealing Range).`
+            );
+          }
+
+          if (smc?.profitMaximizer?.takeMoneyDirective) {
+            reasons.push(smc.profitMaximizer.takeMoneyDirective);
+          }
 
           if (volState === 'OPTIMAL' || volState === 'HIGH_VOLATILITY') {
             reasons.push(`Volatility Check: PASSED (${volLabel}, ${volatilityRatio}x ATR).`);
@@ -526,7 +551,7 @@ export default function AITradingCopilotModal({
           }
 
           reasons.push(
-            `Risk Calculator Protection: $${lp.accountBalance.toFixed(2)} Balance @ ${lp.riskPercent}% Risk ($${riskCalc.actualDollarRisk.toFixed(2)} max loss) -> Hard SL at $${riskCalc.stopLoss.toFixed(precision)}.`
+            `Swing + Risk Stop Loss: $${lp.accountBalance.toFixed(2)} Balance @ ${lp.riskPercent}% Risk -> Hard SL placed beyond Swing Structure at $${riskCalc.stopLoss.toFixed(precision)}.`
           );
         }
 
@@ -623,18 +648,24 @@ export default function AITradingCopilotModal({
           );
         }
 
-        // Check if we should emit an automatic AI Notification!
+        // Check if we should emit an automatic AI Notification (with 90s anti-whipsaw cooldown!)
+        const nowMs = Date.now();
         const symbolSwitched = prevSymbolRef.current !== `${symbol}:${timeframe}`;
         const verdictChanged = prevVerdictRef.current !== newReport.verdict;
         const directionFlipped =
           !weekendClosed &&
           prevDirectionRef.current !== '' &&
           prevDirectionRef.current !== newReport.direction &&
-          !symbolSwitched;
+          !symbolSwitched &&
+          nowMs - lastReversalAlertAtRef.current >= 90000;
 
         prevSymbolRef.current = `${symbol}:${timeframe}`;
         prevVerdictRef.current = newReport.verdict;
-        prevDirectionRef.current = weekendClosed ? '' : newReport.direction;
+        if (weekendClosed) {
+          prevDirectionRef.current = '';
+        } else if (prevDirectionRef.current === '' || symbolSwitched || directionFlipped) {
+          prevDirectionRef.current = newReport.direction;
+        }
 
         if (weekendClosed && (symbolSwitched || verdictChanged || announceToChat)) {
           // Clear any stale fake reversal alerts from chat when viewing a closed weekend market
@@ -650,11 +681,17 @@ export default function AITradingCopilotModal({
             },
           ]);
         } else if (directionFlipped) {
+          lastReversalAlertAtRef.current = nowMs;
+          const fvgSummary = smc?.bullishFvg && smc?.bearishFvg
+            ? newReport.direction === 'BUY'
+              ? `Demand FVG Bounce ($${smc.bullishFvg.bottom.toFixed(precision)}–$${smc.bullishFvg.top.toFixed(precision)}) → Target Supply FVG $${smc.bearishFvg.midpoint.toFixed(precision)}`
+              : `Supply FVG Rejection ($${smc.bearishFvg.bottom.toFixed(precision)}–$${smc.bearishFvg.top.toFixed(precision)}) → Target Demand FVG $${smc.bullishFvg.midpoint.toFixed(precision)}`
+            : 'Confirmed SMC Structure Shift';
           pushAIAlert(
             {
               sender: 'alert',
-              title: `🔄 AI MARKET REVERSAL ALERT: ${symbol} Flipped to ${newReport.direction}!`,
-              text: `Market order flow on ${symbol} (${timeframe.toUpperCase()}) just reversed to ${newReport.direction} at $${newReport.latestPrice.toFixed(precision)}. Do NOT hold opposing trades! New Risk-Sized SL (${lp.riskPercent}% of $${lp.accountBalance.toFixed(2)}): $${newReport.stopLoss.toFixed(precision)} | TP1: $${newReport.takeProfit1.toFixed(precision)}.`,
+              title: `🔄 CONFIRMED SMC/FVG REVERSAL: ${symbol} [${timeframe.toUpperCase()}] → ${newReport.direction}!`,
+              text: `${fvgSummary} at $${newReport.latestPrice.toFixed(precision)}. Take profit on opposing trades! Swing + Risk SL: $${newReport.stopLoss.toFixed(precision)} | Take Money TP1: $${newReport.takeProfit1.toFixed(precision)}.`,
               verdict: newReport.verdict,
               direction: newReport.direction,
               actionable: {

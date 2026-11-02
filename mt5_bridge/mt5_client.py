@@ -726,6 +726,83 @@ class MT5BridgeClient:
                 "timestamp_utc": now_utc,
             }
 
+    def get_live_bars(
+        self, symbol: str = "XAU/USD", timeframe: str = "5m", limit: int = 120
+    ) -> dict[str, Any]:
+        """
+        Fetches real-time OHLCV bars and current Bid/Ask tick directly from the open
+        Exness MetaTrader 5 terminal so the frontend Signal Navigator and Stop Loss
+        always match the live chart price to the exact cent.
+        """
+        with self._lock:
+            ok, meta = self.ensure_connected()
+            if not ok:
+                return {"status": "offline", "bars": [], "meta": meta}
+
+            resolved_symbol, sym_info = self.resolve_symbol(symbol)
+            if not resolved_symbol or sym_info is None:
+                return {
+                    "status": "symbol_not_found",
+                    "symbol_requested": symbol,
+                    "bars": [],
+                }
+
+            tf_map = {
+                "1s": mt5.TIMEFRAME_M1,
+                "5s": mt5.TIMEFRAME_M1,
+                "15s": mt5.TIMEFRAME_M1,
+                "30s": mt5.TIMEFRAME_M1,
+                "1m": mt5.TIMEFRAME_M1,
+                "2m": mt5.TIMEFRAME_M2,
+                "3m": mt5.TIMEFRAME_M3,
+                "5m": mt5.TIMEFRAME_M5,
+                "15m": mt5.TIMEFRAME_M15,
+                "30m": mt5.TIMEFRAME_M30,
+                "45m": mt5.TIMEFRAME_M30,
+                "1h": mt5.TIMEFRAME_H1,
+                "2h": mt5.TIMEFRAME_H2,
+                "4h": mt5.TIMEFRAME_H4,
+                "1d": mt5.TIMEFRAME_D1,
+            }
+            mt5_tf = tf_map.get(str(timeframe).lower(), mt5.TIMEFRAME_M5)
+            digits = int(getattr(sym_info, "digits", 2) or 2)
+
+            rates = mt5.copy_rates_from_pos(resolved_symbol, mt5_tf, 0, max(20, min(limit, 300)))
+            tick = mt5.symbol_info_tick(resolved_symbol)
+            bid = round(float(getattr(tick, "bid", 0.0) or 0.0), digits) if tick else 0.0
+            ask = round(float(getattr(tick, "ask", 0.0) or 0.0), digits) if tick else 0.0
+            mid = round((bid + ask) / 2.0, digits) if (bid > 0 and ask > 0) else (bid or ask)
+
+            bars = []
+            if rates is not None and len(rates) > 0:
+                for r in rates:
+                    bars.append({
+                        "time": int(r["time"]),
+                        "open": round(float(r["open"]), digits),
+                        "high": round(float(r["high"]), digits),
+                        "low": round(float(r["low"]), digits),
+                        "close": round(float(r["close"]), digits),
+                        "volume": float(r["tick_volume"]),
+                    })
+                if mid > 0 and bars:
+                    bars[-1]["close"] = mid
+                    if mid > bars[-1]["high"]:
+                        bars[-1]["high"] = mid
+                    if mid < bars[-1]["low"]:
+                        bars[-1]["low"] = mid
+
+            return {
+                "status": "ok",
+                "symbol_requested": symbol,
+                "symbol_resolved": resolved_symbol,
+                "digits": digits,
+                "bid": bid,
+                "ask": ask,
+                "latest_price": mid or (bars[-1]["close"] if bars else 0.0),
+                "bars": bars,
+                "source": f"Exness MT5 Live ({resolved_symbol})",
+            }
+
 
 bridge_client = MT5BridgeClient()
 

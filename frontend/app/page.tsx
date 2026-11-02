@@ -326,13 +326,44 @@ export default function DashboardPage() {
     };
   }, []);
 
-  // ── LIVE PRICE POLLER: keep currentPrice in sync with backend or public spot feed ──────
+  // ── LIVE PRICE POLLER: keep currentPrice in sync with Exness MT5 / OANDA Spot / Swissquote Spot ──────
   useEffect(() => {
     const fetchLivePrice = async () => {
-      // 1. Try primary backend API first
+      // 1. Try local Exness MT5 Bridge first (exact broker Bid/Ask tick on user's PC)
+      try {
+        const mt5Res = await fetch(
+          `http://127.0.0.1:8001/bars?symbol=${encodeURIComponent(symbol)}&timeframe=${encodeURIComponent(timeframe)}&limit=2`,
+          { cache: 'no-store' }
+        );
+        if (mt5Res.ok) {
+          const mt5Data = await mt5Res.json();
+          if (mt5Data?.status === 'success' && Number(mt5Data.latest_price) > 0) {
+            setCurrentPrice(Number(mt5Data.latest_price));
+            return;
+          }
+        }
+      } catch (_) {}
+
+      // 2. Try Next.js /api/spot-bars (Cloudflare Tunnel MT5 -> Swissquote Institutional Spot XAU/USD -> Yahoo Spot)
+      try {
+        const spotRes = await fetch(
+          `/api/spot-bars?symbol=${encodeURIComponent(symbol)}&timeframe=${encodeURIComponent(timeframe)}&limit=2`,
+          { cache: 'no-store' }
+        );
+        if (spotRes.ok) {
+          const spotData = await spotRes.json();
+          if (spotData?.status === 'success' && Number(spotData.latest_price) > 0) {
+            setCurrentPrice(Number(spotData.latest_price));
+            return;
+          }
+        }
+      } catch (_) {}
+
+      // 3. Try primary FastAPI backend API
       try {
         const res = await fetch(
-          `${API_BASE_URL}/api/candles?symbol=${encodeURIComponent(symbol)}&timeframe=${encodeURIComponent(timeframe)}&limit=2`
+          `${API_BASE_URL}/api/candles?symbol=${encodeURIComponent(symbol)}&timeframe=${encodeURIComponent(timeframe)}&limit=2`,
+          { cache: 'no-store' }
         );
         if (res.ok) {
           const data = await res.json();
@@ -341,47 +372,11 @@ export default function DashboardPage() {
             return;
           }
         }
-      } catch (_) {
-        // Backend offline / mixed content block on standalone Vercel deploy
-      }
-
-      const normalizedSymbol = symbol.toUpperCase();
-      const isGold = normalizedSymbol.includes('XAU') || normalizedSymbol.includes('GOLD');
-
-      // 2. Public Spot Feed Fallback (Kraken / Binance with browser CORS support)
-      try {
-        if (isGold) {
-          const kRes = await fetch('https://api.kraken.com/0/public/Ticker?pair=PAXGUSD');
-          if (kRes.ok) {
-            const kData = await kRes.json();
-            const p = parseFloat(kData?.result?.PAXGUSD?.c?.[0]);
-            if (p > 2000) {
-              setCurrentPrice(p);
-              return;
-            }
-          }
-        }
-
-        const symUpper = symbol.toUpperCase().replace('/', '').replace('_', '');
-        let binanceSym = isGold ? 'PAXGUSDT' : 'BTCUSDT';
-        if (symUpper.includes('BTC')) binanceSym = 'BTCUSDT';
-        else if (symUpper.includes('ETH')) binanceSym = 'ETHUSDT';
-        else if (symUpper.includes('SOL')) binanceSym = 'SOLUSDT';
-        const bRes = await fetch(`https://api.binance.com/api/v3/klines?symbol=${binanceSym}&interval=1m&limit=1`);
-        if (bRes.ok) {
-          const bData = await bRes.json();
-          if (Array.isArray(bData) && bData.length > 0) {
-            const lastClose = parseFloat(bData[0][4]);
-            if (lastClose > 0) {
-              setCurrentPrice(lastClose);
-            }
-          }
-        }
       } catch (_) {}
     };
 
     fetchLivePrice();
-    priceIntervalRef.current = setInterval(fetchLivePrice, 10000);
+    priceIntervalRef.current = setInterval(fetchLivePrice, 5000);
     return () => {
       if (priceIntervalRef.current) clearInterval(priceIntervalRef.current);
     };

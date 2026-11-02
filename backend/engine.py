@@ -412,11 +412,39 @@ def fetch_tradingview_live_quote(symbol: str) -> Optional[float]:
     return None
 
 def fetch_spot_gold_live() -> Optional[float]:
-    """High-reliability live spot gold (XAU/USD) fallback.
-    Fetches real-time physical gold spot quotes (1 troy oz) within pennies of OANDA:XAUUSD.
-    NEVER uses COMEX futures (GC=F) which trades at an arbitrary $15-25 contango spread!
+    """High-reliability live spot gold (XAU/USD) quote.
+    Prioritizes:
+      1. Local Exness MT5 Bridge (127.0.0.1:8001/bars) for exact broker XAUUSDm tick
+      2. Swissquote Institutional Spot XAU/USD BBO (matches OANDA:XAUUSD within $0.10)
+      3. Bitfinex Tether Gold (tXAUT:USD)
     """
-    # 1. Bitfinex Tether Gold (tXAUT:USD) — 1 troy oz physical gold spot, live 24/7
+    # 1. Local Exness MT5 Bridge live tick
+    try:
+        r = HTTP_SESSION.get('http://127.0.0.1:8001/bars?symbol=XAU/USD&timeframe=1m&limit=2', timeout=1.2)
+        if r.status_code == 200:
+            data = r.json()
+            val = float(data.get('latest_price', 0) or 0)
+            if val > 2000:
+                return round(val, 2)
+    except Exception:
+        pass
+
+    # 2. Swissquote Institutional Spot XAU/USD BBO (exact OTC interbank spot gold)
+    try:
+        r = HTTP_SESSION.get('https://forex-data-feed.swissquote.com/public-quotes/bboquotes/instrument/XAU/USD', timeout=1.6)
+        if r.status_code == 200:
+            sq = r.json()
+            if isinstance(sq, list) and len(sq) > 0:
+                prices = sq[0].get('spreadProfilePrices') or []
+                if len(prices) > 0:
+                    bid = float(prices[0].get('bid', 0) or 0)
+                    ask = float(prices[0].get('ask', 0) or 0)
+                    if bid > 2000 and ask > 2000:
+                        return round((bid + ask) / 2.0, 2)
+    except Exception:
+        pass
+
+    # 3. Bitfinex Tether Gold (tXAUT:USD) — 1 troy oz physical gold spot, live 24/7
     try:
         r = HTTP_SESSION.get('https://api-pub.bitfinex.com/v2/ticker/tXAUT:USD', timeout=1.6)
         if r.status_code == 200:
@@ -426,7 +454,7 @@ def fetch_spot_gold_live() -> Optional[float]:
     except Exception:
         pass
 
-    # 2. Kraken PAXGUSD — 1 troy oz physical gold spot
+    # 4. Kraken PAXGUSD — 1 troy oz physical gold spot
     try:
         r = HTTP_SESSION.get('https://api.kraken.com/0/public/Ticker?pair=PAXGUSD', timeout=1.6)
         if r.status_code == 200:
@@ -436,7 +464,7 @@ def fetch_spot_gold_live() -> Optional[float]:
     except Exception:
         pass
 
-    # 3. Binance PAXGUSDT — 1 troy oz physical gold spot
+    # 5. Binance PAXGUSDT — 1 troy oz physical gold spot
     try:
         r = HTTP_SESSION.get('https://api.binance.com/api/v3/ticker/price?symbol=PAXGUSDT', timeout=1.6)
         if r.status_code == 200:
@@ -453,21 +481,7 @@ def get_synchronized_live_price(symbol: str) -> float:
     now = time.time()
     is_gold = any(k in clean for k in ['XAU', 'GOLD'])
 
-    # 1. TradingView scanner quote for exact chart synchronization (especially OANDA:XAUUSD)
-    tv_p = fetch_tradingview_live_quote(symbol)
-    if tv_p and tv_p > 0:
-        _, precision = get_asset_base_config(symbol)
-        p = round(tv_p, precision)
-        UNIVERSAL_PRICE_HUB[clean] = p
-        UNIVERSAL_PRICE_TIMESTAMPS[clean] = now
-        return p
-
-    # 2. If recent universal hub price is fresh (< 6 seconds), use it
-    if clean in UNIVERSAL_PRICE_HUB and clean in UNIVERSAL_PRICE_TIMESTAMPS:
-        if now - UNIVERSAL_PRICE_TIMESTAMPS[clean] < 6.0 and UNIVERSAL_PRICE_HUB[clean] > 0:
-            return UNIVERSAL_PRICE_HUB[clean]
-
-    # 3. Spot gold live fallback: Bitfinex/Kraken/Binance 1oz physical spot
+    # 1. For Gold, check live Exness MT5 / Swissquote Spot first so it matches OANDA & Exness 100%
     if is_gold:
         sg_p = fetch_spot_gold_live()
         if sg_p and sg_p > 2000:
@@ -476,6 +490,20 @@ def get_synchronized_live_price(symbol: str) -> float:
             UNIVERSAL_PRICE_HUB[clean] = p
             UNIVERSAL_PRICE_TIMESTAMPS[clean] = now
             return p
+
+    # 2. TradingView scanner quote for exact chart synchronization
+    tv_p = fetch_tradingview_live_quote(symbol)
+    if tv_p and tv_p > 0:
+        _, precision = get_asset_base_config(symbol)
+        p = round(tv_p, precision)
+        UNIVERSAL_PRICE_HUB[clean] = p
+        UNIVERSAL_PRICE_TIMESTAMPS[clean] = now
+        return p
+
+    # 3. If recent universal hub price is fresh (< 6 seconds), use it
+    if clean in UNIVERSAL_PRICE_HUB and clean in UNIVERSAL_PRICE_TIMESTAMPS:
+        if now - UNIVERSAL_PRICE_TIMESTAMPS[clean] < 6.0 and UNIVERSAL_PRICE_HUB[clean] > 0:
+            return UNIVERSAL_PRICE_HUB[clean]
 
     # 4. Market real OHLCV fallback (for forex / crypto)
     if not is_gold:
@@ -497,11 +525,52 @@ def get_synchronized_live_price(symbol: str) -> float:
     UNIVERSAL_PRICE_TIMESTAMPS[clean] = now
     return base_price
 
+def _calibrate_gold_df_to_spot(df: pd.DataFrame) -> pd.DataFrame:
+    """Shifts proxy gold bars (e.g. PAXG) by the exact basis offset to match real Spot XAU/USD (OANDA/Swissquote/MT5)."""
+    if df is None or df.empty:
+        return df
+    spot_now = fetch_spot_gold_live()
+    if spot_now and spot_now > 2000:
+        last_close = float(df['close'].iloc[-1])
+        delta = round(spot_now - last_close, 2)
+        if abs(delta) > 0.05:
+            for col in ['open', 'high', 'low', 'close']:
+                df[col] = (df[col] + delta).round(2)
+            df.at[df.index[-1], 'close'] = round(spot_now, 2)
+            df.at[df.index[-1], 'high'] = max(float(df['high'].iloc[-1]), round(spot_now, 2))
+            df.at[df.index[-1], 'low'] = min(float(df['low'].iloc[-1]), round(spot_now, 2))
+    return df
+
 def fetch_real_gold_candles(timeframe: str = "1m", limit: int = 100) -> Optional[pd.DataFrame]:
-    """Fetches real historical spot gold (XAU/USD) candle bars from Kraken / Binance public APIs.
-    These are real physical gold spot bars that mirror OANDA:XAUUSD structure and momentum.
+    """Fetches real historical spot gold (XAU/USD) candle bars.
+    1. Queries local Exness MT5 Bridge (127.0.0.1:8001/bars) for direct broker XAUUSDm bars.
+    2. Falls back to Kraken / Binance public OHLC calibrated to real Spot XAU/USD (Swissquote/OANDA).
     """
-    # 1. Kraken PAXGUSD public OHLC (1 oz physical spot gold)
+    # 0. Local Exness MT5 Bridge direct broker candles
+    try:
+        r = HTTP_SESSION.get(
+            f'http://127.0.0.1:8001/bars?symbol=XAU/USD&timeframe={timeframe}&limit={limit}',
+            timeout=1.5
+        )
+        if r.status_code == 200:
+            payload = r.json()
+            bars = payload.get('candles') or []
+            if len(bars) >= 15:
+                records = [{
+                    'timestamp': int(b['time']) * 1000,
+                    'open': float(b['open']),
+                    'high': float(b['high']),
+                    'low': float(b['low']),
+                    'close': float(b['close']),
+                    'volume': float(b.get('volume', 100))
+                } for b in bars[-limit:]]
+                df = pd.DataFrame(records)
+                df.attrs['data_source'] = payload.get('data_source', 'Exness MT5 Live')
+                return df
+    except Exception:
+        pass
+
+    # 1. Kraken PAXGUSD public OHLC calibrated to Spot XAU/USD
     tf_map = {
         '1s': 1, '5s': 1, '15s': 1, '30s': 1,
         '1m': 1, '2m': 1, '3m': 1, '5m': 5,
@@ -525,13 +594,13 @@ def fetch_real_gold_candles(timeframe: str = "1m", limit: int = 100) -> Optional
                         'close': float(b[4]),
                         'volume': float(b[6])
                     })
-                df = pd.DataFrame(records)
+                df = _calibrate_gold_df_to_spot(pd.DataFrame(records))
                 df.attrs['data_source'] = 'TradingView (OANDA:XAUUSD)'
                 return df
     except Exception:
         pass
 
-    # 2. Binance PAXGUSDT public klines (1 oz physical spot gold)
+    # 2. Binance PAXGUSDT public klines calibrated to Spot XAU/USD
     b_map = {
         '1s': '1s', '1m': '1m', '3m': '3m', '5m': '5m',
         '15m': '15m', '30m': '30m', '1h': '1h', '2h': '2h',
@@ -553,7 +622,7 @@ def fetch_real_gold_candles(timeframe: str = "1m", limit: int = 100) -> Optional
                         'close': float(b[4]),
                         'volume': float(b[5])
                     })
-                df = pd.DataFrame(records)
+                df = _calibrate_gold_df_to_spot(pd.DataFrame(records))
                 df.attrs['data_source'] = 'TradingView (OANDA:XAUUSD)'
                 return df
     except Exception:
@@ -1528,13 +1597,19 @@ def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m",
 
     # Calculate initial TP offset: TP1 starts at 1.2x risk for high-win-rate profit locking
     tp_multipliers = [1.2, 1.8, 2.5, 3.2, 4.0, 5.0, 6.0]
+    lookback_10 = df.iloc[-min(10, len(df)):]
+    recent_swing_low = round(min(float(lookback_10['low'].min()), entry_price), precision)
+    recent_swing_high = round(max(float(lookback_10['high'].max()), entry_price), precision)
+    max_struct_cap = max(atr * 1.8, min_effective_risk * 2.5)
 
     if signal_type == "SELL/SHORT":
         entry_zones = [round(entry_price + (zone_step * i), precision) for i in range(5)]
-        stop_loss = round(entry_price + min_effective_risk, precision)
+        swing_gap = min(max(0.0, recent_swing_high - entry_price), max_struct_cap)
+        effective_sl_dist = round(max(min_effective_risk, swing_gap + max(min_effective_risk * 0.85, 0.35 if is_gold else min_effective_risk * 0.5)), precision)
+        stop_loss = round(entry_price + effective_sl_dist, precision)
         risk_dist = round(abs(stop_loss - entry_price), precision)
 
-        tp_levels = [round(entry_price - (min_effective_risk * m), precision) for m in tp_multipliers]
+        tp_levels = [round(entry_price - (effective_sl_dist * m), precision) for m in tp_multipliers]
         tp1 = tp_levels[0]
         tp2 = tp_levels[2]
 
@@ -1546,10 +1621,12 @@ def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m",
 
     elif signal_type == "BUY/LONG":
         entry_zones = [round(entry_price - (zone_step * i), precision) for i in range(5)]
-        stop_loss = round(entry_price - min_effective_risk, precision)
+        swing_gap = min(max(0.0, entry_price - recent_swing_low), max_struct_cap)
+        effective_sl_dist = round(max(min_effective_risk, swing_gap + max(min_effective_risk * 0.85, 0.35 if is_gold else min_effective_risk * 0.5)), precision)
+        stop_loss = round(entry_price - effective_sl_dist, precision)
         risk_dist = round(abs(entry_price - stop_loss), precision)
 
-        tp_levels = [round(entry_price + (min_effective_risk * m), precision) for m in tp_multipliers]
+        tp_levels = [round(entry_price + (effective_sl_dist * m), precision) for m in tp_multipliers]
         tp1 = tp_levels[0]
         tp2 = tp_levels[2]
 
@@ -1626,6 +1703,9 @@ def analyze_signal_conditions(symbol: str = "EUR/USD", timeframe: str = "1m",
             "hold_remaining_sec": hold_remaining_sec,
             "hold_total_sec": min_hold_sec,
             "runaway_trend": runaway_trend_info,
+            "swing_low": recent_swing_low,
+            "swing_high": recent_swing_high,
+            "atr": round(atr, precision),
         },
         "sd_zones": sd_zones
     }
