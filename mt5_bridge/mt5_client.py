@@ -240,28 +240,92 @@ class MT5BridgeClient:
         sym_info: Any,
     ) -> tuple[float, float]:
         """
-        Ensures SL and TP respect trade_stops_level and directional geometry
-        (BUY: SL < ask < TP; SELL: TP < bid < SL).
+        Ensures SL and TP respect trade_stops_level, directional geometry, AND
+        an Anti-Fluctuation / Anti-Wick Breathing Cushion so small accounts ($40)
+        are NEVER stopped out immediately upon entry due to spread or 1m tick noise!
         """
         digits = int(getattr(sym_info, "digits", 2) or 2)
         point = float(getattr(sym_info, "point", 0.01) or 0.01)
         stops_level_pts = int(getattr(sym_info, "trade_stops_level", 0) or 0)
-        min_dist = max(stops_level_pts * point, point * 5)
+        sym_name = str(getattr(sym_info, "name", "") or "").upper()
+        is_gold = "XAU" in sym_name or "GOLD" in sym_name
+
+        # Query live bid/ask spread and recent 10-bar Swing Low / Swing High + ATR from MT5
+        spread = point * 25
+        exit_ref_price = price
+        swing_low = price
+        swing_high = price
+        atr = 2.50 if is_gold else price * 0.0015
+
+        try:
+            tick = mt5.symbol_info_tick(getattr(sym_info, "name", ""))
+            if tick and tick.ask > 0 and tick.bid > 0:
+                spread = max(abs(float(tick.ask) - float(tick.bid)), point * 5)
+                # BUY orders exit at BID; SELL orders exit at ASK
+                exit_ref_price = float(tick.bid if is_buy else tick.ask)
+
+            rates = mt5.copy_rates_from_pos(getattr(sym_info, "name", ""), mt5.TIMEFRAME_M5, 0, 12)
+            if rates is not None and len(rates) >= 4:
+                lows = [float(r["low"]) for r in rates[-10:]]
+                highs = [float(r["high"]) for r in rates[-10:]]
+                swing_low = min(lows)
+                swing_high = max(highs)
+                ranges = [max(float(r["high"]) - float(r["low"]), point * 10) for r in rates[-10:]]
+                atr = sum(ranges) / max(len(ranges), 1)
+        except Exception:
+            pass
+
+        broker_min_dist = max(stops_level_pts * point, spread * 2.5, point * 20)
+        # Anti-Fluctuation Cushion for Hard Broker SL:
+        # Must sit outside normal 1m-5m wick noise & spread so entry fluctuations NEVER trigger instant loss!
+        if is_gold:
+            min_sl_breathing_dist = max(broker_min_dist, spread * 10.0, atr * 1.4, 4.20)
+            structural_buffer = max(spread * 3.0, 0.90)
+            min_tp_dist = max(broker_min_dist, spread * 5.0, 2.20)
+        else:
+            min_sl_breathing_dist = max(broker_min_dist, spread * 8.0, atr * 1.4, price * 0.0020)
+            structural_buffer = max(spread * 2.5, price * 0.0005)
+            min_tp_dist = max(broker_min_dist, spread * 4.5, price * 0.0012)
 
         clean_sl = 0.0
         clean_tp = 0.0
 
         if sl is not None and sl > 0:
+            req_sl = float(sl)
             if is_buy:
-                clean_sl = round(min(float(sl), price - min_dist), digits)
+                # Place SL safely below both (exit_ref_price - min_sl_breathing_dist) and recent Swing Low
+                safe_max_sl = exit_ref_price - min_sl_breathing_dist
+                struct_sl = swing_low - structural_buffer if (exit_ref_price - swing_low) <= min_sl_breathing_dist * 2.2 else safe_max_sl
+                target_sl = min(safe_max_sl, struct_sl)
+                # Only use req_sl if it is already safely below safe_max_sl and within reasonable range (not a stale quote)
+                if req_sl <= safe_max_sl and (exit_ref_price - req_sl) <= min_sl_breathing_dist * 3.5:
+                    clean_sl = round(req_sl, digits)
+                else:
+                    clean_sl = round(target_sl, digits)
             else:
-                clean_sl = round(max(float(sl), price + min_dist), digits)
+                # SELL: Place SL safely above both (exit_ref_price + min_sl_breathing_dist) and recent Swing High
+                safe_min_sl = exit_ref_price + min_sl_breathing_dist
+                struct_sl = swing_high + structural_buffer if (swing_high - exit_ref_price) <= min_sl_breathing_dist * 2.2 else safe_min_sl
+                target_sl = max(safe_min_sl, struct_sl)
+                if req_sl >= safe_min_sl and (req_sl - exit_ref_price) <= min_sl_breathing_dist * 3.5:
+                    clean_sl = round(req_sl, digits)
+                else:
+                    clean_sl = round(target_sl, digits)
 
         if tp is not None and tp > 0:
+            req_tp = float(tp)
             if is_buy:
-                clean_tp = round(max(float(tp), price + min_dist), digits)
+                safe_min_tp = price + min_tp_dist
+                if req_tp >= safe_min_tp and (req_tp - price) <= min_sl_breathing_dist * 6.0:
+                    clean_tp = round(req_tp, digits)
+                else:
+                    clean_tp = round(price + max(min_tp_dist, min_sl_breathing_dist * 0.85), digits)
             else:
-                clean_tp = round(min(float(tp), price - min_dist), digits)
+                safe_max_tp = price - min_tp_dist
+                if req_tp <= safe_max_tp and (price - req_tp) <= min_sl_breathing_dist * 6.0:
+                    clean_tp = round(req_tp, digits)
+                else:
+                    clean_tp = round(price - max(min_tp_dist, min_sl_breathing_dist * 0.85), digits)
 
         return clean_sl, clean_tp
 
@@ -567,11 +631,73 @@ class MT5BridgeClient:
                     "sl": p.sl,
                     "tp": p.tp,
                     "profit": p.profit,
+                    "time_open": int(getattr(p, "time", 0)),
                     "magic": p.magic,
                     "comment": p.comment,
                 }
                 for p in positions
             ]
+
+    def modify_position_sl_tp(
+        self,
+        ticket: int,
+        sl: Optional[float] = None,
+        tp: Optional[float] = None,
+        move_to_breakeven: bool = False,
+    ) -> dict[str, Any]:
+        """
+        Modifies an open MT5 position's Stop Loss / Take Profit (TRADE_ACTION_SLTP).
+        Used by the Autonomous Bot to automatically lock in Breakeven or Trail Profit!
+        """
+        with _mt5_lock:
+            ok, meta = self.ensure_connected()
+            if not ok:
+                return {"status": "error", "message": meta.get("error") or "MT5 not connected"}
+            positions = mt5.positions_get(ticket=int(ticket))
+            if not positions:
+                return {"status": "error", "message": f"Position #{ticket} not found on MT5"}
+            pos = positions[0]
+            sym_info = mt5.symbol_info(pos.symbol)
+            digits = int(getattr(sym_info, "digits", 2) or 2) if sym_info else 2
+            point = float(getattr(sym_info, "point", 0.01) or 0.01) if sym_info else 0.01
+            is_buy = pos.type == mt5.ORDER_TYPE_BUY
+
+            new_sl = float(sl if sl is not None else pos.sl)
+            new_tp = float(tp if tp is not None else pos.tp)
+
+            if move_to_breakeven:
+                # Lock SL at entry + small profit cushion so trade can never lose!
+                cushion = point * 15
+                be_price = round(pos.price_open + (cushion if is_buy else -cushion), digits)
+                if is_buy and pos.price_current > be_price:
+                    new_sl = max(new_sl, be_price) if new_sl > 0 else be_price
+                elif not is_buy and pos.price_current < be_price:
+                    new_sl = min(new_sl, be_price) if new_sl > 0 else be_price
+
+            req = {
+                "action": mt5.TRADE_ACTION_SLTP,
+                "position": int(pos.ticket),
+                "symbol": pos.symbol,
+                "sl": round(new_sl, digits),
+                "tp": round(new_tp, digits),
+            }
+            res = mt5.order_send(req)
+            rc = getattr(res, "retcode", None) if res else None
+            if rc == mt5.TRADE_RETCODE_DONE:
+                return {
+                    "status": "modified",
+                    "ticket": pos.ticket,
+                    "symbol": pos.symbol,
+                    "sl": round(new_sl, digits),
+                    "tp": round(new_tp, digits),
+                    "retcode_name": describe_retcode(rc),
+                }
+            return {
+                "status": "failed",
+                "ticket": pos.ticket,
+                "retcode": rc,
+                "retcode_name": describe_retcode(rc),
+            }
 
     def close_positions_and_cancel_orders(
         self,

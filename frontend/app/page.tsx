@@ -16,6 +16,7 @@ import MarketSessionClocks from '@/components/MarketSessionClocks';
 import PositionSizingGuide from '@/components/PositionSizingGuide';
 import TrendCandlePanel from '@/components/TrendCandlePanel';
 import AITradingCopilotModal from '@/components/AITradingCopilotModal';
+import AutonomousBotLiveWindow from '@/components/AutonomousBotLiveWindow';
 import { Activity, ShieldCheck, Cpu, Radio, Coins, Search, Globe, Eye, Monitor, Calculator, Sparkles, Zap, Play, ArrowUpRight, ArrowDownRight, Square, XCircle, Bot, Bell } from 'lucide-react';
 
 interface AssetOption {
@@ -69,6 +70,7 @@ export default function DashboardPage() {
   const [chartMode, setChartMode] = useState<'TradingViewDirect' | 'CustomEngine'>('CustomEngine');
   const [showPositionGuide, setShowPositionGuide] = useState<boolean>(false);
   const [showAICopilot, setShowAICopilot] = useState<boolean>(false);
+  const [showBotWindow, setShowBotWindow] = useState<boolean>(false);
   const [aiClearanceState, setAiClearanceState] = useState<{
     verdict?: 'CLEAR_TO_TRADE' | 'CAUTION' | 'DO_NOT_TRADE';
     clearanceScore?: number;
@@ -207,6 +209,7 @@ export default function DashboardPage() {
         json = await apiRes.json();
       }
       setTopMt5Receipt(json);
+      setShowBotWindow(true);
     } catch (e: any) {
       setTopMt5Receipt({
         status: 'error',
@@ -782,6 +785,16 @@ export default function DashboardPage() {
               <Bot className="w-4 h-4 text-amber-300" />
               <span>5. AI CLEARANCE CHAT</span>
             </button>
+
+            <button
+              type="button"
+              onClick={() => setShowBotWindow(true)}
+              className="px-3.5 py-2 bg-gradient-to-r from-emerald-600 via-teal-600 to-cyan-600 hover:from-emerald-500 hover:to-cyan-500 text-white text-xs font-black rounded-lg shadow-lg border border-emerald-300 transition flex items-center gap-1.5 font-mono"
+              title="Open Live Autonomous Bot & AI Commander Window (Mimics & Mirrors MT5 Trading + 1-Click Human Intervention)"
+            >
+              <Activity className="w-4 h-4 text-amber-200 animate-pulse" />
+              <span>6. LIVE BOT &amp; AI AUTOPILOT WINDOW</span>
+            </button>
           </div>
         </div>
 
@@ -936,6 +949,15 @@ export default function DashboardPage() {
         onClose={() => setShowAICopilot(false)}
         onOpen={() => setShowAICopilot(true)}
         onQuickPlaceOrder={(dir) => handleTopPlaceOrder(dir)}
+      />
+
+      <AutonomousBotLiveWindow
+        symbol={symbol}
+        timeframe={timeframe}
+        currentPrice={currentPrice}
+        isOpen={showBotWindow}
+        onClose={() => setShowBotWindow(false)}
+        onOpen={() => setShowBotWindow(true)}
       />
     </div>
   );

@@ -404,17 +404,20 @@ export function calculateRiskBasedLevels(params: {
   // Raw price distance that equals maxRiskDollars at the chosen lotSize
   const rawSlDistance = maxRiskDollars / dollarsPerPriceUnit;
 
-  // Broker minimum stop distance floor (so MT5 never rejects for stops too close to spread)
+  // Anti-Fluctuation / Anti-Wick Breathing Floor:
+  // Even on a small $40 account, a hard Stop Loss on MT5 MUST sit outside normal 1m tick noise & spread
+  // (at least $3.80-$4.50 on Gold or 1.4x ATR) so normal market fluctuations NEVER stop out your trade upon entry!
   const isGold = symbol.toUpperCase().includes('XAU') || symbol.toUpperCase().includes('GOLD');
   const minBrokerStop = isGold
-    ? 0.65
+    ? 3.80
     : entryPrice > 500
-    ? entryPrice * 0.0005
+    ? entryPrice * 0.0018
     : entryPrice > 20
-    ? 0.05
-    : 0.0005;
+    ? 0.15
+    : 0.0018;
 
-  const refAtr = atr && atr > 0 ? atr : isGold ? 1.8 : minBrokerStop * 3;
+  const refAtr = atr && atr > 0 ? atr : isGold ? 2.4 : minBrokerStop * 1.5;
+  const antiWickFloor = Math.max(minBrokerStop, refAtr * 1.45);
 
   // Chart-Structure Swing Distance (places SL right below the recent Swing Low for BUY, or above Swing High for SELL!)
   let swingBaseDistance = 0;
@@ -424,22 +427,15 @@ export function calculateRiskBasedLevels(params: {
     swingBaseDistance = structuralSwingHigh - entryPrice;
   }
 
-  // Combine Chart Swing Structure with the Risk Calculator:
-  // - If we have a valid chart swing (e.g. Swing Low at $3907.50 while Entry is $3909.10 -> swingBaseDistance = $1.60),
-  //   we place the SL below that Swing Low PLUS a Risk-Calculator buffer that scales with Balance & Risk %
-  //   (e.g. $38.48-$40 account @ 2% risk adds ~$0.70 below $3907.50 -> SL = $3906.80, matching the chart structure!).
-  // - For a larger account ($100-$1000), the Risk Calculator expands the SL buffer further below the swing structure
-  //   (capped at 5x ATR so the Stop Loss always remains visibly anchored to the active chart timeframe).
-  const maxChartReasonableStop = Math.max(refAtr * 5.5, minBrokerStop * 10);
-  let targetDistance = rawSlDistance;
+  const maxChartReasonableStop = Math.max(refAtr * 5.5, antiWickFloor * 3.5);
+  let targetDistance = Math.max(rawSlDistance, antiWickFloor);
 
   if (swingBaseDistance > 0 && swingBaseDistance < maxChartReasonableStop) {
     const riskScaledPad = Math.max(
-      minBrokerStop * 0.55,
-      Math.min(rawSlDistance * 0.9, refAtr * 2.5)
+      isGold ? 1.10 : antiWickFloor * 0.35,
+      Math.min(rawSlDistance * 0.85, refAtr * 2.2)
     );
-    const structuralPlusRisk = swingBaseDistance + riskScaledPad;
-    // Blend structural swing placement with risk calculator so both chart structure AND balance/risk% control SL
+    const structuralPlusRisk = Math.max(antiWickFloor, swingBaseDistance + riskScaledPad);
     targetDistance =
       rawSlDistance > structuralPlusRisk
         ? Math.min(rawSlDistance, Math.max(structuralPlusRisk * 1.8, refAtr * 4.5))
@@ -447,7 +443,7 @@ export function calculateRiskBasedLevels(params: {
   }
 
   const slDistance = Number(
-    Math.max(minBrokerStop, Math.min(targetDistance, maxChartReasonableStop)).toFixed(precision)
+    Math.max(antiWickFloor, Math.min(targetDistance, maxChartReasonableStop)).toFixed(precision)
   );
 
   // 5 Entry Zones sit strictly inside 56% of the Stop Loss distance so Z1..Z5 never cross SL!

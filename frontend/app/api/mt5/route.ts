@@ -236,6 +236,36 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    if (mode === 'modify_position') {
+      // Autonomous Bot SL/TP Modifier (Breakeven Lock / Trailing Stop)
+      const modRes = await fetchWithTimeout(
+        `${baseUrl}/bridge/modify-position`,
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${DEFAULT_SECRET_TOKEN}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            ticket: Number(body.ticket),
+            sl: body.sl !== undefined ? Number(body.sl) : undefined,
+            tp: body.tp !== undefined ? Number(body.tp) : undefined,
+            move_to_breakeven: Boolean(body.move_to_breakeven),
+          }),
+        },
+        10000
+      );
+      const modJson = await modRes.json().catch(() => ({}));
+      return NextResponse.json(
+        {
+          ...modJson,
+          resolved_bridge_url: baseUrl,
+          resolution_source: source,
+        },
+        { status: modRes.ok ? 200 : modRes.status }
+      );
+    }
+
     // Button 2: Place Order / Trade Now -> POST /webhook/mt5
     const orderPayload = {
       symbol: body.symbol || 'XAU/USD',

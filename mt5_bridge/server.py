@@ -199,6 +199,27 @@ def cancel_or_close_trade(payload: dict = Body(default={})):
     )
 
 
+@app.post("/bridge/modify-position", dependencies=[Depends(verify_secret_token)])
+def modify_open_position(payload: dict = Body(default={})):
+    """
+    Autonomous Bot SL/TP Modifier:
+    Moves an open MT5 position's Stop Loss to Breakeven (`move_to_breakeven: true`)
+    or updates `sl` / `tp` dynamically as price moves into profit.
+    """
+    ticket = int(payload.get("ticket", 0) or 0)
+    if ticket <= 0:
+        raise HTTPException(status_code=400, detail="Valid 'ticket' is required.")
+    sl = payload.get("sl")
+    tp = payload.get("tp")
+    move_to_breakeven = bool(payload.get("move_to_breakeven", False))
+    return bridge_client.modify_position_sl_tp(
+        ticket=ticket,
+        sl=float(sl) if sl is not None else None,
+        tp=float(tp) if tp is not None else None,
+        move_to_breakeven=move_to_breakeven,
+    )
+
+
 @app.post("/bridge/stop-bot", dependencies=[Depends(verify_secret_token)])
 def stop_bot_and_close_all(payload: dict = Body(default={})):
     """

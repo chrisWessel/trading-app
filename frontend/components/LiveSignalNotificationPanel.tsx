@@ -423,6 +423,13 @@ export default function LiveSignalNotificationPanel({
 
       setMt5OrderReceipt(json);
       checkMt5BridgeHealth();
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(
+          new CustomEvent('wessignal-open-bot-window', {
+            detail: { enableAutopilot: true },
+          })
+        );
+      }
     } catch (err: any) {
       setMt5OrderReceipt({
         status: 'error',
@@ -1174,16 +1181,26 @@ export default function LiveSignalNotificationPanel({
             </div>
             <button
               type="button"
-              onClick={() => setAutoBotEnabled((prev) => !prev)}
+              onClick={() => {
+                const next = !autoBotEnabled;
+                setAutoBotEnabled(next);
+                if (next && typeof window !== 'undefined') {
+                  window.dispatchEvent(
+                    new CustomEvent('wessignal-open-bot-window', {
+                      detail: { enableAutopilot: true },
+                    })
+                  );
+                }
+              }}
               className={`text-[9px] font-mono px-2 py-0.5 rounded border font-extrabold flex items-center gap-1 transition ${
                 autoBotEnabled
                   ? 'bg-emerald-600 border-emerald-300 text-white animate-pulse'
                   : 'bg-indigo-900/90 border-indigo-600 text-indigo-100 hover:bg-indigo-800'
               }`}
-              title="When Auto-Bot is ON, it automatically places 1 order on the next signal with hard SL/TP and then auto-stops."
+              title="Turns on Full AI Autopilot and opens the Live Bot & AI Commander Window"
             >
               <Bot className="w-3 h-3" />
-              <span>{autoBotEnabled ? 'AUTO-BOT: ON (AUTO-STOP)' : 'AUTO-BOT: MANUAL'}</span>
+              <span>{autoBotEnabled ? 'AUTO-BOT: ON (AUTOPILOT)' : 'AUTO-BOT: MANUAL'}</span>
             </button>
           </div>
 
@@ -1434,6 +1451,24 @@ export default function LiveSignalNotificationPanel({
           >
             <Bot className="w-3.5 h-3.5 text-amber-300 animate-pulse" />
             <span>5. AI CLEARANCE CHAT (Check Volatility &amp; Market News)</span>
+          </button>
+
+          {/* BUTTON 6: LIVE AUTONOMOUS BOT & AI COMMANDER WINDOW (MIMIC + INTERVENE) */}
+          <button
+            type="button"
+            onClick={() => {
+              if (typeof window !== 'undefined') {
+                window.dispatchEvent(
+                  new CustomEvent('wessignal-open-bot-window', {
+                    detail: { enableAutopilot: false },
+                  })
+                );
+              }
+            }}
+            className="w-full py-2 px-3 bg-gradient-to-r from-emerald-600 via-teal-600 to-cyan-600 hover:from-emerald-500 hover:to-cyan-500 text-white text-[10.5px] font-black rounded-lg shadow-lg border border-emerald-300/80 transition flex items-center justify-center gap-1.5"
+          >
+            <Zap className="w-3.5 h-3.5 text-amber-200 animate-pulse" />
+            <span>6. LIVE BOT &amp; AI AUTOPILOT WINDOW (Auto-Trade &amp; Intervene)</span>
           </button>
 
           {/* Auto-Stop & Server-Side TP/SL Protection Note */}
