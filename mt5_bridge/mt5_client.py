@@ -558,6 +558,45 @@ class MT5BridgeClient:
 
                     rc = result.retcode
                     if rc in (mt5.TRADE_RETCODE_DONE, mt5.TRADE_RETCODE_DONE_PARTIAL, mt5.TRADE_RETCODE_PLACED):
+                        deal_t = getattr(result, "deal", None)
+                        order_t = getattr(result, "order", None)
+
+                        # POST-ENTRY GUARANTEED SL/TP ENFORCEMENT (CRITICAL FOR EXNESS & MARKET EXECUTION):
+                        # On Exness and all brokers with SYMBOL_TRADE_EXECUTION_MARKET, the broker strips or ignores SL/TP
+                        # in the initial TRADE_ACTION_DEAL request.
+                        # We query the newly opened position ticket and immediately dispatch TRADE_ACTION_SLTP!
+                        attached_sl = clean_sl
+                        attached_tp = clean_tp
+                        try:
+                            time.sleep(0.08)
+                            positions = mt5.positions_get(symbol=resolved_symbol)
+                            target_pos = None
+                            if positions:
+                                if order_t:
+                                    target_pos = next((p for p in positions if getattr(p, "ticket", None) == order_t or getattr(p, "identifier", None) == order_t), None)
+                                if not target_pos:
+                                    target_pos = sorted(positions, key=lambda p: getattr(p, "time_msc", 0))[-1]
+
+                            if target_pos:
+                                pos_ticket = int(getattr(target_pos, "ticket", 0))
+                                current_pos_sl = float(getattr(target_pos, "sl", 0.0) or 0.0)
+
+                                if pos_ticket > 0 and (current_pos_sl == 0.0 or abs(current_pos_sl - clean_sl) > 0.01):
+                                    modify_req = {
+                                        "action": mt5.TRADE_ACTION_SLTP,
+                                        "position": pos_ticket,
+                                        "symbol": resolved_symbol,
+                                        "sl": float(clean_sl),
+                                        "tp": float(clean_tp),
+                                    }
+                                    mod_res = mt5.order_send(modify_req)
+                                    if mod_res and mod_res.retcode in (mt5.TRADE_RETCODE_DONE, mt5.TRADE_RETCODE_PLACED):
+                                        logger.info(f"✅ Post-entry SL/TP ({clean_sl}/{clean_tp}) successfully attached to MT5 position #{pos_ticket} on Exness server")
+                                    else:
+                                        logger.warning(f"⚠️ Failed to attach post-entry SL/TP on position #{pos_ticket}: rc={getattr(mod_res, 'retcode', None)}, err={mt5.last_error()}")
+                        except Exception as post_err:
+                            logger.error(f"Error enforcing post-entry SL/TP: {post_err}")
+
                         return OrderExecutionResponse(
                             status="executed",
                             symbol_requested=order.symbol,
@@ -570,8 +609,8 @@ class MT5BridgeClient:
                             request_payload=base_request,
                             retcode=rc,
                             retcode_name=describe_retcode(rc),
-                            deal_ticket=getattr(result, "deal", None),
-                            order_ticket=getattr(result, "order", None),
+                            deal_ticket=deal_t,
+                            order_ticket=order_t,
                             executed_price=float(getattr(result, "price", exec_price) or exec_price),
                             executed_volume=float(getattr(result, "volume", norm_vol) or norm_vol),
                             sl=clean_sl if clean_sl > 0 else None,

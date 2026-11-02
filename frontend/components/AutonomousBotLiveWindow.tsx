@@ -88,7 +88,8 @@ export default function AutonomousBotLiveWindow({
   onClose,
   onOpen,
 }: AutonomousBotLiveWindowProps) {
-  const [autopilotEnabled, setAutopilotEnabled] = useState<boolean>(false);
+  // Autonomous Bot State — Autopilot ON by default so it actively protects stops & locks breakeven
+  const [autopilotEnabled, setAutopilotEnabled] = useState<boolean>(true);
   const [pipMinimized, setPipMinimized] = useState<boolean>(false);
   const [soundEnabled, setSoundEnabled] = useState<boolean>(true);
   const [isExecutingAction, setIsExecutingAction] = useState<boolean>(false);
@@ -725,7 +726,27 @@ export default function AutonomousBotLiveWindow({
               (trade.direction === 'BUY' && trade.currentPrice <= trade.hardBrokerSl) ||
               (trade.direction === 'SELL' && trade.currentPrice >= trade.hardBrokerSl));
 
-          if (hitTp1 || hitExhaustionInProfit) {
+          // CATASTROPHIC RISK CIRCUIT BREAKER (RUNS EVEN IN MANUAL MODE!):
+          // If a position ever floats into a loss exceeding $2.20 or 2x the risk budget (e.g. -$2.50 on a $40 account),
+          // EMERGENCY CLOSE IMMEDIATELY! Never allow a runaway loss to burn $6.00!
+          const maxAllowedLossDollars = Math.max(2.20, accountBalance * (riskPercent / 100) * 1.8);
+          const catastrophicLossBreached = trade.floatingPnlDollars <= -maxAllowedLossDollars;
+
+          if (catastrophicLossBreached) {
+            setAiCurrentCommand({
+              badge: 'STOP & EXIT NOW',
+              color: 'rose',
+              title: `🚨 EMERGENCY RISK CIRCUIT BREAKER TRIGGERED (-$${Math.abs(trade.floatingPnlDollars).toFixed(2)})`,
+              explanation: `Loss exceeded maximum allowed risk budget (-$${maxAllowedLossDollars.toFixed(2)}). Emergency closing position immediately to protect account!`,
+            });
+            if (nowMs - lastAutoActionMsRef.current > 4000) {
+              lastAutoActionMsRef.current = nowMs;
+              await closeActiveBotTrade(
+                'STOP_REVERSE',
+                `Emergency circuit breaker: Loss -$${Math.abs(trade.floatingPnlDollars).toFixed(2)} exceeded safety limit -$${maxAllowedLossDollars.toFixed(2)}.`
+              );
+            }
+          } else if (hitTp1 || hitExhaustionInProfit) {
             setAiCurrentCommand({
               badge: 'TAKE MONEY NOW',
               color: 'emerald',
