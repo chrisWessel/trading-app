@@ -16,3 +16,4 @@ echo.
 "%PYTHON_EXE%" mt5_bridge\server.py
 
 pause
+

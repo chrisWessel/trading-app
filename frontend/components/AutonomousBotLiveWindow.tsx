@@ -226,6 +226,7 @@ export default function AutonomousBotLiveWindow({
 
   const activeTradeRef = useRef<ActiveBotTrade | null>(null);
   const autopilotRef = useRef<boolean>(false);
+  const runBotBrainCycleRef = useRef<(() => void) | null>(null);
   const lastAutoEntryMsRef = useRef<number>(0);
   const lastAutoActionMsRef = useRef<number>(0);
   const lastLogHeadlineRef = useRef<string>('');
@@ -1044,8 +1045,9 @@ export default function AutonomousBotLiveWindow({
             return;
           }
 
-          // No open trade — evaluate state based on whether user switched Autopilot ON or OFF
-          if (!autopilotEnabled || !autopilotRef.current) {
+          // No open trade — evaluate state strictly from live ref to eliminate stale closure mismatch
+          const isAutopilotOn = Boolean(autopilotRef.current);
+          if (!isAutopilotOn) {
             setAiCurrentCommand({
               badge: 'SCANNING ENTRY',
               color: 'blue',
@@ -1061,12 +1063,12 @@ export default function AutonomousBotLiveWindow({
             });
 
             if (
-              autopilotEnabled &&
-              autopilotRef.current &&
+              isAutopilotOn &&
               (!workerGoalEnabled || dailyProfitTarget <= 0 || sessionRealizedPnl < dailyProfitTarget) &&
               (analysis.probability || 90) >= 90 &&
               nowMs - lastAutoEntryMsRef.current >= 45000
             ) {
+              lastAutoEntryMsRef.current = nowMs;
               await executeBotOrder(
                 engineDir,
                 tickNow,
@@ -1083,6 +1085,7 @@ export default function AutonomousBotLiveWindow({
       }
     };
 
+    runBotBrainCycleRef.current = runBotBrainCycle;
     runBotBrainCycle();
     const interval = setInterval(runBotBrainCycle, 3500);
     return () => {
@@ -1293,11 +1296,32 @@ export default function AutonomousBotLiveWindow({
                 onClick={() => {
                   const next = !autopilotEnabled;
                   setAutopilotEnabled(next);
+                  autopilotRef.current = next;
                   setStatusBanner(
                     next
                       ? '🟢 Full AI Autopilot ARMED — Bot is now trading & managing stops/profits automatically!'
                       : '⏸️ AI Autopilot Paused — You are in manual control.'
                   );
+                  if (next) {
+                    setAiCurrentCommand((prev) => ({
+                      ...prev,
+                      badge: 'SCANNING ENTRY',
+                      color: 'blue',
+                      title: `🤖 AUTOPILOT ACTIVE: Scanning High-Confluence Setup...`,
+                      explanation: `AI Autopilot armed! Analyzing institutional SMC/FVG order flow and preparing execution.`,
+                    }));
+                    setTimeout(() => {
+                      runBotBrainCycleRef.current?.();
+                    }, 50);
+                  } else {
+                    setAiCurrentCommand((prev) => ({
+                      ...prev,
+                      badge: 'SCANNING ENTRY',
+                      color: 'blue',
+                      title: `⏸️ AUTOPILOT IS OFF (Manual / Safe Mode)`,
+                      explanation: `Autopilot is paused. The bot will NOT enter any trades automatically. Click "START FULL AI AUTOPILOT" to resume.`,
+                    }));
+                  }
                 }}
                 className={`px-4 py-2.5 rounded-xl font-black text-xs shadow-lg border transition flex items-center gap-2 ${
                   autopilotEnabled
