@@ -108,6 +108,7 @@ class MT5BridgeClient:
                 "account_balance": getattr(acct_info, "balance", None),
                 "account_equity": getattr(acct_info, "equity", None),
                 "account_margin_free": getattr(acct_info, "margin_free", None),
+                "account_leverage": getattr(acct_info, "leverage", 400),
             }
 
     def resolve_broker_symbol(self, raw_symbol: str) -> tuple[Optional[str], Optional[Any]]:

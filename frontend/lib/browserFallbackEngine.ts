@@ -434,6 +434,20 @@ export function calculateRiskBasedLevels(params: {
     swingBaseDistance = structuralSwingHigh - entryPrice;
   }
 
+  // HARD CAPITAL PRESERVATION RISK CAP:
+  // For micro/small accounts (balance <= $25), the total dollar risk MUST NEVER exceed 8% of balance
+  // (e.g. max $0.82 on a $10.22 account, never -$14.82!).
+  // For accounts <= $50, dollar risk is capped at $1.80.
+  // For larger accounts, risk is governed by user riskPercent.
+  const absoluteMaxDollarRisk =
+    safeBalance <= 25
+      ? Math.min(0.85, Number((safeBalance * 0.08).toFixed(2)))
+      : safeBalance <= 50
+      ? Math.min(1.80, Number((safeBalance * 0.05).toFixed(2)))
+      : maxRiskDollars;
+
+  const maxAllowedDistByRisk = Math.max(1e-4, absoluteMaxDollarRisk / dollarsPerPriceUnit);
+
   const maxChartReasonableStop = Math.max(refAtr * 5.5, antiWickFloor * 3.5);
   let targetDistance = Math.max(rawSlDistance, antiWickFloor);
 
@@ -449,8 +463,16 @@ export function calculateRiskBasedLevels(params: {
         : structuralPlusRisk;
   }
 
+  // Strictly cap the stop distance for small accounts so risk in dollars never blows out the balance
+  if (safeBalance <= 50) {
+    targetDistance = Math.min(targetDistance, maxAllowedDistByRisk);
+  }
+
   const slDistance = Number(
-    Math.max(antiWickFloor, Math.min(targetDistance, maxChartReasonableStop)).toFixed(precision)
+    Math.max(
+      safeBalance <= 25 ? 0.60 : antiWickFloor,
+      Math.min(targetDistance, maxChartReasonableStop)
+    ).toFixed(precision)
   );
 
   // 5 Entry Zones sit strictly inside 56% of the Stop Loss distance so Z1..Z5 never cross SL!
@@ -1046,13 +1068,13 @@ export function computeBrowserSignalAnalysis(
     bearPoints += 10;
   }
 
+  // Directional bias is strictly determined by the 7-Pillar Institutional SMC Consensus
+  // Single-candle fluctuations or micro-ticks NEVER flip the baseline forecast!
   let rawIsBuy = bullPoints >= bearPoints;
-  if (runawayBearish) rawIsBuy = false;
-  else if (runawayBullish) rawIsBuy = true;
 
   // ── INSTITUTIONAL STRUCTURE & MILESTONE-DRIVEN TRADE LIFECYCLE ──
   // A setup is established from SMC/FVG confluence and pinned.
-  // It NEVER flips or resets because of a timer! Market fluctuations toward TP are protected.
+  // It NEVER flips or resets because of a timer or candle jitter! Market fluctuations toward TP are protected.
   // The lifecycle completes ONLY when:
   //   1. Take Profit TP1 is reached -> Profit banked, Stop Loss moved to Breakeven.
   //   2. Stop Loss is breached -> Controlled exit.
@@ -1079,16 +1101,18 @@ export function computeBrowserSignalAnalysis(
       (prevIsBuy && latestPrice <= prevLock.stopLoss) ||
       (!prevIsBuy && latestPrice >= prevLock.stopLoss);
 
-    // Genuine Structural Reversal: Price breaks beyond the opposing swing structure with dominant institutional score
+    // Genuine Structural Reversal (CHoCH):
+    // Requires a completed candle close beyond previous swing structure + dominant institutional score (>= 35)
+    // Intra-candle wicks or single-candle spikes NEVER trigger structural reversal!
     const confirmedCHoCHReversal =
       (prevIsBuy &&
         !rawIsBuy &&
-        latestPrice < recentSwingLow &&
-        (bearPoints - bullPoints >= 30 || smc.trendExhaustion.action === 'TAKE_PROFIT_AND_SELL')) ||
+        prevBar.close < recentSwingLow &&
+        (bearPoints - bullPoints >= 35 || smc.trendExhaustion.action === 'TAKE_PROFIT_AND_SELL')) ||
       (!prevIsBuy &&
         rawIsBuy &&
-        latestPrice > recentSwingHigh &&
-        (bullPoints - bearPoints >= 30 || smc.trendExhaustion.action === 'TAKE_PROFIT_AND_BUY'));
+        prevBar.close > recentSwingHigh &&
+        (bullPoints - bearPoints >= 35 || smc.trendExhaustion.action === 'TAKE_PROFIT_AND_BUY'));
 
     const tp1Reached =
       (prevIsBuy && latestPrice >= prevLock.tp1) ||
@@ -1208,13 +1232,12 @@ export function computeBrowserSignalAnalysis(
     principlesActive: activePrinciples.length > 0 ? activePrinciples : [smc.structureLabel, smc.dealingRange.zoneLabel],
   };
 
-  const runawayDetected = runawayBearish || runawayBullish;
-  const runawayDir = runawayBearish ? 'BEARISH' : runawayBullish ? 'BULLISH' : 'NONE';
-  const activePts = runawayBearish
-    ? Math.min(liveBarPts, net2BarPts, net3BarPts, dropFromHigh)
-    : runawayBullish
+  const momentumAligned = (isBuy && runawayBullish) || (!isBuy && runawayBearish);
+  const runawayDetected = momentumAligned;
+  const runawayDir = isBuy ? 'BULLISH' : 'BEARISH';
+  const activePts = isBuy
     ? Math.max(liveBarPts, net2BarPts, net3BarPts, surgeFromLow)
-    : net2BarPts;
+    : Math.min(liveBarPts, net2BarPts, net3BarPts, dropFromHigh);
   const intensity = Number((Math.abs(activePts) / Math.max(thresholdPts, 1e-6)).toFixed(2));
 
   const holdTotalSec = TF_HOLD_SECONDS[timeframe] || 300;
@@ -1225,15 +1248,15 @@ export function computeBrowserSignalAnalysis(
     ? `Bullish FVG $${(smc.bullishFvg?.bottom ?? recentSwingLow).toFixed(prec)}–$${(smc.bullishFvg?.top ?? entry).toFixed(prec)} → Target Supply FVG $${(smc.bearishFvg?.midpoint ?? tpLevels[0]).toFixed(prec)}`
     : `Bearish FVG $${(smc.bearishFvg?.bottom ?? entry).toFixed(prec)}–$${(smc.bearishFvg?.top ?? recentSwingHigh).toFixed(prec)} → Target Demand FVG $${(smc.bullishFvg?.midpoint ?? tpLevels[0]).toFixed(prec)}`;
 
-  const label = runawayDetected
-    ? `⚡ RUNAWAY ${runawayDir} IMPULSE (${activePts > 0 ? '+' : ''}${activePts.toFixed(prec)} pts) · ${fvgTag}`
+  const label = momentumAligned
+    ? `⚡ MOMENTUM IMPULSE ${runawayDir} (${activePts > 0 ? '+' : ''}${activePts.toFixed(prec)} pts) · ${fvgTag}`
     : `${smc.structureLabel} · ${fvgTag}`;
 
   const rationale = `[${timeframe.toUpperCase()}] [${prob}% SMC/FVG CONFLUENCE] ${label} | Take Profit TP1: $${tpLevels[0].toFixed(prec)}, Breakeven @ $${breakevenTrigger.toFixed(prec)}, Reversal Zone @ $${reversalTrigger.toFixed(prec)}.`;
 
   const runawayTrend = {
     detected: runawayDetected,
-    override_triggered: runawayDetected,
+    override_triggered: false,
     direction: runawayDir as 'BEARISH' | 'BULLISH' | 'NONE',
     points_moved: activePts,
     threshold_pts: thresholdPts,
@@ -1243,7 +1266,7 @@ export function computeBrowserSignalAnalysis(
     adverse_excursion_pts: 0,
     intensity_ratio: intensity,
     banner: runawayDetected
-      ? `⚡ RUNAWAY ${runawayDir} (${activePts.toFixed(prec)} pts vs ±${thresholdPts.toFixed(prec)} pt trigger)`
+      ? `⚡ MOMENTUM IMPULSE ${runawayDir} (${activePts > 0 ? '+' : ''}${activePts.toFixed(prec)} pts aligned with SMC structure)`
       : `${smc.structureLabel} (${smc.dealingRange.positionPct}% Range)`,
   };
 

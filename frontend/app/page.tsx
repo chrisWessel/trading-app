@@ -225,13 +225,20 @@ export default function DashboardPage() {
       }));
     };
     const onOpenAiCopilot = () => setShowAICopilot(true);
+    const onChangeSymbol = (e: any) => {
+      if (e?.detail && typeof e.detail === 'string') {
+        handleAssetSelect(e.detail);
+      }
+    };
     window.addEventListener('wessignal-live-params', onLiveParams);
     window.addEventListener('wessignal-ai-copilot-state', onAiCopilotState);
     window.addEventListener('wessignal-open-ai-copilot', onOpenAiCopilot);
+    window.addEventListener('wessignal-change-symbol', onChangeSymbol);
     return () => {
       window.removeEventListener('wessignal-live-params', onLiveParams);
       window.removeEventListener('wessignal-ai-copilot-state', onAiCopilotState);
       window.removeEventListener('wessignal-open-ai-copilot', onOpenAiCopilot);
+      window.removeEventListener('wessignal-change-symbol', onChangeSymbol);
     };
   }, []);
 
@@ -1093,6 +1100,7 @@ export default function DashboardPage() {
         isOpen={showBotWindow}
         onClose={() => setShowBotWindow(false)}
         onOpen={() => setShowBotWindow(true)}
+        onSelectSymbol={handleAssetSelect}
       />
     </div>
   );

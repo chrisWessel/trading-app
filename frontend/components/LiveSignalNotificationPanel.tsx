@@ -1838,14 +1838,14 @@ export default function LiveSignalNotificationPanel({
                   <Zap
                     className={`w-3.5 h-3.5 ${
                       analysis.runaway_trend.detected
-                        ? 'text-amber-300 animate-bounce'
+                        ? 'text-amber-300 animate-pulse'
                         : 'text-slate-400'
                     }`}
                   />
                   <span>
                     {analysis.runaway_trend.detected
-                      ? `RUNAWAY ${analysis.runaway_trend.direction} PRECEDENCE`
-                      : 'RUNAWAY TREND METER'}
+                      ? `⚡ INSTITUTIONAL MOMENTUM (${analysis.runaway_trend.direction})`
+                      : 'INSTITUTIONAL STRUCTURE SENTINEL'}
                   </span>
                 </span>
                 <span
@@ -1856,8 +1856,8 @@ export default function LiveSignalNotificationPanel({
                   }`}
                 >
                   {analysis.runaway_trend.detected
-                    ? `${analysis.runaway_trend.intensity_ratio}x TRIGGER`
-                    : 'TIMER ACTIVE'}
+                    ? `${analysis.runaway_trend.intensity_ratio}x IMPULSE`
+                    : 'STRUCTURE LOCKED'}
                 </span>
               </div>
               <div className="flex items-center justify-between text-[9px] pt-0.5 border-t border-slate-800/80">
@@ -1875,16 +1875,19 @@ export default function LiveSignalNotificationPanel({
                   </strong>
                 </span>
                 <span>
-                  Trigger [{timeframe.toUpperCase()}]:{' '}
+                  Velocity Threshold [{timeframe.toUpperCase()}]:{' '}
                   <strong className="text-amber-300">
                     ±{analysis.runaway_trend.threshold_pts.toFixed(precision)} pts
                   </strong>
                 </span>
               </div>
-              {analysis.runaway_trend.detected && (
+              {analysis.runaway_trend.detected ? (
                 <div className="text-[9px] text-amber-200 font-sans leading-tight pt-0.5">
-                  ⚡ Fast runaway move exceeded ±{analysis.runaway_trend.threshold_pts.toFixed(precision)} pts — overriding timer &amp; locking{' '}
-                  <strong>{analysis.runaway_trend.direction === 'BEARISH' ? 'SELL / BEARISH' : 'BUY / BULLISH'}</strong>!
+                  ⚡ High-velocity momentum actively aligned with institutional {analysis.runaway_trend.direction === 'BEARISH' ? 'Short' : 'Long'} order flow toward TP1. Intra-candle noise is filtered; structure remains protected!
+                </div>
+              ) : (
+                <div className="text-[9px] text-slate-400 font-sans leading-tight pt-0.5">
+                  🛡️ Forecast locked to multi-candle SMC structure. Normal intra-candle fluctuations will NOT flip the forecast — only a confirmed body close CHoCH can break structure.
                 </div>
               )}
             </div>

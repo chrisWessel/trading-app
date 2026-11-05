@@ -82,6 +82,8 @@ interface AutonomousBotLiveWindowProps {
   isOpen: boolean;
   onClose: () => void;
   onOpen: () => void;
+  initialBalance?: number;
+  onSelectSymbol?: (symbol: string) => void;
 }
 
 export default function AutonomousBotLiveWindow({
@@ -91,6 +93,8 @@ export default function AutonomousBotLiveWindow({
   isOpen,
   onClose,
   onOpen,
+  initialBalance,
+  onSelectSymbol,
 }: AutonomousBotLiveWindowProps) {
   // Autonomous Bot State — Autopilot is strictly OFF by default to prevent accidental executions
   const [autopilotEnabled, setAutopilotEnabled] = useState<boolean>(false);
@@ -103,6 +107,7 @@ export default function AutonomousBotLiveWindow({
 
   // Synced Risk Calculator & Signal State
   const [accountBalance, setAccountBalance] = useState<number>(() => {
+    if (initialBalance !== undefined && initialBalance > 0) return initialBalance;
     if (typeof window !== 'undefined') {
       const s = localStorage.getItem('wessignal_last_mt5_balance');
       if (s) {
@@ -112,6 +117,7 @@ export default function AutonomousBotLiveWindow({
     }
     return 16.72;
   });
+  const [accountLeverage, setAccountLeverage] = useState<number>(400);
   const [liveMt5Equity, setLiveMt5Equity] = useState<number | null>(null);
   const [lotSize, setLotSize] = useState<number>(0.01);
   const [riskPercent, setRiskPercent] = useState<number>(2.0);
@@ -801,6 +807,9 @@ export default function AutonomousBotLiveWindow({
           if (term?.account_equity !== undefined && Number(term.account_equity) > 0) {
             setLiveMt5Equity(Number(Number(term.account_equity).toFixed(2)));
           }
+          if (term?.account_leverage !== undefined && Number(term.account_leverage) > 0) {
+            setAccountLeverage(Number(term.account_leverage));
+          }
         }
 
         // 2. Fetch live bars & SMC/FVG analysis
@@ -1455,6 +1464,174 @@ export default function AutonomousBotLiveWindow({
               </div>
             </div>
           </div>
+
+          {/* EXNESS LEVERAGE & MARGIN SENTINEL (DYNAMIC ADVISOR) */}
+          {(() => {
+            const isGold = symbol.toUpperCase().includes('XAU') || symbol.toUpperCase().includes('GOLD');
+            const isEurUsd = symbol.toUpperCase().includes('EUR') && symbol.toUpperCase().includes('USD');
+            const isGbpUsd = symbol.toUpperCase().includes('GBP') && symbol.toUpperCase().includes('USD');
+
+            // 0.01 Lot Nominal Value
+            const nominalVal = isGold
+              ? livePrice
+              : isEurUsd
+              ? 1085
+              : isGbpUsd
+              ? 1300
+              : livePrice * 100 * lotSize;
+
+            const margin400 = Number((nominalVal / 400).toFixed(2));
+            const margin1000 = Number((nominalVal / 1000).toFixed(2));
+            const margin2000 = Number((nominalVal / 2000).toFixed(2));
+            const activeLev = accountLeverage || 400;
+            const currentReqMargin = Number((nominalVal / activeLev).toFixed(2));
+            const isMarginShort = accountBalance < currentReqMargin;
+            const shortage = Number((currentReqMargin - accountBalance).toFixed(2));
+            const freeCushion = Number((accountBalance - currentReqMargin).toFixed(2));
+
+            // Dynamic Recommended Leverage based on Balance
+            const recLev =
+              accountBalance < 25
+                ? '1:1000 or 1:2000'
+                : accountBalance < 100
+                ? '1:500 or 1:1000'
+                : '1:200 or 1:400';
+
+            return (
+              <div
+                className={`p-3 rounded-xl border transition-all ${
+                  isMarginShort
+                    ? 'bg-rose-950/40 border-rose-500/80 shadow-lg shadow-rose-950/40'
+                    : 'bg-slate-900/90 border-slate-800'
+                }`}
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2 mb-2 pb-1.5 border-b border-slate-800/80">
+                  <div className="flex items-center gap-2">
+                    <div
+                      className={`p-1.5 rounded-lg ${
+                        isMarginShort ? 'bg-rose-500/20 text-rose-300' : 'bg-emerald-500/20 text-emerald-300'
+                      }`}
+                    >
+                      <Briefcase className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <div className="text-xs font-black text-white flex items-center gap-1.5 flex-wrap">
+                        <span>EXNESS LEVERAGE &amp; MARGIN SENTINEL</span>
+                        <span
+                          className={`text-[9px] font-mono font-bold px-1.5 py-0.2 rounded border ${
+                            isMarginShort
+                              ? 'bg-rose-950 border-rose-600 text-rose-300 animate-pulse'
+                              : 'bg-emerald-950 border-emerald-700 text-emerald-300'
+                          }`}
+                        >
+                          {isMarginShort ? `SHORTAGE -$${shortage.toFixed(2)}` : `READY (+$${freeCushion.toFixed(2)} FREE)`}
+                        </span>
+                      </div>
+                      <div className="text-[10px] text-slate-300">
+                        {symbol} 0.01 Lot requires <strong className="text-white">${currentReqMargin.toFixed(2)}</strong> margin at 1:{activeLev} leverage.
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="text-right">
+                    <span className="text-[10px] text-slate-400 font-sans">
+                      Detected Leverage: <strong className="text-indigo-300 font-mono font-black">1:{activeLev}</strong>
+                    </span>
+                  </div>
+                </div>
+
+                {/* Leverage Tier Comparison Chips */}
+                <div className="grid grid-cols-3 gap-2 text-center text-[10px] font-mono mb-2">
+                  <div
+                    className={`p-1.5 rounded-lg border ${
+                      activeLev === 400
+                        ? 'bg-slate-800 border-indigo-500 text-white'
+                        : 'bg-slate-950/60 border-slate-800 text-slate-400'
+                    }`}
+                  >
+                    <div className="text-[9px] text-slate-400">1:400 (Default)</div>
+                    <div className={`font-black ${accountBalance < margin400 ? 'text-rose-400' : 'text-slate-200'}`}>
+                      ${margin400.toFixed(2)} {accountBalance < margin400 ? '❌ Short' : '✅ OK'}
+                    </div>
+                  </div>
+                  <div
+                    className={`p-1.5 rounded-lg border ${
+                      activeLev === 1000
+                        ? 'bg-emerald-950/80 border-emerald-400 text-emerald-200'
+                        : 'bg-emerald-950/30 border-emerald-800/60 text-emerald-300'
+                    }`}
+                  >
+                    <div className="text-[9px] text-emerald-400 font-bold">1:1000 (Recommended)</div>
+                    <div className="font-black text-emerald-300">
+                      ${margin1000.toFixed(2)} ✅ Ready
+                    </div>
+                  </div>
+                  <div
+                    className={`p-1.5 rounded-lg border ${
+                      activeLev === 2000
+                        ? 'bg-indigo-950/80 border-indigo-400 text-indigo-200'
+                        : 'bg-indigo-950/30 border-indigo-800/60 text-indigo-300'
+                    }`}
+                  >
+                    <div className="text-[9px] text-indigo-400 font-bold">1:2000 (Micro Max)</div>
+                    <div className="font-black text-indigo-200">
+                      ${margin2000.toFixed(2)} 🚀 Max Free
+                    </div>
+                  </div>
+                </div>
+
+                {/* Balance-Based Recommendation & Quick Action Bar */}
+                <div className="text-[10px] space-y-1.5 bg-slate-950/70 rounded-lg p-2 border border-slate-800/80">
+                  <div className="flex items-start gap-1.5 text-slate-300">
+                    <span className="text-amber-400 text-xs font-bold leading-none">💡</span>
+                    <span>
+                      For balance <strong className="text-emerald-300 font-mono">${accountBalance.toFixed(2)}</strong>, we recommend <strong className="text-amber-300">{recLev}</strong> leverage.
+                      {isMarginShort && (
+                        <span className="text-rose-300 ml-1">
+                          Exness rejected 0.01 {symbol} because ${accountBalance.toFixed(2)} is ${shortage.toFixed(2)} short of the ${currentReqMargin.toFixed(2)} margin needed at 1:{activeLev}!
+                        </span>
+                      )}
+                    </span>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-slate-800/60">
+                    {/* Option A: Direct Link to Exness Personal Area */}
+                    <a
+                      href="https://my.exness.com/pa/accounts"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="px-2.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white font-black text-[10px] rounded-lg shadow border border-indigo-400 flex items-center gap-1.5 transition"
+                      title="Open Exness Personal Area in your browser to change leverage in 2 clicks"
+                    >
+                      <ArrowUpRight className="w-3.5 h-3.5" />
+                      <span>Option A: Open Exness Account Settings (#223995620)</span>
+                    </a>
+
+                    {/* Option B: 1-Click Symbol Switch to EUR/USD */}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const targetSym = isGold ? 'EUR/USD' : 'XAU/USD';
+                        if (onSelectSymbol) onSelectSymbol(targetSym);
+                        if (typeof window !== 'undefined') {
+                          window.dispatchEvent(new CustomEvent('wessignal-change-symbol', { detail: targetSym }));
+                        }
+                        setStatusBanner(
+                          isGold
+                            ? `🔄 Switched to EUR/USD (Margin only $2.71 @ 1:400 — your $${accountBalance.toFixed(2)} balance can trade right now)!`
+                            : `🔄 Switched to XAU/USD!`
+                        );
+                      }}
+                      className="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-amber-300 hover:text-white font-black text-[10px] rounded-lg border border-slate-700 shadow flex items-center gap-1.5 transition"
+                    >
+                      <RefreshCw className="w-3.5 h-3.5" />
+                      <span>{isGold ? 'Option B: Switch to EUR/USD ($2.71 Margin — Ready Now)' : 'Switch back to XAU/USD'}</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
 
           {/* WORKER ALGORITHM (DAILY PROFIT TARGET LOCK / SENTINEL) */}
           <div
