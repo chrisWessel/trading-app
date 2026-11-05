@@ -24,6 +24,9 @@ import {
   Activity,
   Volume2,
   VolumeX,
+  Trophy,
+  Target,
+  Briefcase,
 } from 'lucide-react';
 import {
   fetchBrowserLiveBars,
@@ -65,7 +68,8 @@ export interface AIDirectiveLogItem {
     | 'LOCK_BREAKEVEN'
     | 'TAKE_PROFIT'
     | 'STOP_REVERSE'
-    | 'HUMAN_INTERVENE';
+    | 'HUMAN_INTERVENE'
+    | 'GOAL_ACHIEVED';
   headline: string;
   detail: string;
   pnlDollars?: number;
@@ -116,15 +120,97 @@ export default function AutonomousBotLiveWindow({
   const [signalConfidence, setSignalConfidence] = useState<number>(93);
   const [smcSummary, setSmcSummary] = useState<SMCPrinciplesSummary | null>(null);
 
-  // Active MT5 / Mimic Trade State
+  // Worker Algorithm: Daily Profit Target Sentinel State
+  const getTodayDateKey = (): string => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  };
+
+  const [workerGoalEnabled, setWorkerGoalEnabled] = useState<boolean>(() => {
+    if (typeof window !== 'undefined') {
+      const v = localStorage.getItem('wessignal_worker_goal_enabled');
+      return v === null ? true : v === 'true';
+    }
+    return true;
+  });
+
+  const [dailyProfitTarget, setDailyProfitTarget] = useState<number>(() => {
+    if (typeof window !== 'undefined') {
+      const v = localStorage.getItem('wessignal_daily_profit_target');
+      if (v) {
+        const num = parseFloat(v);
+        if (!isNaN(num) && num > 0) return num;
+      }
+    }
+    return 10.0; // Default $10.00 daily worker quota
+  });
+
+  const [customTargetInput, setCustomTargetInput] = useState<string>(() => {
+    if (typeof window !== 'undefined') {
+      const v = localStorage.getItem('wessignal_daily_profit_target');
+      if (v) return v;
+    }
+    return '10';
+  });
+
+  // Active MT5 / Mimic Trade State — synchronized per day
   const [activeTrade, setActiveTrade] = useState<ActiveBotTrade | null>(null);
-  const [closedTradesCount, setClosedTradesCount] = useState<number>(0);
-  const [winsCount, setWinsCount] = useState<number>(0);
-  const [sessionRealizedPnl, setSessionRealizedPnl] = useState<number>(0);
+  const [closedTradesCount, setClosedTradesCount] = useState<number>(() => {
+    if (typeof window !== 'undefined') {
+      if (localStorage.getItem('wessignal_session_profit_date') === getTodayDateKey()) {
+        const c = localStorage.getItem('wessignal_session_closed_trades');
+        if (c) return parseInt(c, 10) || 0;
+      }
+    }
+    return 0;
+  });
+  const [winsCount, setWinsCount] = useState<number>(() => {
+    if (typeof window !== 'undefined') {
+      if (localStorage.getItem('wessignal_session_profit_date') === getTodayDateKey()) {
+        const w = localStorage.getItem('wessignal_session_wins');
+        if (w) return parseInt(w, 10) || 0;
+      }
+    }
+    return 0;
+  });
+  const [sessionRealizedPnl, setSessionRealizedPnl] = useState<number>(() => {
+    if (typeof window !== 'undefined') {
+      if (localStorage.getItem('wessignal_session_profit_date') === getTodayDateKey()) {
+        const savedPnl = localStorage.getItem('wessignal_session_realized_pnl');
+        if (savedPnl) {
+          const num = parseFloat(savedPnl);
+          if (!isNaN(num)) return num;
+        }
+      }
+    }
+    return 0;
+  });
+
+  const isDailyGoalAchieved = workerGoalEnabled && dailyProfitTarget > 0 && sessionRealizedPnl >= dailyProfitTarget;
+
+  const saveSessionProfit = (pnl: number, closed?: number, wins?: number) => {
+    if (typeof window !== 'undefined') {
+      const today = getTodayDateKey();
+      localStorage.setItem('wessignal_session_profit_date', today);
+      localStorage.setItem('wessignal_session_realized_pnl', String(pnl));
+      if (closed !== undefined) localStorage.setItem('wessignal_session_closed_trades', String(closed));
+      if (wins !== undefined) localStorage.setItem('wessignal_session_wins', String(wins));
+      window.dispatchEvent(
+        new CustomEvent('wessignal-worker-goal-update', {
+          detail: {
+            workerGoalEnabled,
+            dailyProfitTarget,
+            sessionRealizedPnl: pnl,
+            isGoalAchieved: workerGoalEnabled && dailyProfitTarget > 0 && pnl >= dailyProfitTarget,
+          },
+        })
+      );
+    }
+  };
 
   // Live AI Directive Brain Stream ("AI telling us what to do & doing it automatically")
   const [aiCurrentCommand, setAiCurrentCommand] = useState<{
-    badge: 'HOLD / RIDE TREND' | 'WICK SHIELD ACTIVE' | 'LOCKING BREAKEVEN' | 'TAKE MONEY NOW' | 'STOP & EXIT NOW' | 'SCANNING ENTRY';
+    badge: 'HOLD / RIDE TREND' | 'WICK SHIELD ACTIVE' | 'LOCKING BREAKEVEN' | 'TAKE MONEY NOW' | 'STOP & EXIT NOW' | 'SCANNING ENTRY' | 'DAILY GOAL MET';
     color: 'emerald' | 'blue' | 'amber' | 'rose';
     title: string;
     explanation: string;
@@ -214,6 +300,81 @@ export default function AutonomousBotLiveWindow({
     },
     [soundEnabled]
   );
+
+  const playVictoryChime = useCallback(() => {
+    if (!soundEnabled || typeof window === 'undefined') return;
+    try {
+      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+      if (!AudioCtx) return;
+      const ctx = new AudioCtx();
+      const notes = [523.25, 659.25, 783.99, 1046.50]; // Celebratory C Major Arpeggio
+      notes.forEach((freq, idx) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'triangle';
+        osc.frequency.setValueAtTime(freq, ctx.currentTime + idx * 0.12);
+        gain.gain.setValueAtTime(0.08, ctx.currentTime + idx * 0.12);
+        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + idx * 0.12 + 0.35);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(ctx.currentTime + idx * 0.12);
+        osc.stop(ctx.currentTime + idx * 0.12 + 0.35);
+      });
+    } catch {}
+  }, [soundEnabled]);
+
+  const handleSelectPresetTarget = (targetVal: number) => {
+    setDailyProfitTarget(targetVal);
+    setCustomTargetInput(String(targetVal));
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('wessignal_daily_profit_target', String(targetVal));
+      window.dispatchEvent(
+        new CustomEvent('wessignal-worker-goal-update', {
+          detail: {
+            workerGoalEnabled,
+            dailyProfitTarget: targetVal,
+            sessionRealizedPnl,
+            isGoalAchieved: workerGoalEnabled && targetVal > 0 && sessionRealizedPnl >= targetVal,
+          },
+        })
+      );
+    }
+  };
+
+  const handleCustomTargetChange = (raw: string) => {
+    const clean = raw.replace(/[^0-9.]/g, '');
+    setCustomTargetInput(clean);
+    const num = parseFloat(clean);
+    if (!isNaN(num) && num > 0) {
+      setDailyProfitTarget(num);
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('wessignal_daily_profit_target', String(num));
+        window.dispatchEvent(
+          new CustomEvent('wessignal-worker-goal-update', {
+            detail: {
+              workerGoalEnabled,
+              dailyProfitTarget: num,
+              sessionRealizedPnl,
+              isGoalAchieved: workerGoalEnabled && num > 0 && sessionRealizedPnl >= num,
+            },
+          })
+        );
+      }
+    }
+  };
+
+  const handleCustomTargetBlur = () => {
+    const num = parseFloat(customTargetInput);
+    if (isNaN(num) || num <= 0) {
+      setCustomTargetInput(String(dailyProfitTarget));
+    } else {
+      setDailyProfitTarget(num);
+      setCustomTargetInput(String(num));
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('wessignal_daily_profit_target', String(num));
+      }
+    }
+  };
 
   const appendDirectiveLog = useCallback(
     (
@@ -440,16 +601,33 @@ export default function AutonomousBotLiveWindow({
 
         if (current) {
           const pnl = current.floatingPnlDollars;
-          setClosedTradesCount((c) => c + 1);
-          if (pnl >= 0) setWinsCount((w) => w + 1);
-          setSessionRealizedPnl((tot) => Number((tot + pnl).toFixed(2)));
+          const newRealized = Number((sessionRealizedPnl + pnl).toFixed(2));
+          const newClosed = closedTradesCount + 1;
+          const newWins = pnl >= 0 ? winsCount + 1 : winsCount;
+          setClosedTradesCount(newClosed);
+          if (pnl >= 0) setWinsCount(newWins);
+          setSessionRealizedPnl(newRealized);
           setAccountBalance((prev) => Number((prev + pnl).toFixed(2)));
+          saveSessionProfit(newRealized, newClosed, newWins);
+
           setActiveTrade(null);
           playBeep(pnl >= 0 ? 960 : 480, pnl < 0);
 
           if (reason === 'STOP_REVERSE') {
             // Immediate eligibility to catch the new reversed trend direction
             lastAutoEntryMsRef.current = 0;
+          }
+
+          // Check if Worker Daily Profit Target was reached!
+          if (workerGoalEnabled && dailyProfitTarget > 0 && newRealized >= dailyProfitTarget) {
+            setAutopilotEnabled(false);
+            autopilotRef.current = false;
+            playVictoryChime();
+            const goalTitle = `🏆 DAILY GOAL ACHIEVED: Banked +$${newRealized.toFixed(2)} (Target: $${dailyProfitTarget.toFixed(2)})`;
+            const goalExpl = `Daily profit target reached! The Worker Bot has finished its job for today and safely shut down to protect your banked profits.`;
+            setStatusBanner(`${goalTitle} — ${goalExpl}`);
+            appendDirectiveLog('GOAL_ACHIEVED', goalTitle, goalExpl, newRealized);
+            return;
           }
 
           const title =
@@ -468,7 +646,17 @@ export default function AutonomousBotLiveWindow({
         setIsExecutingAction(false);
       }
     },
-    [symbol, playBeep, appendDirectiveLog]
+    [
+      symbol,
+      sessionRealizedPnl,
+      closedTradesCount,
+      winsCount,
+      workerGoalEnabled,
+      dailyProfitTarget,
+      playBeep,
+      playVictoryChime,
+      appendDirectiveLog,
+    ]
   );
 
   // Move Open Position Stop Loss to Breakeven (MT5 + Live Mimic)
@@ -841,6 +1029,17 @@ export default function AutonomousBotLiveWindow({
             });
           }
         } else {
+          // Check if Worker Daily Profit Target has already been reached
+          if (workerGoalEnabled && dailyProfitTarget > 0 && sessionRealizedPnl >= dailyProfitTarget) {
+            setAiCurrentCommand({
+              badge: 'DAILY GOAL MET',
+              color: 'emerald',
+              title: `🏆 DAILY WORKER GOAL ACHIEVED: +$${sessionRealizedPnl.toFixed(2)} / $${dailyProfitTarget.toFixed(2)}`,
+              explanation: `Mission complete for today! Banked +$${sessionRealizedPnl.toFixed(2)}. The Worker Bot has safely shut down to protect your banked profits while you are away. Have a great day at work!`,
+            });
+            return;
+          }
+
           // No open trade — evaluate whether AI Autopilot should automatically enter
           setAiCurrentCommand({
             badge: 'SCANNING ENTRY',
@@ -851,6 +1050,7 @@ export default function AutonomousBotLiveWindow({
 
           if (
             autopilotRef.current &&
+            (!workerGoalEnabled || dailyProfitTarget <= 0 || sessionRealizedPnl < dailyProfitTarget) &&
             (analysis.probability || 90) >= 90 &&
             nowMs - lastAutoEntryMsRef.current >= 45000
           ) {
@@ -1116,7 +1316,9 @@ export default function AutonomousBotLiveWindow({
                     sessionRealizedPnl >= 0 ? 'text-emerald-400' : 'text-rose-400'
                   }`}
                 >
-                  {sessionRealizedPnl >= 0 ? '+' : ''}${sessionRealizedPnl.toFixed(2)}
+                  {sessionRealizedPnl >= 0
+                    ? `+$${sessionRealizedPnl.toFixed(2)}`
+                    : `-$${Math.abs(sessionRealizedPnl).toFixed(2)}`}
                 </div>
                 <div className="text-[10px] text-slate-400 font-sans flex items-center gap-1.5 flex-wrap">
                   <span>
@@ -1139,6 +1341,220 @@ export default function AutonomousBotLiveWindow({
                   {closedTradesCount > 0
                     ? `${Math.round((winsCount / closedTradesCount) * 100)}% Win Rate`
                     : 'Anti-Wick Shield Ready'}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* WORKER ALGORITHM (DAILY PROFIT TARGET LOCK / SENTINEL) */}
+          <div
+            className={`p-3.5 rounded-xl border transition-all ${
+              isDailyGoalAchieved
+                ? 'bg-gradient-to-r from-emerald-950/95 via-teal-950/90 to-slate-900 border-emerald-400 shadow-xl shadow-emerald-950/60 ring-1 ring-emerald-400/50'
+                : 'bg-slate-900/95 border-indigo-700/80 shadow-md'
+            }`}
+          >
+            <div className="flex flex-wrap items-center justify-between gap-2 mb-2.5 pb-2 border-b border-slate-800/80">
+              <div className="flex items-center gap-2">
+                <div
+                  className={`p-1.5 rounded-lg ${
+                    isDailyGoalAchieved ? 'bg-amber-500/20 text-amber-300' : 'bg-indigo-600/20 text-indigo-300'
+                  }`}
+                >
+                  <Trophy className="w-4 h-4 text-amber-400" />
+                </div>
+                <div>
+                  <div className="text-xs font-black text-white flex items-center gap-1.5 flex-wrap">
+                    <span>WORKER ALGORITHM (DAILY PROFIT TARGET LOCK)</span>
+                    <span className="text-[9px] font-mono font-bold px-1.5 py-0.2 rounded bg-indigo-950 border border-indigo-800 text-indigo-300">
+                      AUTO-SHUTDOWN SENTINEL
+                    </span>
+                  </div>
+                  <div className="text-[10px] text-slate-300">
+                    Set your profit quota. Once reached, the bot automatically parks itself for the day so you can leave for work without watching the screen.
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const next = !workerGoalEnabled;
+                    setWorkerGoalEnabled(next);
+                    if (typeof window !== 'undefined') {
+                      localStorage.setItem('wessignal_worker_goal_enabled', String(next));
+                    }
+                  }}
+                  className={`px-2.5 py-1 rounded-lg text-[10px] font-black border transition flex items-center gap-1 ${
+                    workerGoalEnabled
+                      ? 'bg-emerald-600/30 border-emerald-400 text-emerald-200'
+                      : 'bg-slate-800 border-slate-700 text-slate-400'
+                  }`}
+                >
+                  <CheckCircle2 className="w-3 h-3" />
+                  <span>{workerGoalEnabled ? 'WORKER QUOTA: ACTIVE' : 'WORKER QUOTA: OFF'}</span>
+                </button>
+
+                {isDailyGoalAchieved && (
+                  <span className="px-2 py-0.5 rounded-md bg-emerald-500 text-slate-950 text-[10px] font-black font-mono animate-pulse">
+                    🏆 GOAL MET · SHUTDOWN ACTIVE
+                  </span>
+                )}
+              </div>
+            </div>
+
+            {/* Target Preset Selector & Progress Meter */}
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 items-center">
+              {/* Left: Preset Selector */}
+              <div className="lg:col-span-5 space-y-1">
+                <div className="flex items-center justify-between text-[10px]">
+                  <label className="text-slate-400 font-bold flex items-center gap-1">
+                    <Target className="w-3 h-3 text-emerald-400" />
+                    <span>Daily Target Goal ($):</span>
+                  </label>
+                  <span className="text-emerald-300 font-mono font-bold">
+                    Target: ${dailyProfitTarget.toFixed(2)} / day
+                  </span>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-1">
+                  {[5, 10, 20, 30, 50, 100].map((preset) => (
+                    <button
+                      key={preset}
+                      type="button"
+                      onClick={() => handleSelectPresetTarget(preset)}
+                      className={`px-2 py-1 rounded text-[10px] font-mono font-bold border transition ${
+                        dailyProfitTarget === preset
+                          ? 'bg-emerald-600 border-emerald-300 text-white shadow'
+                          : 'bg-slate-950 border-slate-800 text-slate-300 hover:border-slate-600'
+                      }`}
+                    >
+                      ${preset}
+                    </button>
+                  ))}
+
+                  <div className="flex items-center gap-1 bg-slate-950 border border-slate-700 rounded px-1.5 py-0.5">
+                    <span className="text-[10px] text-slate-400 font-mono">$</span>
+                    <input
+                      type="text"
+                      inputMode="decimal"
+                      value={customTargetInput}
+                      onChange={(e) => handleCustomTargetChange(e.target.value)}
+                      onBlur={handleCustomTargetBlur}
+                      className="w-12 bg-transparent text-white font-mono text-[10.5px] font-bold focus:outline-none"
+                      placeholder="10"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Right: Progress Meter & Status */}
+              <div className="lg:col-span-7 bg-slate-950/80 border border-slate-800/90 rounded-lg p-2.5 space-y-1.5 font-mono">
+                <div className="flex justify-between items-center text-[10.5px]">
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-slate-400 font-sans text-[10px]">Today&apos;s Banked:</span>
+                    <span
+                      className={`font-black ${
+                        sessionRealizedPnl >= 0 ? 'text-emerald-300' : 'text-rose-400'
+                      }`}
+                    >
+                      {sessionRealizedPnl >= 0
+                        ? `+$${sessionRealizedPnl.toFixed(2)}`
+                        : `-$${Math.abs(sessionRealizedPnl).toFixed(2)}`}
+                    </span>
+                    <span className="text-slate-500">/</span>
+                    <span className="text-white font-bold">${dailyProfitTarget.toFixed(2)}</span>
+                  </div>
+
+                  <div className="font-bold text-[10px]">
+                    {isDailyGoalAchieved ? (
+                      <span className="text-emerald-300 flex items-center gap-1">
+                        <span>100% COMPLETED</span>
+                      </span>
+                    ) : (
+                      <span className="text-indigo-300">
+                        {Math.min(
+                          100,
+                          Math.max(
+                            0,
+                            Math.round(
+                              (sessionRealizedPnl / Math.max(1, dailyProfitTarget)) * 100
+                            )
+                          )
+                        )}
+                        % Progress
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                {/* Progress Bar */}
+                <div className="w-full h-2.5 bg-slate-900 rounded-full overflow-hidden border border-slate-800 relative">
+                  <div
+                    className={`h-full transition-all duration-500 ${
+                      isDailyGoalAchieved
+                        ? 'bg-gradient-to-r from-emerald-500 via-teal-400 to-amber-300 animate-pulse'
+                        : sessionRealizedPnl > 0
+                        ? 'bg-gradient-to-r from-blue-600 via-teal-500 to-emerald-400'
+                        : 'bg-slate-700'
+                    }`}
+                    style={{
+                      width: `${Math.min(
+                        100,
+                        Math.max(
+                          0,
+                          (sessionRealizedPnl / Math.max(0.01, dailyProfitTarget)) * 100
+                        )
+                      )}%`,
+                    }}
+                  />
+                </div>
+
+                <div className="flex justify-between items-center text-[9px] text-slate-400 font-sans flex-wrap gap-1">
+                  {isDailyGoalAchieved ? (
+                    <span className="text-emerald-300 font-bold">
+                      🎉 Worker mission complete! Autopilot paused to protect your $
+                      {sessionRealizedPnl.toFixed(2)} profit.
+                    </span>
+                  ) : (
+                    <span>
+                      {sessionRealizedPnl >= 0
+                        ? `+$${Math.max(0, dailyProfitTarget - sessionRealizedPnl).toFixed(2)} left to reach today's target`
+                        : `Recovering drawdown: $${dailyProfitTarget.toFixed(2)} target`}
+                    </span>
+                  )}
+
+                  {isDailyGoalAchieved && (
+                    <div className="flex gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const nextTarget = dailyProfitTarget + 20;
+                          handleSelectPresetTarget(nextTarget);
+                          setAutopilotEnabled(true);
+                          autopilotRef.current = true;
+                          setStatusBanner(
+                            `🚀 Target increased to $${nextTarget.toFixed(2)} — Worker Bot resumed!`
+                          );
+                        }}
+                        className="text-[9px] bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-2 py-0.5 rounded transition"
+                      >
+                        + $20 More &amp; Resume
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSessionRealizedPnl(0);
+                          saveSessionProfit(0, 0, 0);
+                          setStatusBanner('🔄 Session quota reset — Worker Bot ready!');
+                        }}
+                        className="text-[9px] bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold px-2 py-0.5 rounded transition"
+                      >
+                        Reset Day
+                      </button>
+                    </div>
+                  )}
                 </div>
               </div>
             </div>

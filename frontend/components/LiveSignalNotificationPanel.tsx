@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useEffect, useState, useRef } from 'react';
-import { Bell, Zap, ArrowUpRight, ArrowDownRight, Volume2, VolumeX, Shield, Target, Play, Clock, Navigation, Square, XCircle, Bot, Server } from 'lucide-react';
+import { Bell, Zap, ArrowUpRight, ArrowDownRight, Volume2, VolumeX, Shield, Target, Play, Clock, Navigation, Square, XCircle, Bot, Server, Trophy } from 'lucide-react';
 import { API_BASE_URL } from '@/lib/apiConfig';
 import { fetchWithFastTimeout, fetchBrowserLiveBars, computeBrowserSignalAnalysis, calculateRiskBasedLevels } from '@/lib/browserFallbackEngine';
 
@@ -209,6 +209,41 @@ export default function LiveSignalNotificationPanel({
     message?: string;
   } | null>(null);
   const [mt5OrderReceipt, setMt5OrderReceipt] = useState<any | null>(null);
+
+  // Worker Algorithm State Synchronization
+  const [workerDailyTarget, setWorkerDailyTarget] = useState<number>(() => {
+    if (typeof window !== 'undefined') {
+      const v = localStorage.getItem('wessignal_daily_profit_target');
+      if (v) {
+        const num = parseFloat(v);
+        if (!isNaN(num) && num > 0) return num;
+      }
+    }
+    return 10.0;
+  });
+  const [workerSessionProfit, setWorkerSessionProfit] = useState<number>(() => {
+    if (typeof window !== 'undefined') {
+      const savedPnl = localStorage.getItem('wessignal_session_realized_pnl');
+      if (savedPnl) {
+        const num = parseFloat(savedPnl);
+        if (!isNaN(num)) return num;
+      }
+    }
+    return 0;
+  });
+  const [workerGoalMet, setWorkerGoalMet] = useState<boolean>(false);
+
+  useEffect(() => {
+    const onWorkerUpdate = (e: Event) => {
+      const d = (e as CustomEvent)?.detail;
+      if (!d) return;
+      if (typeof d.dailyProfitTarget === 'number') setWorkerDailyTarget(d.dailyProfitTarget);
+      if (typeof d.sessionRealizedPnl === 'number') setWorkerSessionProfit(d.sessionRealizedPnl);
+      if (typeof d.isGoalAchieved === 'boolean') setWorkerGoalMet(d.isGoalAchieved);
+    };
+    window.addEventListener('wessignal-worker-goal-update', onWorkerUpdate);
+    return () => window.removeEventListener('wessignal-worker-goal-update', onWorkerUpdate);
+  }, []);
 
   const MT5_LOCAL_TOKEN = 'wessignal_mt5_9f8e7d6c5b4a3f2e1d0c9b8a7f6e5d4c3b2a1f0e9d8c7b6a5f4e3d2c1b0a';
 
@@ -1250,29 +1285,58 @@ export default function LiveSignalNotificationPanel({
                 MT5 Auto-Bridge ({symbol})
               </span>
             </div>
-            <button
-              type="button"
-              onClick={() => {
-                const next = !autoBotEnabled;
-                setAutoBotEnabled(next);
-                if (next && typeof window !== 'undefined') {
-                  window.dispatchEvent(
-                    new CustomEvent('wessignal-open-bot-window', {
-                      detail: { enableAutopilot: true },
-                    })
-                  );
-                }
-              }}
-              className={`text-[9px] font-mono px-2 py-0.5 rounded border font-extrabold flex items-center gap-1 transition ${
-                autoBotEnabled
-                  ? 'bg-emerald-600 border-emerald-300 text-white animate-pulse'
-                  : 'bg-indigo-900/90 border-indigo-600 text-indigo-100 hover:bg-indigo-800'
-              }`}
-              title="Turns on Full AI Autopilot and opens the Live Bot & AI Commander Window"
-            >
-              <Bot className="w-3 h-3" />
-              <span>{autoBotEnabled ? 'AUTO-BOT: ON (AUTOPILOT)' : 'AUTO-BOT: MANUAL'}</span>
-            </button>
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <div
+                className={`text-[8.5px] font-mono px-2 py-0.5 rounded border flex items-center gap-1 ${
+                  workerGoalMet
+                    ? 'bg-amber-950/80 border-amber-400 text-amber-300 font-bold animate-pulse'
+                    : 'bg-slate-900 border-slate-700 text-slate-300'
+                }`}
+                title="Daily Worker Target quota tracking"
+              >
+                <Trophy className="w-2.5 h-2.5 text-amber-400" />
+                <span>Goal: ${workerDailyTarget.toFixed(0)}</span>
+                <span className="text-slate-500">·</span>
+                <span className={workerSessionProfit >= 0 ? 'text-emerald-400 font-bold' : 'text-rose-400 font-bold'}>
+                  {workerSessionProfit >= 0 ? `+$${workerSessionProfit.toFixed(2)}` : `-$${Math.abs(workerSessionProfit).toFixed(2)}`}
+                </span>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  const next = !autoBotEnabled;
+                  setAutoBotEnabled(next);
+                  if (next && typeof window !== 'undefined') {
+                    window.dispatchEvent(
+                      new CustomEvent('wessignal-open-bot-window', {
+                        detail: { enableAutopilot: true },
+                      })
+                    );
+                  }
+                }}
+                className={`text-[9px] font-mono px-2 py-0.5 rounded border font-extrabold flex items-center gap-1 transition ${
+                  workerGoalMet
+                    ? 'bg-amber-600 border-amber-300 text-white shadow-lg'
+                    : autoBotEnabled
+                    ? 'bg-emerald-600 border-emerald-300 text-white animate-pulse'
+                    : 'bg-indigo-900/90 border-indigo-600 text-indigo-100 hover:bg-indigo-800'
+                }`}
+                title="Turns on Full AI Autopilot and opens the Live Bot & AI Commander Window"
+              >
+                {workerGoalMet ? (
+                  <>
+                    <Trophy className="w-3 h-3 text-amber-200" />
+                    <span>PARKED: GOAL MET</span>
+                  </>
+                ) : (
+                  <>
+                    <Bot className="w-3 h-3" />
+                    <span>{autoBotEnabled ? 'AUTO-BOT: ON' : 'AUTO-BOT: MANUAL'}</span>
+                  </>
+                )}
+              </button>
+            </div>
           </div>
 
           {/* Dynamic Risk Calculator & Account Balance Stop-Loss Sizer (Always Visible) */}
