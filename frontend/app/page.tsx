@@ -17,7 +17,7 @@ import PositionSizingGuide from '@/components/PositionSizingGuide';
 import TrendCandlePanel from '@/components/TrendCandlePanel';
 import AITradingCopilotModal from '@/components/AITradingCopilotModal';
 import AutonomousBotLiveWindow from '@/components/AutonomousBotLiveWindow';
-import { Activity, ShieldCheck, Cpu, Radio, Coins, Search, Globe, Eye, Monitor, Calculator, Sparkles, Zap, Play, ArrowUpRight, ArrowDownRight, Square, XCircle, Bot, Bell } from 'lucide-react';
+import { Activity, ShieldCheck, Cpu, Radio, Coins, Search, Globe, Eye, Monitor, Calculator, Sparkles, Zap, Play, ArrowUpRight, ArrowDownRight, Square, XCircle, Bot, Bell, Server } from 'lucide-react';
 
 interface AssetOption {
   symbol: string;
@@ -91,8 +91,62 @@ export default function DashboardPage() {
   const [topMt5Ordering, setTopMt5Ordering] = useState<boolean>(false);
   const [topMt5Cancelling, setTopMt5Cancelling] = useState<boolean>(false);
   const [topMt5Stopping, setTopMt5Stopping] = useState<boolean>(false);
+  const [topMt5StartingServer, setTopMt5StartingServer] = useState<boolean>(false);
+  const [topBridgeOnline, setTopBridgeOnline] = useState<boolean>(false);
   const [topMt5Status, setTopMt5Status] = useState<string>('MT5 Bridge Ready (Auto-Stop SL/TP Active)');
   const [topMt5Receipt, setTopMt5Receipt] = useState<any | null>(null);
+
+  // Poll bridge health on mount to show instant online status
+  useEffect(() => {
+    let mounted = true;
+    const checkBridge = async () => {
+      try {
+        const res = await fetch('http://127.0.0.1:8001/health', {
+          headers: { Authorization: `Bearer ${MT5_LOCAL_TOKEN}` },
+        });
+        if (res.ok) {
+          const d = await res.json();
+          if (mounted && d?.bridge === 'online') {
+            setTopBridgeOnline(true);
+            const term = d?.mt5_terminal;
+            if (term?.account_login) {
+              setTopMt5Status(`✅ Port 8001 Online · ${term?.terminal_name || 'MT5'} (#${term.account_login}) · Bal: $${term?.account_balance || '0.00'}`);
+            }
+          }
+        }
+      } catch {}
+    };
+    checkBridge();
+    const interval = setInterval(checkBridge, 4000);
+    return () => {
+      mounted = false;
+      clearInterval(interval);
+    };
+  }, []);
+
+  const handleTopStartBridge = async () => {
+    setTopMt5StartingServer(true);
+    setTopMt5Status('🚀 Starting MT5 Bridge Server on port 8001...');
+    try {
+      const res = await fetch('/api/mt5', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: 'start_server' }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (data?.bridge === 'online' || data?.status === 'online') {
+        setTopBridgeOnline(true);
+        const term = data?.mt5_terminal;
+        setTopMt5Status(`✅ Port 8001 LIVE! ${term?.terminal_name || 'MT5'} (${term?.account_server || 'Connected'}) · Bal: $${term?.account_balance || '0.00'}`);
+      } else {
+        setTopMt5Status(data?.message || data?.error || '⚠️ Could not start port 8001 automatically. Run start_bridge.bat.');
+      }
+    } catch (err: any) {
+      setTopMt5Status(`⚠️ Start error: ${err?.message || 'Check terminal'}`);
+    } finally {
+      setTopMt5StartingServer(false);
+    }
+  };
 
   // Sync Top Command Bar direction & Risk-Calculated SL/TP with the live Signal Navigator
   useEffect(() => {
@@ -134,8 +188,19 @@ export default function DashboardPage() {
 
   const handleTopExecuteSync = async () => {
     setTopMt5Syncing(true);
-    setTopMt5Status('1. Starting Cloudflare Tunnel & Pushing new URL to GitHub/Vercel...');
+    setTopMt5Status('1. Starting Bridge / Cloudflare Tunnel & Pushing URL to GitHub/Vercel...');
     try {
+      // 0. If local port 8001 is not online yet, boot it first
+      if (!topBridgeOnline) {
+        try {
+          await fetch('/api/mt5', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ mode: 'start_server' }),
+          });
+        } catch {}
+      }
+
       let json: any = null;
       try {
         const localRes = await fetch('http://127.0.0.1:8001/bridge/execute-sync', {
@@ -712,8 +777,29 @@ export default function DashboardPage() {
             </span>
           </div>
 
-          {/* THE 4 CORE BUTTONS: 1. EXECUTE | 2. PLACE ORDER | 3. CANCEL/CLOSE | 4. STOP BOT */}
+          {/* THE 5 CORE BUTTONS: 0. START SERVER | 1. EXECUTE | 2. PLACE ORDER | 3. CANCEL/CLOSE | 4. STOP BOT */}
           <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              disabled={topMt5StartingServer}
+              onClick={handleTopStartBridge}
+              className={`px-3.5 py-2 text-white text-xs font-black rounded-lg shadow-lg border transition flex items-center gap-1.5 font-mono ${
+                topBridgeOnline
+                  ? 'bg-emerald-950/80 hover:bg-emerald-900 border-emerald-500/80 text-emerald-200'
+                  : 'bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 border-emerald-300 shadow-emerald-900/40 animate-pulse'
+              } disabled:opacity-60`}
+              title="Starts or verifies the local MT5 execution bridge server on port 8001"
+            >
+              <Server className={`w-4 h-4 ${topMt5StartingServer ? 'animate-spin' : ''}`} />
+              <span>
+                {topMt5StartingServer
+                  ? 'Starting Port 8001...'
+                  : topBridgeOnline
+                  ? 'PORT 8001: ONLINE'
+                  : '0. START SERVER (Port 8001)'}
+              </span>
+            </button>
+
             <button
               type="button"
               disabled={topMt5Syncing}

@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useEffect, useState, useRef } from 'react';
-import { Bell, Zap, ArrowUpRight, ArrowDownRight, Volume2, VolumeX, Shield, Target, Play, Clock, Navigation, Square, XCircle, Bot } from 'lucide-react';
+import { Bell, Zap, ArrowUpRight, ArrowDownRight, Volume2, VolumeX, Shield, Target, Play, Clock, Navigation, Square, XCircle, Bot, Server } from 'lucide-react';
 import { API_BASE_URL } from '@/lib/apiConfig';
 import { fetchWithFastTimeout, fetchBrowserLiveBars, computeBrowserSignalAnalysis, calculateRiskBasedLevels } from '@/lib/browserFallbackEngine';
 
@@ -265,6 +265,50 @@ export default function LiveSignalNotificationPanel({
     const interval = setInterval(checkMt5BridgeHealth, 3000);
     return () => clearInterval(interval);
   }, []);
+
+  const [startingBridgeServer, setStartingBridgeServer] = useState<boolean>(false);
+
+  // BUTTON 0: Start Bridge Server (Port 8001)
+  const handleStartBridgeServer = async () => {
+    setStartingBridgeServer(true);
+    try {
+      const res = await fetchWithFastTimeout('/api/mt5', 12000, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: 'start_server' }),
+      });
+      const data = await res?.json().catch(() => ({}));
+      if (data?.bridge === 'online' || data?.status === 'online') {
+        const term = data?.mt5_terminal || {};
+        setMt5BridgeState((prev) => ({
+          online: true,
+          botArmed: true,
+          tunnelUrl: data?.tunnel_url || prev?.tunnelUrl || '',
+          accountLogin: term.account_login,
+          accountServer: term.account_server,
+          accountBalance: term.account_balance,
+          terminalName: term.terminal_name,
+          gitSynced: prev?.gitSynced,
+          message: `✅ Port 8001 LIVE! ${term.terminal_name || 'MT5'} (#${term.account_login || ''}) · Bal: $${term.account_balance || '0.00'}`,
+        }));
+      } else {
+        setMt5BridgeState((prev) => ({
+          online: false,
+          tunnelUrl: prev?.tunnelUrl || '',
+          message: data?.message || data?.error || '⚠️ Could not start port 8001 automatically. Run start_bridge.bat.',
+        }));
+      }
+    } catch (e: any) {
+      setMt5BridgeState((prev) => ({
+        online: false,
+        tunnelUrl: prev?.tunnelUrl || '',
+        message: `⚠️ Start error: ${e?.message}`,
+      }));
+    } finally {
+      setStartingBridgeServer(false);
+      checkMt5BridgeHealth();
+    }
+  };
 
   // Helper to resolve active tunnel URL in browser
   const getBrowserTunnelUrl = async (): Promise<string> => {
@@ -1360,6 +1404,28 @@ export default function LiveSignalNotificationPanel({
               {mt5BridgeState.message}
             </div>
           )}
+
+          {/* BUTTON 0: START SERVER (PORT 8001) */}
+          <button
+            type="button"
+            disabled={startingBridgeServer}
+            onClick={handleStartBridgeServer}
+            className={`w-full py-2 px-3 text-[10.5px] font-black rounded-lg shadow-lg border transition flex items-center justify-center gap-1.5 font-mono ${
+              mt5BridgeState?.online
+                ? 'bg-emerald-950/80 border-emerald-500/80 text-emerald-300'
+                : 'bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 border-emerald-300 text-white animate-pulse'
+            } disabled:opacity-60`}
+            title="Starts or verifies the local MT5 execution bridge server on port 8001"
+          >
+            <Server className={`w-3.5 h-3.5 ${startingBridgeServer ? 'animate-spin' : ''}`} />
+            <span>
+              {startingBridgeServer
+                ? 'Starting Port 8001...'
+                : mt5BridgeState?.online
+                ? '✅ PORT 8001: ONLINE (CONNECTED)'
+                : '0. START SERVER (Port 8001)'}
+            </span>
+          </button>
 
           {/* BUTTON 1: EXECUTE (Start Cloudflare Tunnel + Push New URL to GitHub & Vercel) */}
           <button

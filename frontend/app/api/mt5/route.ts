@@ -24,45 +24,86 @@ async function fetchWithTimeout(url: string, init: RequestInit = {}, timeoutMs =
   }
 }
 
+function findRepoRoot(): string {
+  const candidates = [
+    process.cwd(),
+    path.resolve(process.cwd(), '..'),
+    path.resolve(__dirname, '../../..'),
+    path.resolve(__dirname, '../../../..'),
+    path.resolve(__dirname, '../../../../..'),
+    'C:\\Users\\Admin\\Desktop\\Trading App',
+  ];
+  for (const dir of candidates) {
+    if (fs.existsSync(path.join(dir, 'mt5_bridge', 'server.py'))) {
+      return dir;
+    }
+  }
+  return process.cwd();
+}
+
 /**
  * When running on the local Windows trading PC, if port 8001 is not running yet
- * when the user clicks "1. EXECUTE" (or any MT5 button), automatically spawn
- * `mt5_bridge/server.py` in the background and wait up to 4 seconds for it to listen!
+ * automatically spawn `mt5_bridge/server.py` in the background and wait for it to listen!
  */
-async function tryAutoSpawnLocalBridge(): Promise<boolean> {
-  if (process.platform !== 'win32' || process.env.VERCEL) {
-    return false;
-  }
+async function tryAutoSpawnLocalBridge(): Promise<{ ok: boolean; message: string }> {
+  // 1. Check if 8001 is already alive
   try {
-    const repoRoot = path.resolve(process.cwd(), '..');
+    const healthCheck = await fetchWithTimeout(
+      `${LOCAL_BRIDGE_BASE}/health`,
+      { headers: { Authorization: `Bearer ${DEFAULT_SECRET_TOKEN}` } },
+      1000
+    );
+    if (healthCheck.ok) {
+      return { ok: true, message: 'Bridge server is already running on port 8001.' };
+    }
+  } catch {}
+
+  if (process.platform !== 'win32' || process.env.VERCEL) {
+    return {
+      ok: false,
+      message: 'Automatic process spawning requires local Windows PC. On cloud deployments, start the bridge on your PC.',
+    };
+  }
+
+  try {
+    const repoRoot = findRepoRoot();
     const serverScript = path.join(repoRoot, 'mt5_bridge', 'server.py');
     const venvPython = path.join(repoRoot, '.venv', 'Scripts', 'python.exe');
     if (!fs.existsSync(serverScript)) {
-      return false;
+      return { ok: false, message: `server.py not found in repo root: ${repoRoot}` };
     }
     const pythonExe = fs.existsSync(venvPython) ? venvPython : 'python';
-    const child = spawn(pythonExe, [serverScript], {
-      cwd: path.join(repoRoot, 'mt5_bridge'),
-      detached: true,
-      stdio: 'ignore',
-      windowsHide: true,
-    });
+
+    const child = spawn(
+      pythonExe,
+      ['-m', 'uvicorn', 'server:app', '--host', '127.0.0.1', '--port', '8001'],
+      {
+        cwd: path.join(repoRoot, 'mt5_bridge'),
+        detached: true,
+        stdio: 'ignore',
+        windowsHide: false,
+      }
+    );
     child.unref();
 
-    // Poll 127.0.0.1:8001/health for up to 4.5 seconds
-    for (let i = 0; i < 9; i++) {
+    // Poll 127.0.0.1:8001/health for up to 6.5 seconds
+    for (let i = 0; i < 13; i++) {
       await new Promise((r) => setTimeout(r, 500));
       try {
         const res = await fetchWithTimeout(
           `${LOCAL_BRIDGE_BASE}/health`,
           { headers: { Authorization: `Bearer ${DEFAULT_SECRET_TOKEN}` } },
-          800
+          1000
         );
-        if (res.ok) return true;
+        if (res.ok) {
+          return { ok: true, message: 'Successfully started MT5 Bridge server on port 8001!' };
+        }
       } catch {}
     }
-  } catch {}
-  return false;
+    return { ok: false, message: 'Bridge process spawned but port 8001 did not respond in time.' };
+  } catch (err: any) {
+    return { ok: false, message: `Failed to spawn bridge: ${err?.message || err}` };
+  }
 }
 
 async function resolveActiveBridgeBaseUrl(hintTunnelUrl?: string): Promise<{ baseUrl: string; source: string }> {
@@ -80,7 +121,7 @@ async function resolveActiveBridgeBaseUrl(hintTunnelUrl?: string): Promise<{ bas
 
   // 1b. If running on local Windows PC and port 8001 wasn't up yet, auto-start mt5_bridge/server.py!
   const spawned = await tryAutoSpawnLocalBridge();
-  if (spawned) {
+  if (spawned.ok) {
     return { baseUrl: LOCAL_BRIDGE_BASE, source: 'local_8001_autospawned' };
   }
 
@@ -154,6 +195,32 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
     const mode = body?.mode || 'place_order';
+
+    // Direct Start Bridge / Port 8001 Action
+    if (mode === 'start_server' || mode === 'start_bridge') {
+      const spawnResult = await tryAutoSpawnLocalBridge();
+      let healthData: any = {};
+      try {
+        const hRes = await fetchWithTimeout(
+          `${LOCAL_BRIDGE_BASE}/health`,
+          { headers: { Authorization: `Bearer ${DEFAULT_SECRET_TOKEN}` } },
+          1500
+        );
+        if (hRes.ok) healthData = await hRes.json();
+      } catch {}
+
+      return NextResponse.json(
+        {
+          status: spawnResult.ok ? 'online' : 'error',
+          bridge: spawnResult.ok ? 'online' : 'offline',
+          port: 8001,
+          message: spawnResult.message,
+          ...healthData,
+        },
+        { status: spawnResult.ok ? 200 : 500 }
+      );
+    }
+
     const { baseUrl, source } = await resolveActiveBridgeBaseUrl(body?.tunnel_url);
 
     if (mode === 'execute_sync') {
