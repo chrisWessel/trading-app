@@ -525,10 +525,34 @@ export default function AutonomousBotLiveWindow({
           mt5Result?.tp && Number(mt5Result.tp) > 0 ? Number(mt5Result.tp) : levels.tp1;
         const isReal = mt5Result?.status === 'executed';
 
+        // STRICT REAL EXECUTION INTEGRITY:
+        // If MT5 rejected the order (e.g. insufficient margin, market closed, etc.), NEVER create a ghost simulation!
+        if (!isReal) {
+          const retName = mt5Result?.retcode_name || mt5Result?.volumetric_fallback_note || mt5Result?.broker_comment || 'Order rejected by broker';
+          const isNoMoney = String(retName).toLowerCase().includes('no money') || mt5Result?.retcode === 10019;
+          const userHint = isNoMoney
+            ? `⚠️ Exness rejected 0.01 ${symbol}: Insufficient margin ($${accountBalance.toFixed(2)} free vs ~$10.29 required). Increase account leverage to 1:1000/1:2000 in Exness Personal Area, or trade EUR/USD (only $2.71 margin needed)!`
+            : `⚠️ MT5 Order Rejected: ${retName}. Real trade was NOT opened on Exness.`;
+
+          setStatusBanner(userHint);
+          setAiCurrentCommand({
+            badge: 'SCANNING ENTRY',
+            color: 'rose',
+            title: `❌ MT5 ORDER REJECTED: ${isNoMoney ? 'Insufficient Margin (Need $10.29)' : retName}`,
+            explanation: userHint,
+          });
+          appendDirectiveLog(
+            'HUMAN_INTERVENE',
+            `❌ ${dir} ${symbol} REJECTED BY EXNESS: ${retName}`,
+            userHint
+          );
+          return;
+        }
+
         const newTrade: ActiveBotTrade = {
           id: Math.random().toString(36).substring(2, 9),
           ticket: mt5Result?.deal_ticket || mt5Result?.order_ticket,
-          isRealMt5: isReal,
+          isRealMt5: true,
           symbol,
           direction: dir,
           volume: lotSize,
@@ -550,16 +574,13 @@ export default function AutonomousBotLiveWindow({
         lastAutoEntryMsRef.current = Date.now();
         playBeep(880, false);
 
-        const execTag = isReal
-          ? `MT5 Deal #${newTrade.ticket || 'LIVE'}`
-          : 'Live Bot Mimic Simulation';
         setStatusBanner(
-          `✅ ${dir} ${symbol} Opened @ $${fillPrice.toFixed(precision)} (${execTag}) — Anti-Wick Shield Active!`
+          `✅ ${dir} ${symbol} Opened @ $${fillPrice.toFixed(precision)} (MT5 Deal #${newTrade.ticket || 'LIVE'}) — Anti-Wick Shield Active!`
         );
         appendDirectiveLog(
           'AUTO_ENTER',
           `🚀 ${dir} ${symbol} EXECUTED @ $${fillPrice.toFixed(precision)} (${lotSize} Lot)`,
-          `${reasonLabel}. Hard Catastrophe SL placed safely outside wicks at $${actualHardSl.toFixed(precision)} | Target TP1: $${actualTp1.toFixed(precision)}.`
+          `${reasonLabel}. Hard Catastrophe SL placed safely at $${actualHardSl.toFixed(precision)} | Target TP1: $${actualTp1.toFixed(precision)}.`
         );
       } finally {
         setIsExecutingAction(false);
@@ -1408,10 +1429,28 @@ export default function AutonomousBotLiveWindow({
                 <div className="text-sm font-black text-indigo-300">
                   {winsCount}W / {closedTradesCount}T
                 </div>
-                <div className="text-[10px] text-emerald-400 font-sans font-bold">
-                  {closedTradesCount > 0
-                    ? `${Math.round((winsCount / closedTradesCount) * 100)}% Win Rate`
-                    : 'Anti-Wick Shield Ready'}
+                <div className="text-[10px] text-emerald-400 font-sans font-bold flex items-center justify-end gap-1.5 mt-0.5">
+                  <span>
+                    {closedTradesCount > 0
+                      ? `${Math.round((winsCount / closedTradesCount) * 100)}% Win Rate`
+                      : 'Anti-Wick Shield Ready'}
+                  </span>
+                  {closedTradesCount > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSessionRealizedPnl(0);
+                        setClosedTradesCount(0);
+                        setWinsCount(0);
+                        saveSessionProfit(0, 0, 0);
+                        setStatusBanner('🔄 Session scoreboard cleared.');
+                      }}
+                      className="text-[8px] bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white px-1.5 py-0.2 rounded border border-slate-700 font-mono transition"
+                      title="Reset simulation scoreboard"
+                    >
+                      Clear
+                    </button>
+                  )}
                 </div>
               </div>
             </div>
