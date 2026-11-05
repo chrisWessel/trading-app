@@ -76,9 +76,9 @@ async function tryAutoSpawnLocalBridge(): Promise<{ ok: boolean; message: string
 
     const child = spawn(
       pythonExe,
-      ['-m', 'uvicorn', 'server:app', '--host', '127.0.0.1', '--port', '8001'],
+      [serverScript],
       {
-        cwd: path.join(repoRoot, 'mt5_bridge'),
+        cwd: repoRoot,
         detached: true,
         stdio: 'ignore',
         windowsHide: false,

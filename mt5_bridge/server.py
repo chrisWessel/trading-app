@@ -303,7 +303,7 @@ def execute_webhook_signal(payload: WebhookOrderRequest):
 
 if __name__ == "__main__":
     uvicorn.run(
-        "server:app",
+        app,
         host=settings.host,
         port=settings.port,
         workers=1,

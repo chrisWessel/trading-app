@@ -96,28 +96,46 @@ export default function DashboardPage() {
   const [topMt5Status, setTopMt5Status] = useState<string>('MT5 Bridge Ready (Auto-Stop SL/TP Active)');
   const [topMt5Receipt, setTopMt5Receipt] = useState<any | null>(null);
 
-  // Poll bridge health on mount to show instant online status
+  // Poll bridge health on mount (supports both local and Vercel cloud with fallback)
   useEffect(() => {
     let mounted = true;
     const checkBridge = async () => {
       try {
-        const res = await fetch('http://127.0.0.1:8001/health', {
-          headers: { Authorization: `Bearer ${MT5_LOCAL_TOKEN}` },
-        });
-        if (res.ok) {
+        let res: Response | null = null;
+        try {
+          res = await fetch('http://127.0.0.1:8001/health', {
+            headers: { Authorization: `Bearer ${MT5_LOCAL_TOKEN}` },
+            cache: 'no-store',
+          });
+        } catch {}
+
+        // Fallback to /api/mt5 (essential for Vercel where browser blocks unencrypted http://127.0.0.1)
+        if (!res || !res.ok) {
+          try {
+            res = await fetch('/api/mt5', { cache: 'no-store' });
+          } catch {}
+        }
+
+        if (res && res.ok) {
           const d = await res.json();
-          if (mounted && d?.bridge === 'online') {
+          if (mounted && (d?.bridge === 'online' || d?.status === 'online' || d?.mt5_ipc_connected)) {
             setTopBridgeOnline(true);
             const term = d?.mt5_terminal;
             if (term?.account_login) {
-              setTopMt5Status(`✅ Port 8001 Online · ${term?.terminal_name || 'MT5'} (#${term.account_login}) · Bal: $${term?.account_balance || '0.00'}`);
+              setTopMt5Status(
+                `✅ Port 8001 Online · ${term?.terminal_name || 'MT5'} (#${term.account_login}) · Bal: $${term?.account_balance !== undefined ? Number(term.account_balance).toFixed(2) : '0.00'}`
+              );
+            } else {
+              setTopMt5Status('✅ Port 8001 Online (Bridge Ready)');
             }
+          } else if (mounted) {
+            setTopBridgeOnline(false);
           }
         }
       } catch {}
     };
     checkBridge();
-    const interval = setInterval(checkBridge, 4000);
+    const interval = setInterval(checkBridge, 3500);
     return () => {
       mounted = false;
       clearInterval(interval);
@@ -126,20 +144,51 @@ export default function DashboardPage() {
 
   const handleTopStartBridge = async () => {
     setTopMt5StartingServer(true);
-    setTopMt5Status('🚀 Starting MT5 Bridge Server on port 8001...');
+    setTopMt5Status('🚀 Verifying / Starting MT5 Bridge on port 8001...');
     try {
+      // 1. Check if already reachable directly or via tunnel
+      let checkRes: any = null;
+      try {
+        const c1 = await fetch('http://127.0.0.1:8001/health', {
+          headers: { Authorization: `Bearer ${MT5_LOCAL_TOKEN}` },
+          cache: 'no-store',
+        });
+        if (c1.ok) checkRes = await c1.json();
+      } catch {}
+
+      if (!checkRes) {
+        try {
+          const c2 = await fetch('/api/mt5', { cache: 'no-store' });
+          if (c2.ok) checkRes = await c2.json();
+        } catch {}
+      }
+
+      if (checkRes && (checkRes?.bridge === 'online' || checkRes?.status === 'online' || checkRes?.mt5_ipc_connected)) {
+        setTopBridgeOnline(true);
+        const term = checkRes?.mt5_terminal;
+        setTopMt5Status(
+          `✅ Port 8001 is ALREADY ONLINE! ${term?.terminal_name || 'MT5'} (#${term?.account_login || 'Active'}) · Bal: $${term?.account_balance !== undefined ? Number(term.account_balance).toFixed(2) : '0.00'}`
+        );
+        return;
+      }
+
+      // 2. Request auto-spawn if running on local environment
       const res = await fetch('/api/mt5', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ mode: 'start_server' }),
       });
       const data = await res.json().catch(() => ({}));
-      if (data?.bridge === 'online' || data?.status === 'online') {
+      if (data?.bridge === 'online' || data?.status === 'online' || data?.mt5_ipc_connected) {
         setTopBridgeOnline(true);
         const term = data?.mt5_terminal;
-        setTopMt5Status(`✅ Port 8001 LIVE! ${term?.terminal_name || 'MT5'} (${term?.account_server || 'Connected'}) · Bal: $${term?.account_balance || '0.00'}`);
+        setTopMt5Status(
+          `✅ Port 8001 LIVE! ${term?.terminal_name || 'MT5'} (${term?.account_server || 'Connected'}) · Bal: $${term?.account_balance !== undefined ? Number(term.account_balance).toFixed(2) : '0.00'}`
+        );
       } else {
-        setTopMt5Status(data?.message || data?.error || '⚠️ Could not start port 8001 automatically. Run start_bridge.bat.');
+        setTopMt5Status(
+          data?.message || '⚠️ Double-click run_app.bat on your PC to start Port 8001.'
+        );
       }
     } catch (err: any) {
       setTopMt5Status(`⚠️ Start error: ${err?.message || 'Check terminal'}`);
