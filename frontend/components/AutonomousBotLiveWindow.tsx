@@ -92,13 +92,13 @@ export default function AutonomousBotLiveWindow({
   onClose,
   onOpen,
 }: AutonomousBotLiveWindowProps) {
-  // Autonomous Bot State — Autopilot ON by default so it actively protects stops & locks breakeven
-  const [autopilotEnabled, setAutopilotEnabled] = useState<boolean>(true);
+  // Autonomous Bot State — Autopilot is strictly OFF by default to prevent accidental executions
+  const [autopilotEnabled, setAutopilotEnabled] = useState<boolean>(false);
   const [pipMinimized, setPipMinimized] = useState<boolean>(false);
   const [soundEnabled, setSoundEnabled] = useState<boolean>(true);
   const [isExecutingAction, setIsExecutingAction] = useState<boolean>(false);
   const [statusBanner, setStatusBanner] = useState<string>(
-    'AI Autopilot Ready — Anti-Wick Small-Account Shield & Auto-Profit Harvester Armed'
+    'AI Bot Standing By (Manual / Safe Mode) — Click "START FULL AI AUTOPILOT" to allow hands-free auto-trading.'
   );
 
   // Synced Risk Calculator & Signal State
@@ -418,11 +418,8 @@ export default function AutonomousBotLiveWindow({
       if (typeof d.riskPercent === 'number' && d.riskPercent > 0) setRiskPercent(d.riskPercent);
       if (typeof d.probability === 'number' && d.probability > 0) setSignalConfidence(d.probability);
     };
-    const onOpenBotWindow = (e: Event) => {
-      const d = (e as CustomEvent)?.detail;
-      if (d?.enableAutopilot) {
-        setAutopilotEnabled(true);
-      }
+    const onOpenBotWindow = () => {
+      // Opening the window is strictly for observation / manual control. Never auto-arm autopilot!
       onOpen();
     };
     window.addEventListener('wessignal-live-params', onLiveParams);
@@ -444,6 +441,13 @@ export default function AutonomousBotLiveWindow({
       reasonLabel = 'AI Autopilot High-Confluence Entry'
     ) => {
       if (isExecutingAction) return;
+
+      // HARD SAFETY GATE: If this is an automated entry, strictly require autopilot to be ACTIVE
+      if (reasonLabel.toLowerCase().includes('autopilot') && !autopilotRef.current) {
+        console.warn('⛔ [BLOCKED AUTO-ENTRY]: Autopilot is strictly OFF. No order was sent.');
+        return;
+      }
+
       setIsExecutingAction(true);
       try {
         const levels = calculateRiskBasedLevels({
@@ -1040,28 +1044,38 @@ export default function AutonomousBotLiveWindow({
             return;
           }
 
-          // No open trade — evaluate whether AI Autopilot should automatically enter
-          setAiCurrentCommand({
-            badge: 'SCANNING ENTRY',
-            color: 'blue',
-            title: `🤖 AI READY: ${engineDir} ${symbol} Setup (${analysis.probability}% SMC/FVG Confluence)`,
-            explanation: `${smc?.structureLabel || 'Order flow aligned'}. Entry: $${tickNow.toFixed(precision)} | Anti-Wick SL: $${analysis.trade_params.stop_loss.toFixed(precision)} | TP1: $${analysis.trade_params.tp1.toFixed(precision)}.`,
-          });
+          // No open trade — evaluate state based on whether user switched Autopilot ON or OFF
+          if (!autopilotEnabled || !autopilotRef.current) {
+            setAiCurrentCommand({
+              badge: 'SCANNING ENTRY',
+              color: 'blue',
+              title: `⏸️ AUTOPILOT IS OFF: ${engineDir} ${symbol} (${analysis.probability}% Confluence)`,
+              explanation: `Market setup detected, but AI Autopilot is OFF. The bot will NOT place any trades on its own. Click "START FULL AI AUTOPILOT" to enable auto-trading.`,
+            });
+          } else {
+            setAiCurrentCommand({
+              badge: 'SCANNING ENTRY',
+              color: 'blue',
+              title: `🤖 AUTOPILOT ACTIVE: Scanning ${engineDir} ${symbol} (${analysis.probability}% SMC/FVG Confluence)`,
+              explanation: `${smc?.structureLabel || 'Order flow aligned'}. Entry: $${tickNow.toFixed(precision)} | Anti-Wick SL: $${analysis.trade_params.stop_loss.toFixed(precision)} | TP1: $${analysis.trade_params.tp1.toFixed(precision)}.`,
+            });
 
-          if (
-            autopilotRef.current &&
-            (!workerGoalEnabled || dailyProfitTarget <= 0 || sessionRealizedPnl < dailyProfitTarget) &&
-            (analysis.probability || 90) >= 90 &&
-            nowMs - lastAutoEntryMsRef.current >= 45000
-          ) {
-            await executeBotOrder(
-              engineDir,
-              tickNow,
-              (analysis.trade_params as any)?.swing_low ?? analysis.support,
-              (analysis.trade_params as any)?.swing_high ?? analysis.resistance,
-              (analysis.trade_params as any)?.atr,
-              `AI Autopilot ${analysis.probability}% SMC/FVG Confluence (${smc?.structureLabel || timeframe})`
-            );
+            if (
+              autopilotEnabled &&
+              autopilotRef.current &&
+              (!workerGoalEnabled || dailyProfitTarget <= 0 || sessionRealizedPnl < dailyProfitTarget) &&
+              (analysis.probability || 90) >= 90 &&
+              nowMs - lastAutoEntryMsRef.current >= 45000
+            ) {
+              await executeBotOrder(
+                engineDir,
+                tickNow,
+                (analysis.trade_params as any)?.swing_low ?? analysis.support,
+                (analysis.trade_params as any)?.swing_high ?? analysis.resistance,
+                (analysis.trade_params as any)?.atr,
+                `AI Autopilot ${analysis.probability}% SMC/FVG Confluence (${smc?.structureLabel || timeframe})`
+              );
+            }
           }
         }
       } catch (e) {

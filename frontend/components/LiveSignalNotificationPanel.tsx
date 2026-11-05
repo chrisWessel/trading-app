@@ -194,8 +194,6 @@ export default function LiveSignalNotificationPanel({
   const [mt5Ordering, setMt5Ordering] = useState<boolean>(false);
   const [mt5Cancelling, setMt5Cancelling] = useState<boolean>(false);
   const [mt5Stopping, setMt5Stopping] = useState<boolean>(false);
-  const [autoBotEnabled, setAutoBotEnabled] = useState<boolean>(false);
-  const lastAutoTradedKeyRef = useRef<string>('');
   const [mt5BridgeState, setMt5BridgeState] = useState<{
     online: boolean;
     botArmed?: boolean;
@@ -524,7 +522,7 @@ export default function LiveSignalNotificationPanel({
       if (typeof window !== 'undefined') {
         window.dispatchEvent(
           new CustomEvent('wessignal-open-bot-window', {
-            detail: { enableAutopilot: true },
+            detail: { enableAutopilot: false },
           })
         );
       }
@@ -592,7 +590,6 @@ export default function LiveSignalNotificationPanel({
   // BUTTON 4: Stop Auto-Bot & Close All Open Trades (Emergency Kill-Switch)
   const handleStopAutoBot = async () => {
     setMt5Stopping(true);
-    setAutoBotEnabled(false);
     setMt5OrderReceipt(null);
     try {
       let json: any = null;
@@ -1166,22 +1163,6 @@ export default function LiveSignalNotificationPanel({
     'border-violet-700 text-violet-300 bg-violet-950/60',
   ];
 
-  // Auto-Bot Pilot: when enabled, automatically dispatches 1 order on BUY_NOW / SELL_NOW with hard MT5 SL & TP, then auto-stops!
-  useEffect(() => {
-    if (!autoBotEnabled || mt5Ordering) return;
-    if (latestNotif?.type !== 'BUY_NOW' && latestNotif?.type !== 'SELL_NOW') return;
-    const dir = latestNotif.type === 'SELL_NOW' ? 'SELL' : 'BUY';
-    const sigKey = `${symbol}_${timeframe}_${dir}_${Math.round(displayEntry * 100)}`;
-    if (lastAutoTradedKeyRef.current === sigKey) return;
-    lastAutoTradedKeyRef.current = sigKey;
-    const targetTp = displayTpLevels[selectedTpIndex] ?? displayTp1;
-    handlePlaceMt5Order(dir, targetTp, displaySL).then(() => {
-      // Automatically stop Auto-Bot after placing the trade so it never spam-opens multiple orders;
-      // MT5 server-side TP & SL will now automatically close the trade on its own!
-      setAutoBotEnabled(false);
-    });
-  }, [autoBotEnabled, latestNotif?.type, symbol, timeframe, displayEntry]);
-
   return (
     <aside className="bg-slate-900 border border-slate-800 rounded-xl p-4 shadow-2xl flex flex-col h-full max-h-[calc(100vh-2rem)] sticky top-4 space-y-4 font-mono overflow-y-auto scrollbar-navigator">
       {/* Sidebar Top Header */}
@@ -1305,12 +1286,10 @@ export default function LiveSignalNotificationPanel({
               <button
                 type="button"
                 onClick={() => {
-                  const next = !autoBotEnabled;
-                  setAutoBotEnabled(next);
-                  if (next && typeof window !== 'undefined') {
+                  if (typeof window !== 'undefined') {
                     window.dispatchEvent(
                       new CustomEvent('wessignal-open-bot-window', {
-                        detail: { enableAutopilot: true },
+                        detail: { enableAutopilot: false },
                       })
                     );
                   }
@@ -1318,11 +1297,9 @@ export default function LiveSignalNotificationPanel({
                 className={`text-[9px] font-mono px-2 py-0.5 rounded border font-extrabold flex items-center gap-1 transition ${
                   workerGoalMet
                     ? 'bg-amber-600 border-amber-300 text-white shadow-lg'
-                    : autoBotEnabled
-                    ? 'bg-emerald-600 border-emerald-300 text-white animate-pulse'
                     : 'bg-indigo-900/90 border-indigo-600 text-indigo-100 hover:bg-indigo-800'
                 }`}
-                title="Turns on Full AI Autopilot and opens the Live Bot & AI Commander Window"
+                title="Opens the Live Bot & AI Autopilot Window (Safe Mode)"
               >
                 {workerGoalMet ? (
                   <>
@@ -1332,7 +1309,7 @@ export default function LiveSignalNotificationPanel({
                 ) : (
                   <>
                     <Bot className="w-3 h-3" />
-                    <span>{autoBotEnabled ? 'AUTO-BOT: ON' : 'AUTO-BOT: MANUAL'}</span>
+                    <span>OPEN AI BOT</span>
                   </>
                 )}
               </button>
