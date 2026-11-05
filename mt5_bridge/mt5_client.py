@@ -275,17 +275,25 @@ class MT5BridgeClient:
         except Exception:
             pass
 
-        broker_min_dist = max(stops_level_pts * point, spread * 2.5, point * 20)
+        # Query account balance so stops are sized proportionally for small accounts ($10 - $40)
+        acc_info = mt5.account_info()
+        acc_bal = float(getattr(acc_info, "balance", 40.0) or 40.0)
+        # Scaled stop cushions for small accounts ($10-$40):
+        # A $10 account can only afford ~$0.85 - $1.10 stop loss on 0.01 lot!
+        # A $40 account can afford ~$1.65!
+        gold_base_cushion = 0.85 if acc_bal <= 18 else (1.65 if acc_bal <= 45 else 2.80)
+
+        broker_min_dist = max(stops_level_pts * point, spread * 1.5, point * 10)
         # Anti-Fluctuation Cushion for Hard Broker SL:
-        # Must sit outside normal 1m-5m wick noise & spread so entry fluctuations NEVER trigger instant loss!
+        # Must sit outside normal tick noise & spread so entry fluctuations NEVER trigger instant loss!
         if is_gold:
-            min_sl_breathing_dist = max(broker_min_dist, spread * 10.0, atr * 1.4, 4.20)
-            structural_buffer = max(spread * 3.0, 0.90)
-            min_tp_dist = max(broker_min_dist, spread * 5.0, 2.20)
+            min_sl_breathing_dist = max(broker_min_dist, spread * 3.5, gold_base_cushion)
+            structural_buffer = max(spread * 2.0, 0.40)
+            min_tp_dist = max(broker_min_dist, spread * 3.0, 1.40)
         else:
-            min_sl_breathing_dist = max(broker_min_dist, spread * 8.0, atr * 1.4, price * 0.0020)
-            structural_buffer = max(spread * 2.5, price * 0.0005)
-            min_tp_dist = max(broker_min_dist, spread * 4.5, price * 0.0012)
+            min_sl_breathing_dist = max(broker_min_dist, spread * 4.0, price * 0.0010)
+            structural_buffer = max(spread * 2.0, price * 0.0003)
+            min_tp_dist = max(broker_min_dist, spread * 3.5, price * 0.0010)
 
         clean_sl = 0.0
         clean_tp = 0.0
@@ -305,20 +313,17 @@ class MT5BridgeClient:
         if sl is not None and sl > 0:
             req_sl = float(sl)
             if is_buy:
-                # Place SL safely below both (exit_ref_price - min_sl_breathing_dist) and recent Swing Low
-                target_sl = min(safe_max_sl, struct_sl)
-                # Only use req_sl if it is already safely below safe_max_sl and within reasonable range (not a stale quote)
-                if req_sl <= safe_max_sl and (exit_ref_price - req_sl) <= min_sl_breathing_dist * 3.5:
+                # Ensure requested SL is below market price by at least broker_min_dist
+                if req_sl < (exit_ref_price - broker_min_dist):
                     clean_sl = round(req_sl, digits)
                 else:
-                    clean_sl = round(target_sl, digits)
+                    clean_sl = round(safe_max_sl, digits)
             else:
-                # SELL: Place SL safely above both (exit_ref_price + min_sl_breathing_dist) and recent Swing High
-                target_sl = max(safe_min_sl, struct_sl)
-                if req_sl >= safe_min_sl and (req_sl - exit_ref_price) <= min_sl_breathing_dist * 3.5:
+                # Ensure requested SL is above market price by at least broker_min_dist
+                if req_sl > (exit_ref_price + broker_min_dist):
                     clean_sl = round(req_sl, digits)
                 else:
-                    clean_sl = round(target_sl, digits)
+                    clean_sl = round(safe_min_sl, digits)
         else:
             # MANDATORY GUARANTEED SL: A position on MT5 is NEVER left unprotected!
             clean_sl = default_sl
@@ -326,19 +331,16 @@ class MT5BridgeClient:
         if tp is not None and tp > 0:
             req_tp = float(tp)
             if is_buy:
-                safe_min_tp = price + min_tp_dist
-                if req_tp >= safe_min_tp and (req_tp - price) <= min_sl_breathing_dist * 6.0:
+                if req_tp > (price + broker_min_dist):
                     clean_tp = round(req_tp, digits)
                 else:
-                    clean_tp = round(price + max(min_tp_dist, min_sl_breathing_dist * 0.85), digits)
+                    clean_tp = default_tp
             else:
-                safe_max_tp = price - min_tp_dist
-                if req_tp <= safe_max_tp and (price - req_tp) <= min_sl_breathing_dist * 6.0:
+                if req_tp < (price - broker_min_dist):
                     clean_tp = round(req_tp, digits)
                 else:
-                    clean_tp = round(price - max(min_tp_dist, min_sl_breathing_dist * 0.85), digits)
+                    clean_tp = default_tp
         else:
-            # MANDATORY GUARANTEED TP:
             clean_tp = default_tp
 
         return clean_sl, clean_tp
@@ -564,36 +566,40 @@ class MT5BridgeClient:
                         # POST-ENTRY GUARANTEED SL/TP ENFORCEMENT (CRITICAL FOR EXNESS & MARKET EXECUTION):
                         # On Exness and all brokers with SYMBOL_TRADE_EXECUTION_MARKET, the broker strips or ignores SL/TP
                         # in the initial TRADE_ACTION_DEAL request.
-                        # We query the newly opened position ticket and immediately dispatch TRADE_ACTION_SLTP!
+                        # We repeatedly poll positions_get for up to 2.5s until the position is found, and attach TRADE_ACTION_SLTP!
                         attached_sl = clean_sl
                         attached_tp = clean_tp
                         try:
-                            time.sleep(0.08)
-                            positions = mt5.positions_get(symbol=resolved_symbol)
                             target_pos = None
-                            if positions:
-                                if order_t:
-                                    target_pos = next((p for p in positions if getattr(p, "ticket", None) == order_t or getattr(p, "identifier", None) == order_t), None)
-                                if not target_pos:
-                                    target_pos = sorted(positions, key=lambda p: getattr(p, "time_msc", 0))[-1]
+                            for _ in range(25):
+                                time.sleep(0.10)
+                                positions = mt5.positions_get(symbol=resolved_symbol)
+                                if positions:
+                                    if order_t:
+                                        target_pos = next(
+                                            (p for p in positions if getattr(p, "ticket", None) == order_t or getattr(p, "identifier", None) == order_t),
+                                            None,
+                                        )
+                                    if not target_pos:
+                                        target_pos = sorted(positions, key=lambda p: getattr(p, "time_msc", 0))[-1]
+                                    if target_pos:
+                                        break
 
                             if target_pos:
                                 pos_ticket = int(getattr(target_pos, "ticket", 0))
-                                current_pos_sl = float(getattr(target_pos, "sl", 0.0) or 0.0)
-
-                                if pos_ticket > 0 and (current_pos_sl == 0.0 or abs(current_pos_sl - clean_sl) > 0.01):
-                                    modify_req = {
-                                        "action": mt5.TRADE_ACTION_SLTP,
-                                        "position": pos_ticket,
-                                        "symbol": resolved_symbol,
-                                        "sl": float(clean_sl),
-                                        "tp": float(clean_tp),
-                                    }
-                                    mod_res = mt5.order_send(modify_req)
-                                    if mod_res and mod_res.retcode in (mt5.TRADE_RETCODE_DONE, mt5.TRADE_RETCODE_PLACED):
-                                        logger.info(f"✅ Post-entry SL/TP ({clean_sl}/{clean_tp}) successfully attached to MT5 position #{pos_ticket} on Exness server")
-                                    else:
-                                        logger.warning(f"⚠️ Failed to attach post-entry SL/TP on position #{pos_ticket}: rc={getattr(mod_res, 'retcode', None)}, err={mt5.last_error()}")
+                                digits = int(getattr(sym_info, "digits", 2) or 2)
+                                modify_req = {
+                                    "action": mt5.TRADE_ACTION_SLTP,
+                                    "position": pos_ticket,
+                                    "symbol": resolved_symbol,
+                                    "sl": round(float(clean_sl), digits),
+                                    "tp": round(float(clean_tp), digits),
+                                }
+                                mod_res = mt5.order_send(modify_req)
+                                if mod_res and mod_res.retcode in (mt5.TRADE_RETCODE_DONE, mt5.TRADE_RETCODE_PLACED):
+                                    logger.info(f"✅ Post-entry SL/TP ({clean_sl}/{clean_tp}) successfully attached to MT5 position #{pos_ticket} on Exness server")
+                                else:
+                                    logger.warning(f"⚠️ Failed to attach post-entry SL/TP on position #{pos_ticket}: rc={getattr(mod_res, 'retcode', None)}, err={mt5.last_error()}")
                         except Exception as post_err:
                             logger.error(f"Error enforcing post-entry SL/TP: {post_err}")
 

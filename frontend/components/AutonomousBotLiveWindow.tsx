@@ -464,9 +464,12 @@ export default function AutonomousBotLiveWindow({
           atr,
         });
 
-        // Soft Structure SL sits right beyond the Swing Low/High (watched on candle close after 25s grace)
+        // Soft Structure SL sits right beyond the Swing Low/High (watched on candle close after 12s grace)
         const isGold = symbol.toUpperCase().includes('XAU') || symbol.toUpperCase().includes('GOLD');
-        const softDist = Math.max(isGold ? 2.2 : entryHint * 0.001, levels.slDistance * 0.65);
+        const maxSoftDollars = accountBalance <= 15 ? 0.75 : accountBalance <= 30 ? 1.25 : 1.80;
+        const softDist = isGold
+          ? Math.min(maxSoftDollars, Math.max(0.60, levels.slDistance * 0.45))
+          : Math.min(entryHint * 0.0015, Math.max(entryHint * 0.0006, levels.slDistance * 0.50));
         const softSl = Number(
           (dir === 'BUY' ? entryHint - softDist : entryHint + softDist).toFixed(precision)
         );
@@ -925,7 +928,7 @@ export default function AutonomousBotLiveWindow({
         const nowMs = Date.now();
         if (trade) {
           const ageSec = Math.max(0, Math.round((nowMs - trade.openedAtMs) / 1000));
-          const inGracePeriod = ageSec <= 25;
+          const inGracePeriod = ageSec <= 12;
           const hitTp1 =
             (trade.direction === 'BUY' && trade.currentPrice >= trade.tp1Price) ||
             (trade.direction === 'SELL' && trade.currentPrice <= trade.tp1Price);
@@ -942,7 +945,29 @@ export default function AutonomousBotLiveWindow({
               (trade.direction === 'SELL' &&
                 trade.currentPrice <= trade.breakevenTriggerPrice));
 
-          // Confirmed structural invalidation (only after 25s entry grace period!)
+          // 1. FAST REACTION TO SHARP TURNS (Never turn a blind eye to sharp reversals!):
+          // If the trade enters negative territory (-$0.30 or worse) AND the market order flow flips
+          // (engineDir !== trade.direction OR opposing trend exhaustion/FVG formed),
+          // CUT THE TRADE IMMEDIATELY with a micro-scratch loss (-$0.30 to -$0.50) to protect account capital!
+          const sharpTurnAgainstTrade =
+            !inGracePeriod &&
+            trade.floatingPnlDollars <= -0.30 &&
+            ((trade.direction === 'BUY' && engineDir === 'SELL') ||
+              (trade.direction === 'SELL' && engineDir === 'BUY') ||
+              (trade.direction === 'BUY' && smc?.trendExhaustion.action === 'TAKE_PROFIT_AND_SELL') ||
+              (trade.direction === 'SELL' && smc?.trendExhaustion.action === 'TAKE_PROFIT_AND_BUY'));
+
+          // 2. SMALL-ACCOUNT PROPORTIONAL CATASTROPHIC CIRCUIT BREAKER:
+          // Strictly proportional to account size:
+          // On a $10.22 account: max allowed loss is capped at $0.85 (under 8.5% of account, NEVER $2.20!)
+          // On a $40 account: max allowed loss is capped at $1.50
+          const maxAllowedLossDollars = Math.min(
+            accountBalance <= 15 ? 0.85 : accountBalance <= 30 ? 1.35 : 2.20,
+            Math.max(0.60, accountBalance * (riskPercent / 100) * 1.5)
+          );
+          const catastrophicLossBreached = trade.floatingPnlDollars <= -maxAllowedLossDollars;
+
+          // Confirmed structural invalidation (beyond soft structure stop)
           const confirmedStructureBreak =
             !inGracePeriod &&
             ((trade.direction === 'BUY' &&
@@ -954,20 +979,28 @@ export default function AutonomousBotLiveWindow({
               (trade.direction === 'BUY' && trade.currentPrice <= trade.hardBrokerSl) ||
               (trade.direction === 'SELL' && trade.currentPrice >= trade.hardBrokerSl));
 
-          // CATASTROPHIC RISK CIRCUIT BREAKER (RUNS EVEN IN MANUAL MODE!):
-          // If a position ever floats into a loss exceeding $2.20 or 2x the risk budget (e.g. -$2.50 on a $40 account),
-          // EMERGENCY CLOSE IMMEDIATELY! Never allow a runaway loss to burn $6.00!
-          const maxAllowedLossDollars = Math.max(2.20, accountBalance * (riskPercent / 100) * 1.8);
-          const catastrophicLossBreached = trade.floatingPnlDollars <= -maxAllowedLossDollars;
-
-          if (catastrophicLossBreached) {
+          if (sharpTurnAgainstTrade) {
+            setAiCurrentCommand({
+              badge: 'STOP & EXIT NOW',
+              color: 'rose',
+              title: `⚡ SHARP TURN DETECTED: Cutting Loss Fast (-$${Math.abs(trade.floatingPnlDollars).toFixed(2)})`,
+              explanation: `Market order flow flipped to ${engineDir} against our ${trade.direction}. Cutting trade fast at -$${Math.abs(trade.floatingPnlDollars).toFixed(2)} to protect capital from runaway drawdown!`,
+            });
+            if (autopilotRef.current && nowMs - lastAutoActionMsRef.current > 2500) {
+              lastAutoActionMsRef.current = nowMs;
+              await closeActiveBotTrade(
+                'STOP_REVERSE',
+                `Sharp market turn: Order flow flipped to ${engineDir} against ${trade.direction}. Cut fast at -$${Math.abs(trade.floatingPnlDollars).toFixed(2)}.`
+              );
+            }
+          } else if (catastrophicLossBreached) {
             setAiCurrentCommand({
               badge: 'STOP & EXIT NOW',
               color: 'rose',
               title: `🚨 EMERGENCY RISK CIRCUIT BREAKER TRIGGERED (-$${Math.abs(trade.floatingPnlDollars).toFixed(2)})`,
-              explanation: `Loss exceeded maximum allowed risk budget (-$${maxAllowedLossDollars.toFixed(2)}). Emergency closing position immediately to protect account!`,
+              explanation: `Loss exceeded maximum allowed small-account budget (-$${maxAllowedLossDollars.toFixed(2)}). Emergency closing position immediately to protect account!`,
             });
-            if (nowMs - lastAutoActionMsRef.current > 4000) {
+            if (nowMs - lastAutoActionMsRef.current > 2500) {
               lastAutoActionMsRef.current = nowMs;
               await closeActiveBotTrade(
                 'STOP_REVERSE',

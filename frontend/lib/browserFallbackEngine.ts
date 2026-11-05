@@ -408,16 +408,23 @@ export function calculateRiskBasedLevels(params: {
   // Even on a small $40 account, a hard Stop Loss on MT5 MUST sit outside normal 1m tick noise & spread
   // (at least $3.80-$4.50 on Gold or 1.4x ATR) so normal market fluctuations NEVER stop out your trade upon entry!
   const isGold = symbol.toUpperCase().includes('XAU') || symbol.toUpperCase().includes('GOLD');
+  // Proportional stop sizing:
+  // For small accounts ($10 - $20), small stop distance ($0.95 - $1.15) protects capital against catastrophic drawdown.
+  // For medium accounts ($40), stop is ~$1.75.
   const minBrokerStop = isGold
-    ? 3.80
+    ? safeBalance <= 18
+      ? 0.95
+      : safeBalance <= 45
+      ? 1.75
+      : 3.20
     : entryPrice > 500
-    ? entryPrice * 0.0018
+    ? entryPrice * 0.0012
     : entryPrice > 20
-    ? 0.15
-    : 0.0018;
+    ? 0.12
+    : 0.0012;
 
-  const refAtr = atr && atr > 0 ? atr : isGold ? 2.4 : minBrokerStop * 1.5;
-  const antiWickFloor = Math.max(minBrokerStop, refAtr * 1.45);
+  const refAtr = atr && atr > 0 ? atr : isGold ? (safeBalance <= 20 ? 1.10 : 2.0) : minBrokerStop * 1.5;
+  const antiWickFloor = Math.max(minBrokerStop, Math.min(minBrokerStop * 1.5, refAtr * 1.25));
 
   // Chart-Structure Swing Distance (places SL right below the recent Swing Low for BUY, or above Swing High for SELL!)
   let swingBaseDistance = 0;
