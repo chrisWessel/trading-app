@@ -213,7 +213,7 @@ async function resolveActiveBridgeBaseUrl(hintTunnelUrl?: string): Promise<{ bas
   }
 
   return {
-    baseUrl: 'https://julie-require-associations-undo.trycloudflare.com',
+    baseUrl: 'https://owner-cute-sweet-smallest.trycloudflare.com',
     source: 'default_tunnel',
   };
 }

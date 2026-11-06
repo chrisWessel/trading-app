@@ -165,7 +165,7 @@ export default function LiveSignalNotificationPanel({
         if (!isNaN(n) && n > 0) return n;
       }
     }
-    return 16.72;
+    return 7.59;
   });
   // balanceInput is a raw string so the user can freely clear & type any amount
   const [balanceInput, setBalanceInput] = useState<string>(() => {
@@ -173,7 +173,7 @@ export default function LiveSignalNotificationPanel({
       const s = localStorage.getItem('wessignal_last_mt5_balance');
       if (s) return s;
     }
-    return '16.72';
+    return '7.59';
   });
   const userEditedBalanceRef = useRef<boolean>(false);
   const [lotSize, setLotSize] = useState<number>(0.01);

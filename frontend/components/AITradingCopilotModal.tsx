@@ -144,7 +144,7 @@ export default function AITradingCopilotModal({
     stopLoss: 4124.2,
     takeProfit: 4126.5,
     lotSize: 0.01,
-    accountBalance: typeof window !== 'undefined' && localStorage.getItem('wessignal_last_mt5_balance') ? parseFloat(localStorage.getItem('wessignal_last_mt5_balance')!) : 16.72,
+    accountBalance: typeof window !== 'undefined' && localStorage.getItem('wessignal_last_mt5_balance') ? parseFloat(localStorage.getItem('wessignal_last_mt5_balance')!) : 7.59,
     riskPercent: 2.0,
     probability: 92,
   });

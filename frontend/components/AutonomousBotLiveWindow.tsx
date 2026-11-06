@@ -116,7 +116,7 @@ export default function AutonomousBotLiveWindow({
         if (!isNaN(n) && n > 0) return n;
       }
     }
-    return 16.72;
+    return 7.59;
   });
   const [accountLeverage, setAccountLeverage] = useState<number>(400);
   const [liveMt5Equity, setLiveMt5Equity] = useState<number | null>(null);
