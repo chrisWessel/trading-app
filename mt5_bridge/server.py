@@ -30,6 +30,7 @@ from schemas import WebhookOrderRequest, OrderExecutionResponse  # noqa: E402
 from mt5_client import bridge_client  # noqa: E402
 from tunnel_manager import (  # noqa: E402
     read_saved_tunnel_url,
+    is_tunnel_url_alive,
     start_or_get_cloudflare_tunnel,
     persist_and_push_tunnel,
 )
@@ -74,10 +75,12 @@ async def add_private_network_cors_headers(request: Request, call_next):
 @app.on_event("startup")
 def auto_start_tunnel_on_boot():
     """
-    Automatically starts the Cloudflare Quick Tunnel and pushes the new URL to GitHub/Vercel
-    whenever server.py boots up, so the user never sees 'fetch failed' after a PC restart.
+    Automatically starts the Cloudflare Quick Tunnel and continuously monitors it.
+    If the tunnel ever drops, disconnects, or expires, it automatically restarts it
+    and pushes the new URL to GitHub/Vercel without requiring any manual intervention!
     """
-    def _bg_boot():
+    def _bg_tunnel_watchdog():
+        # 1. Initial boot tunnel sync
         try:
             tunnel_ok, tunnel_url, _ = start_or_get_cloudflare_tunnel()
             if tunnel_ok and tunnel_url:
@@ -85,7 +88,19 @@ def auto_start_tunnel_on_boot():
         except Exception:
             pass
 
-    threading.Thread(target=_bg_boot, daemon=True).start()
+        # 2. Continuous 5-minute health watchdog: self-heals if Cloudflare disconnects
+        while True:
+            time.sleep(300)
+            try:
+                active_url = read_saved_tunnel_url()
+                if not active_url or not is_tunnel_url_alive(active_url):
+                    ok, new_url, _ = start_or_get_cloudflare_tunnel()
+                    if ok and new_url:
+                        persist_and_push_tunnel(new_url)
+            except Exception:
+                pass
+
+    threading.Thread(target=_bg_tunnel_watchdog, daemon=True).start()
 
 
 def verify_secret_token(
