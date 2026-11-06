@@ -496,22 +496,29 @@ export default function AutonomousBotLiveWindow({
           take_profit: levels.tp1,
           timeframe,
           dry_run: false,
+          confirmed: true,
         };
 
         let mt5Result: any = null;
-        try {
-          const localRes = await fetch('http://127.0.0.1:8001/webhook/mt5', {
-            method: 'POST',
-            headers: {
-              Authorization: `Bearer ${MT5_LOCAL_TOKEN}`,
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify(payload),
-          });
-          if (localRes.ok) mt5Result = await localRes.json();
-        } catch {}
+        const isLocalhost =
+          typeof window !== 'undefined' &&
+          (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
 
-        if (!mt5Result) {
+        if (isLocalhost) {
+          try {
+            const localRes = await fetch('http://127.0.0.1:8001/webhook/mt5', {
+              method: 'POST',
+              headers: {
+                Authorization: `Bearer ${MT5_LOCAL_TOKEN}`,
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify(payload),
+            });
+            mt5Result = await localRes.json();
+          } catch (err: any) {
+            mt5Result = { status: 'error', retcode_name: `Local Port 8001 error: ${err?.message || 'Check terminal'}` };
+          }
+        } else {
           try {
             const apiRes = await fetch('/api/mt5', {
               method: 'POST',
@@ -519,7 +526,9 @@ export default function AutonomousBotLiveWindow({
               body: JSON.stringify(payload),
             });
             mt5Result = await apiRes.json();
-          } catch {}
+          } catch (err: any) {
+            mt5Result = { status: 'error', retcode_name: `API error: ${err?.message || 'Network timeout'}` };
+          }
         }
 
         const fillPrice =

@@ -7,6 +7,7 @@ enforces constant-time secret Authorization token verification on all incoming w
 import secrets
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -299,6 +300,11 @@ def get_open_positions(symbol: Optional[str] = None):
     }
 
 
+RECENT_ORDER_DEBOUNCE_SEC = 10.0
+RECENT_ORDER_CACHE: dict[str, float] = {}
+_order_cache_lock = threading.Lock()
+
+
 @app.post(
     "/webhook/mt5",
     response_model=OrderExecutionResponse,
@@ -309,7 +315,36 @@ def execute_webhook_signal(payload: WebhookOrderRequest):
     Button 2 ("Place Order / Trade Now") & Primary Webhook Endpoint:
     Validates secret token, resolves symbol, checks live ask/bid tick,
     applies volumetric fallbacks, and dispatches `TRADE_ACTION_DEAL` via MT5 IPC.
+    Includes strict 10s duplicate order debounce to prevent retry storm cascades.
     """
+    if not BOT_RUNTIME_STATE["bot_armed"]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Bridge trading is currently DISARMED / EMERGENCY STOPPED. Re-arm before placing orders.",
+        )
+
+    # STRICT 10-SECOND DUPLICATE ORDER DEBOUNCE
+    # Neutralizes retry storms, accidental double-clicks, and fallback cascades across endpoints
+    if not payload.dry_run:
+        order_key = f"{str(payload.symbol).upper()}:{str(payload.action).upper()}"
+        now_ts = time.time()
+        with _order_cache_lock:
+            last_ts = RECENT_ORDER_CACHE.get(order_key, 0.0)
+            if now_ts - last_ts < RECENT_ORDER_DEBOUNCE_SEC:
+                elapsed = round(now_ts - last_ts, 1)
+                raise HTTPException(
+                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                    detail={
+                        "status": "blocked",
+                        "code": "DEBOUNCE_ACTIVE",
+                        "message": (
+                            f"Duplicate order blocked: A {payload.action} on {payload.symbol} was already dispatched "
+                            f"{elapsed}s ago. Minimum order spacing is {RECENT_ORDER_DEBOUNCE_SEC}s."
+                        ),
+                    },
+                )
+            RECENT_ORDER_CACHE[order_key] = now_ts
+
     result = bridge_client.execute_market_deal(payload)
     if result.status == "error":
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=result.model_dump())

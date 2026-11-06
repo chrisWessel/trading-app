@@ -243,6 +243,14 @@ export default function LiveSignalNotificationPanel({
     return () => window.removeEventListener('wessignal-worker-goal-update', onWorkerUpdate);
   }, []);
 
+  const [requireTradeConfirm, setRequireTradeConfirm] = useState<boolean>(true);
+  const [pendingTradeConfirm, setPendingTradeConfirm] = useState<{
+    dir: 'BUY' | 'SELL';
+    tp: number;
+    sl: number;
+  } | null>(null);
+  const lastManualOrderMsRef = useRef<number>(0);
+
   const MT5_LOCAL_TOKEN = 'wessignal_mt5_9f8e7d6c5b4a3f2e1d0c9b8a7f6e5d4c3b2a1f0e9d8c7b6a5f4e3d2c1b0a';
 
   const checkMt5BridgeHealth = async () => {
@@ -451,76 +459,90 @@ export default function LiveSignalNotificationPanel({
     }
   };
 
-  // BUTTON 2: Place Order / Trade Now (Executes real TRADE_ACTION_DEAL on MT5 with automatic TP & SL)
-  const handlePlaceMt5Order = async (directionOverride?: 'BUY' | 'SELL', selectedTpPrice?: number, slPrice?: number) => {
+  // MANUAL LIVE MT5 EXECUTION (Explicit User-Confirmed Order Dispatch)
+  const handlePlaceMt5Order = async (
+    directionOverride?: 'BUY' | 'SELL',
+    selectedTpPrice?: number,
+    slPrice?: number,
+    bypassConfirm: boolean = false
+  ) => {
+    const dir = directionOverride || (isSellTrade ? 'SELL' : 'BUY');
+    const effTp = selectedTpPrice && selectedTpPrice > 0 ? selectedTpPrice : (displayTpLevels[selectedTpIndex] ?? displayTp1);
+    const effSl = slPrice && slPrice > 0 ? slPrice : displaySL;
+
+    if (requireTradeConfirm && !bypassConfirm) {
+      setPendingTradeConfirm({
+        dir,
+        tp: effTp,
+        sl: effSl,
+      });
+      return;
+    }
+
+    setPendingTradeConfirm(null);
+
+    // Strict client-side debounce: 10s minimum spacing between manual order placements
+    const nowMs = Date.now();
+    if (nowMs - lastManualOrderMsRef.current < 10000) {
+      const waitSec = Math.ceil((10000 - (nowMs - lastManualOrderMsRef.current)) / 1000);
+      alert(`⚠️ Order Cooldown: Please wait ${waitSec}s before placing another order on Exness.`);
+      return;
+    }
+    lastManualOrderMsRef.current = nowMs;
+
     setMt5Ordering(true);
     setMt5OrderReceipt(null);
-    const dir = directionOverride || (isSellTrade ? 'SELL' : 'BUY');
+
     const payload = {
       mode: 'place_order',
       symbol,
       action: dir,
       volume: lotSize,
-      stop_loss: slPrice && slPrice > 0 ? slPrice : undefined,
-      take_profit: selectedTpPrice && selectedTpPrice > 0 ? selectedTpPrice : undefined,
+      stop_loss: effSl && effSl > 0 ? effSl : undefined,
+      take_profit: effTp && effTp > 0 ? effTp : undefined,
       timeframe,
       dry_run: false,
+      confirmed: true,
       tunnel_url: mt5BridgeState?.tunnelUrl || undefined,
     };
 
     try {
       let json: any = null;
-      // 1. Try direct local port 8001 first for sub-10ms execution when on the trading PC
-      try {
-        const localRes = await fetchWithFastTimeout(
-          'http://127.0.0.1:8001/webhook/mt5',
-          10000,
-          {
-            method: 'POST',
-            headers: {
-              Authorization: `Bearer ${MT5_LOCAL_TOKEN}`,
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify(payload),
-          }
-        );
-        if (localRes.ok) json = await localRes.json();
-      } catch {}
+      // Single-target execution: NEVER cascade fallback between multiple endpoints
+      // To prevent duplicate orders on broker!
+      const isLocalhost =
+        typeof window !== 'undefined' &&
+        (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
 
-      // 2. Try active Cloudflare Tunnel URL directly from browser
-      if (!json) {
-        const tun = await getBrowserTunnelUrl();
-        if (tun) {
-          try {
-            const tunRes = await fetchWithFastTimeout(
-              `${tun}/webhook/mt5`,
-              10000,
-              {
-                method: 'POST',
-                headers: {
-                  Authorization: `Bearer ${MT5_LOCAL_TOKEN}`,
-                  'Content-Type': 'application/json',
-                },
-                body: JSON.stringify(payload),
-              }
-            );
-            if (tunRes.ok) json = await tunRes.json();
-          } catch {}
+      if (isLocalhost && mt5BridgeState?.online) {
+        try {
+          const localRes = await fetchWithFastTimeout(
+            'http://127.0.0.1:8001/webhook/mt5',
+            12000,
+            {
+              method: 'POST',
+              headers: {
+                Authorization: `Bearer ${MT5_LOCAL_TOKEN}`,
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify(payload),
+            }
+          );
+          json = await localRes.json();
+        } catch (localErr: any) {
+          json = { status: 'error', retcode_name: `Local Port 8001 error: ${localErr?.message || 'Check terminal'}` };
         }
-      }
-
-      // 3. Otherwise route via Next.js /api/mt5 -> active Cloudflare Tunnel URL
-      if (!json) {
-        const apiRes = await fetchWithFastTimeout(
-          '/api/mt5',
-          12000,
-          {
+      } else {
+        try {
+          const apiRes = await fetchWithFastTimeout('/api/mt5', 15000, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload),
-          }
-        );
-        json = await apiRes.json();
+          });
+          json = await apiRes.json();
+        } catch (apiErr: any) {
+          json = { status: 'error', retcode_name: `API error: ${apiErr?.message || 'Network timeout'}` };
+        }
       }
 
       setMt5OrderReceipt(json);
@@ -1452,150 +1474,211 @@ export default function LiveSignalNotificationPanel({
             </div>
           )}
 
-          {/* BUTTON 0: START SERVER (PORT 8001) */}
-          <button
-            type="button"
-            disabled={startingBridgeServer}
-            onClick={handleStartBridgeServer}
-            className={`w-full py-2 px-3 text-[10.5px] font-black rounded-lg shadow-lg border transition flex items-center justify-center gap-1.5 font-mono ${
-              mt5BridgeState?.online
-                ? 'bg-emerald-950/80 border-emerald-500/80 text-emerald-300'
-                : 'bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 border-emerald-300 text-white animate-pulse'
-            } disabled:opacity-60`}
-            title="Starts or verifies the local MT5 execution bridge server on port 8001"
-          >
-            <Server className={`w-3.5 h-3.5 ${startingBridgeServer ? 'animate-spin' : ''}`} />
-            <span>
-              {startingBridgeServer
-                ? 'Starting Port 8001...'
-                : mt5BridgeState?.online
-                ? '✅ PORT 8001: ONLINE (CONNECTED)'
-                : '0. START SERVER (start_bridge.bat)'}
-            </span>
-          </button>
-
-          {!mt5BridgeState?.online && (
-            <div className="text-[9px] text-amber-200/90 font-sans leading-tight bg-slate-950/80 p-2 rounded border border-slate-800 space-y-1">
-              <div className="flex items-center gap-1 font-bold text-amber-300">
-                <AlertTriangle className="w-3 h-3 text-amber-400" />
-                <span>How to start MT5 Bridge on Port 8001:</span>
-              </div>
-              <div>
-                • <strong>On Local PC:</strong> Click the button above to launch <code className="text-white">mt5_bridge/start_bridge.bat</code>.
-              </div>
-              <div>
-                • <strong>On Vercel Cloud:</strong> Double-click <code className="text-white">START_PORT_8001.bat</code> or <code className="text-white">mt5_bridge\start_bridge.bat</code> on your PC desktop. Once opened, this card connects automatically!
-              </div>
+          {/* SECTION 1: BRIDGE CONNECTIVITY CONTROLS (Zero Trade Execution) */}
+          <div className="pt-2 border-t border-slate-800 space-y-1.5">
+            <div className="text-[9.5px] font-bold text-slate-400 uppercase tracking-wider flex items-center justify-between">
+              <span>🔌 1. MT5 Bridge Connectivity</span>
+              <span className="text-[8.5px] text-slate-500 font-normal">Safe · Never opens trades</span>
             </div>
-          )}
 
-          {/* BUTTON 1: EXECUTE (Start Cloudflare Tunnel + Push New URL to GitHub & Vercel) */}
-          <button
-            type="button"
-            disabled={mt5Syncing}
-            onClick={handleExecuteBridgeSync}
-            className="w-full py-2 px-3 bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-500 hover:to-blue-500 disabled:opacity-60 text-white text-[10.5px] font-black rounded-lg shadow-lg border border-indigo-300/60 transition flex items-center justify-center gap-1.5"
-          >
-            <Zap className={`w-3.5 h-3.5 text-amber-300 ${mt5Syncing ? 'animate-spin' : ''}`} />
-            <span>
-              {mt5Syncing
-                ? '1. Starting Cloudflare & Pushing URL to Git/Vercel...'
-                : '1. EXECUTE (Start Tunnel & Push URL to Git/Vercel)'}
-            </span>
-          </button>
+            <div className="grid grid-cols-2 gap-1.5">
+              <button
+                type="button"
+                disabled={startingBridgeServer}
+                onClick={handleStartBridgeServer}
+                className={`py-1.5 px-2 text-[10px] font-bold rounded-md shadow border transition flex items-center justify-center gap-1 font-mono ${
+                  mt5BridgeState?.online
+                    ? 'bg-emerald-950/80 border-emerald-500/80 text-emerald-300'
+                    : 'bg-emerald-700 hover:bg-emerald-600 border-emerald-400 text-white animate-pulse'
+                } disabled:opacity-60`}
+                title="Starts or verifies the local MT5 execution bridge server on port 8001"
+              >
+                <Server className={`w-3 h-3 ${startingBridgeServer ? 'animate-spin' : ''}`} />
+                <span>
+                  {startingBridgeServer
+                    ? 'Starting 8001...'
+                    : mt5BridgeState?.online
+                    ? 'Port 8001: Online'
+                    : 'Start Port 8001 (.bat)'}
+                </span>
+              </button>
 
-          {/* BUTTON 2: PLACE ORDER / TRADE NOW (Executes Live Trade on MT5 for Any Pair with Auto TP/SL) */}
-          <button
-            type="button"
-            disabled={mt5Ordering}
-            onClick={() =>
-              handlePlaceMt5Order(
-                isSellTrade ? 'SELL' : 'BUY',
-                displayTpLevels[selectedTpIndex] ?? displayTp1,
-                displaySL
-              )
-            }
-            className={`w-full py-2.5 px-3 text-white text-xs font-black rounded-lg shadow-xl border transition flex items-center justify-center gap-1.5 ${
-              isSellTrade
-                ? 'bg-gradient-to-r from-rose-600 to-red-600 hover:from-rose-500 hover:to-red-500 border-rose-300/70'
-                : 'bg-gradient-to-r from-emerald-600 to-green-600 hover:from-emerald-500 hover:to-green-500 border-emerald-300/70'
-            } disabled:opacity-60`}
-          >
-            <Play className="w-3.5 h-3.5 fill-white" />
-            <span>
-              {mt5Ordering
-                ? `Executing ${isSellTrade ? 'SELL' : 'BUY'} ${symbol} (${lotSize} Lot)...`
-                : `2. PLACE ORDER / TRADE NOW (${isSellTrade ? 'SELL' : 'BUY'} ${symbol} · SL $${displaySL.toFixed(precision)})`}
-            </span>
-          </button>
+              <button
+                type="button"
+                disabled={mt5Syncing}
+                onClick={handleExecuteBridgeSync}
+                className="py-1.5 px-2 bg-indigo-700 hover:bg-indigo-600 disabled:opacity-60 text-white text-[10px] font-bold rounded-md shadow border border-indigo-400/80 transition flex items-center justify-center gap-1 font-mono"
+                title="Starts Cloudflare tunnel and pushes active URL to Vercel"
+              >
+                <Zap className={`w-3 h-3 text-amber-300 ${mt5Syncing ? 'animate-spin' : ''}`} />
+                <span>{mt5Syncing ? 'Syncing...' : 'Sync Tunnel to Vercel'}</span>
+              </button>
+            </div>
 
-          {/* Direct Manual Override BUY / SELL Buttons for Any Selected Pair */}
-          <div className="grid grid-cols-2 gap-1.5 pt-0.5">
-            <button
-              type="button"
-              disabled={mt5Ordering}
-              onClick={() => {
-                const buyLevels = calculateRiskBasedLevels({
-                  symbol,
-                  entryPrice: displayEntry > 0 ? displayEntry : fallbackPrice,
-                  isBuy: true,
-                  accountBalance,
-                  lotSize,
-                  riskPercent,
-                  precision,
-                });
-                const buyTp = buyLevels.tpLevels[selectedTpIndex] ?? buyLevels.tp1;
-                handlePlaceMt5Order('BUY', buyTp, buyLevels.stopLoss);
-              }}
-              className="py-1.5 px-2 bg-emerald-900/80 hover:bg-emerald-700 border border-emerald-500/60 text-emerald-100 text-[10px] font-extrabold rounded-md transition flex items-center justify-center gap-1 disabled:opacity-50"
-            >
-              <ArrowUpRight className="w-3 h-3 text-emerald-300" />
-              <span>Instant BUY {symbol}</span>
-            </button>
-            <button
-              type="button"
-              disabled={mt5Ordering}
-              onClick={() => {
-                const sellLevels = calculateRiskBasedLevels({
-                  symbol,
-                  entryPrice: displayEntry > 0 ? displayEntry : fallbackPrice,
-                  isBuy: false,
-                  accountBalance,
-                  lotSize,
-                  riskPercent,
-                  precision,
-                });
-                const sellTp = sellLevels.tpLevels[selectedTpIndex] ?? sellLevels.tp1;
-                handlePlaceMt5Order('SELL', sellTp, sellLevels.stopLoss);
-              }}
-              className="py-1.5 px-2 bg-rose-900/80 hover:bg-rose-700 border border-rose-500/60 text-rose-100 text-[10px] font-extrabold rounded-md transition flex items-center justify-center gap-1 disabled:opacity-50"
-            >
-              <ArrowDownRight className="w-3 h-3 text-rose-300" />
-              <span>Instant SELL {symbol}</span>
-            </button>
+            {!mt5BridgeState?.online && (
+              <div className="text-[9px] text-amber-200/90 font-sans leading-tight bg-slate-950/80 p-1.5 rounded border border-slate-800 space-y-0.5">
+                <div className="flex items-center gap-1 font-bold text-amber-300">
+                  <AlertTriangle className="w-2.5 h-2.5 text-amber-400" />
+                  <span>How to connect MT5:</span>
+                </div>
+                <div>• Local PC: Click "Start Port 8001 (.bat)" above.</div>
+                <div>• Cloud/Phone: Run <code className="text-white">START_PORT_8001.bat</code> on your PC.</div>
+              </div>
+            )}
           </div>
 
-          {/* BUTTON 3 (CANCEL / CLOSE PAIR TRADE) & BUTTON 4 (STOP BOT / CLOSE ALL) */}
-          <div className="grid grid-cols-2 gap-1.5 pt-1 border-t border-indigo-900/80">
+          {/* SECTION 2: LIVE MANUAL TRADING DESK (Real Money on Exness) */}
+          <div className="pt-2 border-t border-rose-900/50 space-y-2">
+            <div className="flex items-center justify-between text-[9.5px]">
+              <span className="font-bold text-rose-300 uppercase tracking-wider flex items-center gap-1">
+                <AlertTriangle className="w-3 h-3 text-rose-400" />
+                <span>2. Live Manual Trading Desk</span>
+              </span>
+              <span className="text-[8.5px] text-rose-300/80 font-mono">Exness #{mt5BridgeState?.accountLogin || '223995620'}</span>
+            </div>
+
+            {/* Small Account Gold Volatility Warning */}
+            {(symbol.toUpperCase().includes('XAU') || symbol.toUpperCase().includes('GOLD')) && accountBalance <= 35 && (
+              <div className="p-1.5 rounded bg-amber-950/60 border border-amber-600/40 text-amber-200 text-[9px] leading-tight">
+                ⚠️ <strong>Small Account Shield (${accountBalance.toFixed(2)}):</strong> Gold moves $5–$20 rapidly. Consider EUR/USD ($0.10/pip) for 10x safer margin and stop loss protection.
+              </div>
+            )}
+
+            {/* Pending Confirmation Modal Box */}
+            {pendingTradeConfirm && (
+              <div className="p-2.5 rounded-lg bg-rose-950 border border-rose-500 text-white space-y-2 shadow-2xl animate-in fade-in">
+                <div className="flex items-center gap-1.5 text-xs font-bold text-rose-200">
+                  <AlertTriangle className="w-4 h-4 text-rose-400 animate-bounce" />
+                  <span>CONFIRM LIVE EXNESS ORDER</span>
+                </div>
+                <div className="text-[11px] font-mono text-slate-200 bg-black/60 p-2 rounded border border-rose-900/60 space-y-0.5">
+                  <div>Action: <strong className={pendingTradeConfirm.dir === 'BUY' ? 'text-emerald-400' : 'text-rose-400'}>{pendingTradeConfirm.dir} {lotSize} Lot {symbol}</strong></div>
+                  <div>Account: <strong>#{mt5BridgeState?.accountLogin || '223995620'}</strong> (Bal: ${accountBalance.toFixed(2)})</div>
+                  <div>Stop Loss: <strong>${pendingTradeConfirm.sl.toFixed(precision)}</strong> · TP1: <strong>${pendingTradeConfirm.tp.toFixed(precision)}</strong></div>
+                </div>
+                <div className="grid grid-cols-2 gap-2 pt-0.5">
+                  <button
+                    type="button"
+                    onClick={() => handlePlaceMt5Order(pendingTradeConfirm.dir, pendingTradeConfirm.tp, pendingTradeConfirm.sl, true)}
+                    className="py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded shadow transition flex items-center justify-center gap-1"
+                  >
+                    <span>✅ Yes, Send Order</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPendingTradeConfirm(null)}
+                    className="py-1.5 bg-slate-700 hover:bg-slate-600 text-white text-xs font-bold rounded shadow transition flex items-center justify-center gap-1"
+                  >
+                    <span>❌ Cancel</span>
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Confirmation Toggle */}
+            <label className="flex items-center gap-1.5 text-[9px] text-slate-300 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={requireTradeConfirm}
+                onChange={(e) => setRequireTradeConfirm(e.target.checked)}
+                className="rounded text-blue-500 bg-slate-900 border-slate-700"
+              />
+              <span>Require confirmation prompt before placing orders</span>
+            </label>
+
+            {/* Main Signal Direction Manual Order Button */}
+            <button
+              type="button"
+              disabled={mt5Ordering}
+              onClick={() =>
+                handlePlaceMt5Order(
+                  isSellTrade ? 'SELL' : 'BUY',
+                  displayTpLevels[selectedTpIndex] ?? displayTp1,
+                  displaySL
+                )
+              }
+              className={`w-full py-2.5 px-3 text-white text-xs font-black rounded-lg shadow-xl border transition flex items-center justify-center gap-1.5 ${
+                isSellTrade
+                  ? 'bg-gradient-to-r from-rose-600 to-red-600 hover:from-rose-500 hover:to-red-500 border-rose-300/70'
+                  : 'bg-gradient-to-r from-emerald-600 to-green-600 hover:from-emerald-500 hover:to-green-500 border-emerald-300/70'
+              } disabled:opacity-60`}
+            >
+              <Play className="w-3.5 h-3.5 fill-white" />
+              <span>
+                {mt5Ordering
+                  ? `Sending ${isSellTrade ? 'SELL' : 'BUY'} ${symbol} (${lotSize} Lot)...`
+                  : `MANUAL ${isSellTrade ? 'SELL' : 'BUY'} ${symbol} · SL $${displaySL.toFixed(precision)}`}
+              </span>
+            </button>
+
+            {/* Quick Instant BUY / Instant SELL Buttons */}
+            <div className="grid grid-cols-2 gap-1.5">
+              <button
+                type="button"
+                disabled={mt5Ordering}
+                onClick={() => {
+                  const buyLevels = calculateRiskBasedLevels({
+                    symbol,
+                    entryPrice: displayEntry > 0 ? displayEntry : fallbackPrice,
+                    isBuy: true,
+                    accountBalance,
+                    lotSize,
+                    riskPercent,
+                    precision,
+                  });
+                  const buyTp = buyLevels.tpLevels[selectedTpIndex] ?? buyLevels.tp1;
+                  handlePlaceMt5Order('BUY', buyTp, buyLevels.stopLoss);
+                }}
+                className="py-1.5 px-2 bg-emerald-900/80 hover:bg-emerald-700 border border-emerald-500/60 text-emerald-100 text-[10px] font-extrabold rounded-md transition flex items-center justify-center gap-1 disabled:opacity-50"
+              >
+                <ArrowUpRight className="w-3 h-3 text-emerald-300" />
+                <span>Instant BUY {symbol}</span>
+              </button>
+              <button
+                type="button"
+                disabled={mt5Ordering}
+                onClick={() => {
+                  const sellLevels = calculateRiskBasedLevels({
+                    symbol,
+                    entryPrice: displayEntry > 0 ? displayEntry : fallbackPrice,
+                    isBuy: false,
+                    accountBalance,
+                    lotSize,
+                    riskPercent,
+                    precision,
+                  });
+                  const sellTp = sellLevels.tpLevels[selectedTpIndex] ?? sellLevels.tp1;
+                  handlePlaceMt5Order('SELL', sellTp, sellLevels.stopLoss);
+                }}
+                className="py-1.5 px-2 bg-rose-900/80 hover:bg-rose-700 border border-rose-500/60 text-rose-100 text-[10px] font-extrabold rounded-md transition flex items-center justify-center gap-1 disabled:opacity-50"
+              >
+                <ArrowDownRight className="w-3 h-3 text-rose-300" />
+                <span>Instant SELL {symbol}</span>
+              </button>
+            </div>
+          </div>
+
+          {/* EMERGENCY CLOSE & STOP CONTROLS */}
+          <div className="grid grid-cols-2 gap-1.5 pt-1.5 border-t border-slate-800">
             <button
               type="button"
               disabled={mt5Cancelling}
               onClick={() => handleCancelOrCloseTrade(false)}
-              className="py-2 px-2 bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-slate-950 text-[10px] font-black rounded-lg shadow border border-amber-300 transition flex items-center justify-center gap-1"
+              className="py-1.5 px-2 bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-slate-950 text-[10px] font-black rounded-lg shadow border border-amber-300 transition flex items-center justify-center gap-1"
               title="Immediately closes open MT5 position(s) & cancels pending orders for this pair"
             >
               <XCircle className="w-3.5 h-3.5" />
-              <span>{mt5Cancelling ? 'Closing...' : `3. CANCEL / CLOSE (${symbol})`}</span>
+              <span>{mt5Cancelling ? 'Closing...' : `Close ${symbol}`}</span>
             </button>
             <button
               type="button"
               disabled={mt5Stopping}
               onClick={handleStopAutoBot}
-              className="py-2 px-2 bg-rose-700 hover:bg-rose-600 disabled:opacity-50 text-white text-[10px] font-black rounded-lg shadow border border-rose-400 transition flex items-center justify-center gap-1"
+              className="py-1.5 px-2 bg-rose-700 hover:bg-rose-600 disabled:opacity-50 text-white text-[10px] font-black rounded-lg shadow border border-rose-400 transition flex items-center justify-center gap-1"
               title="Stops the Auto-Bot and immediately closes ALL open MT5 positions across all pairs"
             >
               <Square className="w-3 h-3 fill-white" />
-              <span>{mt5Stopping ? 'Stopping...' : '4. STOP BOT (CLOSE ALL)'}</span>
+              <span>{mt5Stopping ? 'Stopping...' : 'Emergency Close All'}</span>
             </button>
           </div>
 

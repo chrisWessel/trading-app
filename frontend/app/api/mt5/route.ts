@@ -253,8 +253,15 @@ export async function GET() {
 
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json();
-    const mode = body?.mode || 'place_order';
+    const body = await req.json().catch(() => ({}));
+    const mode = body?.mode;
+
+    if (!mode) {
+      return NextResponse.json(
+        { error: "Missing required 'mode' parameter in POST /api/mt5 request." },
+        { status: 400 }
+      );
+    }
 
     // Direct Start Bridge / Port 8001 Action via .bat or server
     if (mode === 'start_bridge_bat' || mode === 'start_bat') {
@@ -418,37 +425,44 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Button 2: Place Order / Trade Now -> POST /webhook/mt5
-    const orderPayload = {
-      symbol: body.symbol || 'XAU/USD',
-      action: body.action || 'BUY',
-      volume: Number(body.volume || 0.01),
-      stop_loss: body.stop_loss ? Number(body.stop_loss) : undefined,
-      take_profit: body.take_profit ? Number(body.take_profit) : undefined,
-      timeframe: body.timeframe || '5m',
-      dry_run: Boolean(body.dry_run),
-    };
+    if (mode === 'place_order') {
+      // Place Order / Trade Now -> POST /webhook/mt5
+      const orderPayload = {
+        symbol: body.symbol || 'XAU/USD',
+        action: body.action || 'BUY',
+        volume: Number(body.volume || 0.01),
+        stop_loss: body.stop_loss ? Number(body.stop_loss) : undefined,
+        take_profit: body.take_profit ? Number(body.take_profit) : undefined,
+        timeframe: body.timeframe || '5m',
+        dry_run: Boolean(body.dry_run),
+      };
 
-    const orderRes = await fetchWithTimeout(
-      `${baseUrl}/webhook/mt5`,
-      {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${DEFAULT_SECRET_TOKEN}`,
-          'Content-Type': 'application/json',
+      const orderRes = await fetchWithTimeout(
+        `${baseUrl}/webhook/mt5`,
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${DEFAULT_SECRET_TOKEN}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(orderPayload),
         },
-        body: JSON.stringify(orderPayload),
-      },
-      12000
-    );
-    const orderJson = await orderRes.json().catch(() => ({}));
+        12000
+      );
+      const orderJson = await orderRes.json().catch(() => ({}));
+      return NextResponse.json(
+        {
+          ...orderJson,
+          resolved_bridge_url: baseUrl,
+          resolution_source: source,
+        },
+        { status: orderRes.ok ? 200 : orderRes.status }
+      );
+    }
+
     return NextResponse.json(
-      {
-        ...orderJson,
-        resolved_bridge_url: baseUrl,
-        resolution_source: source,
-      },
-      { status: orderRes.ok ? 200 : orderRes.status }
+      { error: `Unsupported or unknown mode '${mode}' in /api/mt5.` },
+      { status: 400 }
     );
   } catch (err: any) {
     const rawMsg = String(err?.message || '');

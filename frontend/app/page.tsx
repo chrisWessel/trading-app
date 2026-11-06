@@ -95,6 +95,7 @@ export default function DashboardPage() {
   const [topBridgeOnline, setTopBridgeOnline] = useState<boolean>(false);
   const [topMt5Status, setTopMt5Status] = useState<string>('MT5 Bridge Ready (Auto-Stop SL/TP Active)');
   const [topMt5Receipt, setTopMt5Receipt] = useState<any | null>(null);
+  const topLastOrderMsRef = useRef<number>(0);
 
   // Poll bridge health on mount (supports both local and Vercel cloud with fallback)
   useEffect(() => {
@@ -299,6 +300,16 @@ export default function DashboardPage() {
   const handleTopPlaceOrder = async (dirOverride?: 'BUY' | 'SELL') => {
     const dir = dirOverride || topDirection;
     setTopDirection(dir);
+
+    // Strict 10s cooldown debounce to eliminate accidental double clicks / retry storms
+    const nowMs = Date.now();
+    if (nowMs - topLastOrderMsRef.current < 10000) {
+      const waitSec = Math.ceil((10000 - (nowMs - topLastOrderMsRef.current)) / 1000);
+      alert(`⚠️ Order Cooldown: Please wait ${waitSec}s before placing another order on Exness.`);
+      return;
+    }
+    topLastOrderMsRef.current = nowMs;
+
     setTopMt5Ordering(true);
     setTopMt5Receipt(null);
     const payload = {
@@ -310,28 +321,40 @@ export default function DashboardPage() {
       take_profit: topTakeProfit && topTakeProfit > 0 ? topTakeProfit : undefined,
       timeframe,
       dry_run: false,
+      confirmed: true,
     };
     try {
       let json: any = null;
-      try {
-        const localRes = await fetch('http://127.0.0.1:8001/webhook/mt5', {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${MT5_LOCAL_TOKEN}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify(payload),
-        });
-        json = await localRes.json();
-      } catch {}
+      // Single-target execution: NEVER fallback between endpoints to prevent duplicate broker orders!
+      const isLocalhost =
+        typeof window !== 'undefined' &&
+        (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
 
-      if (!json) {
-        const apiRes = await fetch('/api/mt5', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-        });
-        json = await apiRes.json();
+      if (isLocalhost && topBridgeOnline) {
+        try {
+          const localRes = await fetch('http://127.0.0.1:8001/webhook/mt5', {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${MT5_LOCAL_TOKEN}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(payload),
+          });
+          json = await localRes.json();
+        } catch (err: any) {
+          json = { status: 'error', retcode_name: `Local Port 8001 error: ${err?.message || 'Check terminal'}` };
+        }
+      } else {
+        try {
+          const apiRes = await fetch('/api/mt5', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          });
+          json = await apiRes.json();
+        } catch (err: any) {
+          json = { status: 'error', retcode_name: `API error: ${err?.message || 'Network timeout'}` };
+        }
       }
       setTopMt5Receipt(json);
       setShowBotWindow(true);
@@ -837,26 +860,26 @@ export default function DashboardPage() {
             </span>
           </div>
 
-          {/* THE 5 CORE BUTTONS: 0. START SERVER | 1. EXECUTE | 2. PLACE ORDER | 3. CANCEL/CLOSE | 4. STOP BOT */}
+          {/* MT5 BRIDGE & MANUAL CONTROLS: CONNECTIVITY (Port 8001/Tunnel) & MANUAL TRADING */}
           <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
               disabled={topMt5StartingServer}
               onClick={handleTopStartBridge}
-              className={`px-3.5 py-2 text-white text-xs font-black rounded-lg shadow-lg border transition flex items-center gap-1.5 font-mono ${
+              className={`px-3 py-1.5 text-white text-xs font-bold rounded-lg shadow-lg border transition flex items-center gap-1.5 font-mono ${
                 topBridgeOnline
                   ? 'bg-emerald-950/80 hover:bg-emerald-900 border-emerald-500/80 text-emerald-200'
-                  : 'bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 border-emerald-300 shadow-emerald-900/40 animate-pulse'
+                  : 'bg-emerald-700 hover:bg-emerald-600 border-emerald-400 animate-pulse'
               } disabled:opacity-60`}
               title="Starts or verifies the local MT5 execution bridge server on port 8001"
             >
-              <Server className={`w-4 h-4 ${topMt5StartingServer ? 'animate-spin' : ''}`} />
+              <Server className={`w-3.5 h-3.5 ${topMt5StartingServer ? 'animate-spin' : ''}`} />
               <span>
                 {topMt5StartingServer
-                  ? 'Starting Port 8001...'
+                  ? 'Starting 8001...'
                   : topBridgeOnline
-                  ? 'PORT 8001: ONLINE'
-                  : '0. START SERVER (start_bridge.bat)'}
+                  ? 'Port 8001: Online'
+                  : 'Start Port 8001 (.bat)'}
               </span>
             </button>
 
@@ -864,31 +887,37 @@ export default function DashboardPage() {
               type="button"
               disabled={topMt5Syncing}
               onClick={handleTopExecuteSync}
-              className="px-3.5 py-2 bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-500 hover:to-blue-500 disabled:opacity-60 text-white text-xs font-black rounded-lg shadow-lg border border-indigo-300/70 transition flex items-center gap-1.5 font-mono"
+              className="px-3 py-1.5 bg-indigo-700 hover:bg-indigo-600 disabled:opacity-60 text-white text-xs font-bold rounded-lg shadow-lg border border-indigo-400/80 transition flex items-center gap-1.5 font-mono"
+              title="Starts or verifies the Cloudflare tunnel and synchronizes URL to Vercel"
             >
-              <Zap className={`w-4 h-4 text-amber-300 ${topMt5Syncing ? 'animate-spin' : ''}`} />
+              <Zap className={`w-3.5 h-3.5 text-amber-300 ${topMt5Syncing ? 'animate-spin' : ''}`} />
               <span>
                 {topMt5Syncing
-                  ? '1. Syncing Tunnel...'
-                  : '1. EXECUTE (Start Tunnel & Sync Git/Vercel)'}
+                  ? 'Syncing Tunnel...'
+                  : 'Sync Tunnel to Vercel'}
               </span>
             </button>
 
             <button
               type="button"
               disabled={topMt5Ordering}
-              onClick={() => handleTopPlaceOrder(topDirection)}
-              className={`px-3.5 py-2 text-white text-xs font-black rounded-lg shadow-xl border transition flex items-center gap-1.5 font-mono ${
+              onClick={() => {
+                if (window.confirm(`⚠️ CONFIRM MANUAL ORDER ON EXNESS:\n\nSend ${topDirection} ${topLotSize} Lot ${symbol} to Exness?\n\nStop Loss: ${topStopLoss ? `$${topStopLoss}` : 'Auto-Sized'}\nTake Profit: ${topTakeProfit ? `$${topTakeProfit}` : 'Auto-Sized'}`)) {
+                  handleTopPlaceOrder(topDirection);
+                }
+              }}
+              className={`px-3.5 py-1.5 text-white text-xs font-black rounded-lg shadow-xl border transition flex items-center gap-1.5 font-mono ${
                 topDirection === 'SELL'
                   ? 'bg-gradient-to-r from-rose-600 to-red-600 hover:from-rose-500 hover:to-red-500 border-rose-300/80'
                   : 'bg-gradient-to-r from-emerald-600 to-green-600 hover:from-emerald-500 hover:to-green-500 border-emerald-300/80'
               } disabled:opacity-60`}
+              title="Executes manual order on Exness live account"
             >
-              <Play className="w-4 h-4 fill-white" />
+              <Play className="w-3.5 h-3.5 fill-white" />
               <span>
                 {topMt5Ordering
-                  ? `Executing ${topDirection} ${symbol}...`
-                  : `2. PLACE ORDER / TRADE NOW (${topDirection} ${symbol} · ${topLotSize} Lot)`}
+                  ? `Sending ${topDirection} ${symbol}...`
+                  : `MANUAL ${topDirection} ${symbol} (${topLotSize} Lot)`}
               </span>
             </button>
 
@@ -896,14 +925,14 @@ export default function DashboardPage() {
               type="button"
               disabled={topMt5Cancelling}
               onClick={handleTopCancelClose}
-              className="px-3.5 py-2 bg-amber-600 hover:bg-amber-500 disabled:opacity-60 text-slate-950 text-xs font-black rounded-lg shadow-lg border border-amber-300 transition flex items-center gap-1.5 font-mono"
+              className="px-3 py-1.5 bg-amber-600 hover:bg-amber-500 disabled:opacity-60 text-slate-950 text-xs font-bold rounded-lg shadow border border-amber-300 transition flex items-center gap-1.5 font-mono"
               title="Closes open position(s) and cancels pending orders on MT5 for the active pair"
             >
-              <XCircle className="w-4 h-4" />
+              <XCircle className="w-3.5 h-3.5" />
               <span>
                 {topMt5Cancelling
                   ? 'Closing...'
-                  : `3. CANCEL / CLOSE (${symbol})`}
+                  : `Close (${symbol})`}
               </span>
             </button>
 
@@ -911,14 +940,14 @@ export default function DashboardPage() {
               type="button"
               disabled={topMt5Stopping}
               onClick={handleTopStopBot}
-              className="px-3.5 py-2 bg-rose-700 hover:bg-rose-600 disabled:opacity-60 text-white text-xs font-black rounded-lg shadow-lg border border-rose-400 transition flex items-center gap-1.5 font-mono"
+              className="px-3 py-1.5 bg-rose-700 hover:bg-rose-600 disabled:opacity-60 text-white text-xs font-bold rounded-lg shadow border border-rose-400 transition flex items-center gap-1.5 font-mono"
               title="Stops the Auto-Bot and immediately closes ALL open MT5 positions across all pairs"
             >
-              <Square className="w-3.5 h-3.5 fill-white" />
+              <Square className="w-3 h-3 fill-white" />
               <span>
                 {topMt5Stopping
                   ? 'Stopping...'
-                  : '4. STOP BOT (CLOSE ALL)'}
+                  : 'Emergency Close All'}
               </span>
             </button>
 

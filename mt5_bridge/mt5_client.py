@@ -7,6 +7,7 @@ volumetric fallbacks, filling-mode negotiation, and deterministic TRADE_ACTION_D
 import math
 import time
 import threading
+import logging
 from datetime import datetime, timezone
 from typing import Any, Optional
 
@@ -14,6 +15,9 @@ import MetaTrader5 as mt5
 
 from config import settings
 from schemas import WebhookOrderRequest, OrderExecutionResponse
+
+logger = logging.getLogger("mt5_client")
+logging.basicConfig(level=logging.INFO)
 
 _mt5_lock = threading.RLock()
 
