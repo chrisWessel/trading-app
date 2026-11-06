@@ -106,6 +106,66 @@ async function tryAutoSpawnLocalBridge(): Promise<{ ok: boolean; message: string
   }
 }
 
+/**
+ * Executes mt5_bridge/start_bridge.bat in a visible command window
+ * on local Windows machines, or returns an explicit instruction for cloud/Vercel users.
+ */
+async function tryLaunchStartBridgeBat(): Promise<{ ok: boolean; message: string; isCloud?: boolean }> {
+  // Check if 8001 is already alive
+  try {
+    const healthCheck = await fetchWithTimeout(
+      `${LOCAL_BRIDGE_BASE}/health`,
+      { headers: { Authorization: `Bearer ${DEFAULT_SECRET_TOKEN}` } },
+      1000
+    );
+    if (healthCheck.ok) {
+      return { ok: true, message: 'MT5 Bridge is already running and online on port 8001!' };
+    }
+  } catch {}
+
+  if (process.platform !== 'win32' || process.env.VERCEL) {
+    return {
+      ok: false,
+      isCloud: true,
+      message: 'You are on Vercel Cloud! Cloud web servers cannot launch files on your local Windows PC. Double-click mt5_bridge\\start_bridge.bat or START_PORT_8001.bat on your PC desktop.',
+    };
+  }
+
+  try {
+    const repoRoot = findRepoRoot();
+    const batPath = path.join(repoRoot, 'mt5_bridge', 'start_bridge.bat');
+    if (!fs.existsSync(batPath)) {
+      return { ok: false, message: `start_bridge.bat not found at: ${batPath}` };
+    }
+
+    // Launch start_bridge.bat in a new visible cmd window
+    const child = spawn('cmd.exe', ['/c', 'start', 'WesSignal MT5 Bridge (8001)', batPath], {
+      cwd: path.join(repoRoot, 'mt5_bridge'),
+      detached: true,
+      stdio: 'ignore',
+    });
+    child.unref();
+
+    // Poll 127.0.0.1:8001/health for up to 8 seconds
+    for (let i = 0; i < 16; i++) {
+      await new Promise((r) => setTimeout(r, 500));
+      try {
+        const res = await fetchWithTimeout(
+          `${LOCAL_BRIDGE_BASE}/health`,
+          { headers: { Authorization: `Bearer ${DEFAULT_SECRET_TOKEN}` } },
+          1000
+        );
+        if (res.ok) {
+          return { ok: true, message: 'Successfully started mt5_bridge/start_bridge.bat (Port 8001 is ONLINE)!' };
+        }
+      } catch {}
+    }
+    return { ok: true, message: 'start_bridge.bat launched! Server is initializing on port 8001.' };
+  } catch (err: any) {
+    return { ok: false, message: `Failed to launch start_bridge.bat: ${err?.message || err}` };
+  }
+}
+
 async function resolveActiveBridgeBaseUrl(hintTunnelUrl?: string): Promise<{ baseUrl: string; source: string }> {
   // 1. Check if running locally where 127.0.0.1:8001 is directly reachable
   try {
@@ -196,7 +256,32 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
     const mode = body?.mode || 'place_order';
 
-    // Direct Start Bridge / Port 8001 Action
+    // Direct Start Bridge / Port 8001 Action via .bat or server
+    if (mode === 'start_bridge_bat' || mode === 'start_bat') {
+      const batResult = await tryLaunchStartBridgeBat();
+      let healthData: any = {};
+      try {
+        const hRes = await fetchWithTimeout(
+          `${LOCAL_BRIDGE_BASE}/health`,
+          { headers: { Authorization: `Bearer ${DEFAULT_SECRET_TOKEN}` } },
+          1500
+        );
+        if (hRes.ok) healthData = await hRes.json();
+      } catch {}
+
+      return NextResponse.json(
+        {
+          status: batResult.ok ? 'online' : 'error',
+          bridge: batResult.ok ? 'online' : 'offline',
+          port: 8001,
+          message: batResult.message,
+          isCloud: batResult.isCloud,
+          ...healthData,
+        },
+        { status: 200 }
+      );
+    }
+
     if (mode === 'start_server' || mode === 'start_bridge') {
       const spawnResult = await tryAutoSpawnLocalBridge();
       let healthData: any = {};

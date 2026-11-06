@@ -172,11 +172,11 @@ export default function DashboardPage() {
         return;
       }
 
-      // 2. Request auto-spawn if running on local environment
+      // 2. Request launch of start_bridge.bat via API
       const res = await fetch('/api/mt5', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mode: 'start_server' }),
+        body: JSON.stringify({ mode: 'start_bridge_bat' }),
       });
       const data = await res.json().catch(() => ({}));
       if (data?.bridge === 'online' || data?.status === 'online' || data?.mt5_ipc_connected) {
@@ -185,9 +185,13 @@ export default function DashboardPage() {
         setTopMt5Status(
           `✅ Port 8001 LIVE! ${term?.terminal_name || 'MT5'} (${term?.account_server || 'Connected'}) · Bal: $${term?.account_balance !== undefined ? Number(term.account_balance).toFixed(2) : '0.00'}`
         );
+      } else if (data?.isCloud) {
+        setTopMt5Status(
+          '⚠️ Cloud Vercel: Please double-click START_PORT_8001.bat or mt5_bridge/start_bridge.bat on your PC. Once open, this turns green!'
+        );
       } else {
         setTopMt5Status(
-          data?.message || '⚠️ Double-click run_app.bat on your PC to start Port 8001.'
+          data?.message || '⚠️ Double-click START_PORT_8001.bat or mt5_bridge/start_bridge.bat on your PC desktop.'
         );
       }
     } catch (err: any) {
@@ -852,7 +856,7 @@ export default function DashboardPage() {
                   ? 'Starting Port 8001...'
                   : topBridgeOnline
                   ? 'PORT 8001: ONLINE'
-                  : '0. START SERVER (Port 8001)'}
+                  : '0. START SERVER (start_bridge.bat)'}
               </span>
             </button>
 

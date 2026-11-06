@@ -27,6 +27,7 @@ import {
   Trophy,
   Target,
   Briefcase,
+  Server,
 } from 'lucide-react';
 import {
   fetchBrowserLiveBars,
@@ -1632,6 +1633,94 @@ export default function AutonomousBotLiveWindow({
               </div>
             );
           })()}
+
+          {/* SMALL-ACCOUNT VOLATILITY SHIELD: WHY FOREX (EUR/USD) BEATS GOLD FOR SMALL ACCOUNTS */}
+          {symbol.toUpperCase().includes('XAU') && accountBalance < 35 && (
+            <div className="bg-gradient-to-r from-amber-950/70 via-slate-900 to-amber-950/50 border border-amber-500/80 rounded-xl p-3 space-y-2 text-[10px]">
+              <div className="flex items-center justify-between">
+                <span className="flex items-center gap-1.5 font-bold text-amber-300">
+                  <ShieldAlert className="w-4 h-4 text-amber-400" />
+                  <span>⚠️ Small-Balance Alert: Gold Noise Trap ($10 Balance)</span>
+                </span>
+                <span className="bg-amber-500/20 text-amber-300 px-2 py-0.5 rounded font-mono font-bold">
+                  EUR/USD Priority
+                </span>
+              </div>
+              <p className="text-slate-200 leading-relaxed font-sans">
+                On 0.01 Gold, every $1.00 move equals $1.00. To cap your risk at $0.85, the Stop Loss is forced to sit only <strong>0.85 points away</strong>, which is inside Gold's normal spread (0.35–0.45) and 1-minute noise ($2–$5)! That is why Gold trades stopped out at -$0.85.
+              </p>
+              <p className="text-emerald-300 font-semibold leading-relaxed font-sans">
+                💡 <strong>The Solution:</strong> Switch to <strong>EUR/USD or GBP/USD</strong>! On EUR/USD, 0.01 lot is only <strong>$0.10/pip</strong>. Your $0.85 stop gives you <strong>8.5 to 12 pips of safe structural breathing room</strong> outside spread, giving you high win-rate SMC setups without suffocating!
+              </p>
+              <div className="flex items-center gap-2 pt-1 flex-wrap">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (onSelectSymbol) onSelectSymbol('EUR/USD');
+                    if (typeof window !== 'undefined') {
+                      window.dispatchEvent(new CustomEvent('wessignal-change-symbol', { detail: 'EUR/USD' }));
+                    }
+                    setStatusBanner('🔄 Switched to EUR/USD — Safe 8.5-pip structural stop loss now active!');
+                  }}
+                  className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-black rounded-lg border border-emerald-300 shadow flex items-center gap-1.5 transition"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  <span>Switch to EUR/USD Now (Recommended for $10 Balance)</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (onSelectSymbol) onSelectSymbol('GBP/USD');
+                    if (typeof window !== 'undefined') {
+                      window.dispatchEvent(new CustomEvent('wessignal-change-symbol', { detail: 'GBP/USD' }));
+                    }
+                    setStatusBanner('🔄 Switched to GBP/USD — Safe structural stop loss active!');
+                  }}
+                  className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white font-black rounded-lg border border-slate-700 shadow flex items-center gap-1.5 transition"
+                >
+                  <span>Switch to GBP/USD</span>
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* LAUNCH MT5 BRIDGE (PORT 8001) SERVER BUTTON BAR */}
+          <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-2.5 flex flex-wrap items-center justify-between gap-2 text-[10px]">
+            <div className="flex items-center gap-2">
+              <Server className="w-4 h-4 text-indigo-400" />
+              <div>
+                <span className="font-bold text-white">Local MT5 Bridge (Port 8001): </span>
+                <span className="text-slate-300">FastAPI execution server on 127.0.0.1:8001</span>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={async () => {
+                setStatusBanner('🚀 Launching mt5_bridge/start_bridge.bat...');
+                try {
+                  const res = await fetch('/api/mt5', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ mode: 'start_bridge_bat' }),
+                  });
+                  const d = await res.json().catch(() => ({}));
+                  if (d?.isCloud) {
+                    alert('⚠️ On Vercel Cloud: Cloud websites cannot start local programs. Double-click START_PORT_8001.bat or mt5_bridge\\start_bridge.bat on your PC desktop.');
+                    setStatusBanner('⚠️ On Vercel: Double-click START_PORT_8001.bat or mt5_bridge/start_bridge.bat on your PC.');
+                  } else {
+                    setStatusBanner(d?.message || '✅ mt5_bridge/start_bridge.bat launched!');
+                  }
+                } catch (e: any) {
+                  setStatusBanner(`⚠️ Error launching bridge: ${e?.message}`);
+                }
+              }}
+              className="px-3 py-1.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-black rounded-lg border border-emerald-300 shadow flex items-center gap-1.5 transition"
+              title="Runs mt5_bridge/start_bridge.bat"
+            >
+              <Play className="w-3.5 h-3.5 fill-white" />
+              <span>Start mt5_bridge/start_bridge.bat</span>
+            </button>
+          </div>
 
           {/* WORKER ALGORITHM (DAILY PROFIT TARGET LOCK / SENTINEL) */}
           <div

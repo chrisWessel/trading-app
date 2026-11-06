@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useEffect, useState, useRef } from 'react';
-import { Bell, Zap, ArrowUpRight, ArrowDownRight, Volume2, VolumeX, Shield, Target, Play, Clock, Navigation, Square, XCircle, Bot, Server, Trophy } from 'lucide-react';
+import { Bell, Zap, ArrowUpRight, ArrowDownRight, Volume2, VolumeX, Shield, Target, Play, Clock, Navigation, Square, XCircle, Bot, Server, Trophy, AlertTriangle } from 'lucide-react';
 import { API_BASE_URL } from '@/lib/apiConfig';
 import { fetchWithFastTimeout, fetchBrowserLiveBars, computeBrowserSignalAnalysis, calculateRiskBasedLevels } from '@/lib/browserFallbackEngine';
 
@@ -308,7 +308,7 @@ export default function LiveSignalNotificationPanel({
       const res = await fetchWithFastTimeout('/api/mt5', 12000, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mode: 'start_server' }),
+        body: JSON.stringify({ mode: 'start_bridge_bat' }),
       });
       const data = await res?.json().catch(() => ({}));
       if (data?.bridge === 'online' || data?.status === 'online') {
@@ -324,11 +324,17 @@ export default function LiveSignalNotificationPanel({
           gitSynced: prev?.gitSynced,
           message: `✅ Port 8001 LIVE! ${term.terminal_name || 'MT5'} (#${term.account_login || ''}) · Bal: $${term.account_balance || '0.00'}`,
         }));
+      } else if (data?.isCloud) {
+        setMt5BridgeState((prev) => ({
+          online: false,
+          tunnelUrl: prev?.tunnelUrl || '',
+          message: '⚠️ On Vercel: Double-click START_PORT_8001.bat or mt5_bridge\\start_bridge.bat on your PC. Once running, port 8001 connects automatically!',
+        }));
       } else {
         setMt5BridgeState((prev) => ({
           online: false,
           tunnelUrl: prev?.tunnelUrl || '',
-          message: data?.message || data?.error || '⚠️ Could not start port 8001 automatically. Run start_bridge.bat.',
+          message: data?.message || data?.error || '⚠️ Run mt5_bridge/start_bridge.bat on your PC to start Port 8001.',
         }));
       }
     } catch (e: any) {
@@ -1464,9 +1470,24 @@ export default function LiveSignalNotificationPanel({
                 ? 'Starting Port 8001...'
                 : mt5BridgeState?.online
                 ? '✅ PORT 8001: ONLINE (CONNECTED)'
-                : '0. START SERVER (Port 8001)'}
+                : '0. START SERVER (start_bridge.bat)'}
             </span>
           </button>
+
+          {!mt5BridgeState?.online && (
+            <div className="text-[9px] text-amber-200/90 font-sans leading-tight bg-slate-950/80 p-2 rounded border border-slate-800 space-y-1">
+              <div className="flex items-center gap-1 font-bold text-amber-300">
+                <AlertTriangle className="w-3 h-3 text-amber-400" />
+                <span>How to start MT5 Bridge on Port 8001:</span>
+              </div>
+              <div>
+                • <strong>On Local PC:</strong> Click the button above to launch <code className="text-white">mt5_bridge/start_bridge.bat</code>.
+              </div>
+              <div>
+                • <strong>On Vercel Cloud:</strong> Double-click <code className="text-white">START_PORT_8001.bat</code> or <code className="text-white">mt5_bridge\start_bridge.bat</code> on your PC desktop. Once opened, this card connects automatically!
+              </div>
+            </div>
+          )}
 
           {/* BUTTON 1: EXECUTE (Start Cloudflare Tunnel + Push New URL to GitHub & Vercel) */}
           <button
