@@ -468,12 +468,37 @@ export function calculateRiskBasedLevels(params: {
     targetDistance = Math.min(targetDistance, maxAllowedDistByRisk);
   }
 
-  const slDistance = Number(
-    Math.max(
-      safeBalance <= 25 ? 0.60 : antiWickFloor,
-      Math.min(targetDistance, maxChartReasonableStop)
-    ).toFixed(precision)
-  );
+  const isForex =
+    !isGold &&
+    entryPrice < 25 &&
+    (symbol.toUpperCase().includes('EUR') ||
+      symbol.toUpperCase().includes('GBP') ||
+      symbol.toUpperCase().includes('USD') ||
+      symbol.toUpperCase().includes('AUD') ||
+      symbol.toUpperCase().includes('NZD') ||
+      symbol.toUpperCase().includes('CAD') ||
+      symbol.toUpperCase().includes('CHF'));
+
+  let slDistance: number;
+  if (isForex) {
+    const isJpy = symbol.toUpperCase().includes('JPY');
+    const pipUnit = isJpy ? 0.01 : 0.0001;
+    // For Forex on small accounts ($4 - $25): 10 to 18 pips stop distance ($1.00 - $1.80 risk)
+    const forexMinDist = safeBalance <= 25 ? pipUnit * 10 : pipUnit * 14;
+    const forexMaxDist = safeBalance <= 25 ? pipUnit * 18 : pipUnit * 28;
+    slDistance = Number(
+      Math.max(forexMinDist, Math.min(targetDistance, forexMaxDist)).toFixed(precision)
+    );
+  } else {
+    // Proportional anti-wick floor for Gold and Commodities
+    const assetFloor = isGold ? (safeBalance <= 25 ? 0.60 : antiWickFloor) : antiWickFloor;
+    slDistance = Number(
+      Math.max(
+        assetFloor,
+        Math.min(targetDistance, maxChartReasonableStop)
+      ).toFixed(precision)
+    );
+  }
 
   // 5 Entry Zones sit strictly inside 56% of the Stop Loss distance so Z1..Z5 never cross SL!
   const zoneStep = Number(Math.max(slDistance * 0.14, Math.pow(10, -precision)).toFixed(precision));

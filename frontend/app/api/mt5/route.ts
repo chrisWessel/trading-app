@@ -263,6 +263,28 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    if (mode === 'health') {
+      const { baseUrl, source } = await resolveActiveBridgeBaseUrl(body?.tunnel_url);
+      const res = await fetchWithTimeout(
+        `${baseUrl}/health`,
+        {
+          headers: {
+            Authorization: `Bearer ${DEFAULT_SECRET_TOKEN}`,
+          },
+        },
+        5000
+      );
+      const json = await res.json().catch(() => ({}));
+      return NextResponse.json(
+        {
+          ...json,
+          resolved_bridge_url: baseUrl,
+          resolution_source: source,
+        },
+        { status: res.ok ? 200 : res.status }
+      );
+    }
+
     // Direct Start Bridge / Port 8001 Action via .bat or server
     if (mode === 'start_bridge_bat' || mode === 'start_bat') {
       const batResult = await tryLaunchStartBridgeBat();

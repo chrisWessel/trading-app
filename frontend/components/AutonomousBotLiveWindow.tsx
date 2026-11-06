@@ -954,8 +954,8 @@ export default function AutonomousBotLiveWindow({
             floatingPnlDollars: pnl,
           };
           setActiveTrade(trade);
-        } else if (trade && trade.isRealMt5 && !matchingMt5Pos) {
-          // Real MT5 position was closed on the server (hit TP or SL)
+        } else if (trade && trade.isRealMt5 && hJson && Array.isArray(hJson.open_positions) && !matchingMt5Pos) {
+          // Real MT5 position was verified closed on the broker server (hit TP or SL)
           const finalPnl = trade.floatingPnlDollars;
           setClosedTradesCount((c) => c + 1);
           if (finalPnl >= 0) setWinsCount((w) => w + 1);
@@ -1137,9 +1137,12 @@ export default function AutonomousBotLiveWindow({
 
             if (
               isAutopilotOn &&
+              !trade &&
+              !activeTradeRef.current &&
+              mt5Positions.length === 0 &&
               (!workerGoalEnabled || dailyProfitTarget <= 0 || sessionRealizedPnl < dailyProfitTarget) &&
               (analysis.probability || 90) >= 90 &&
-              nowMs - lastAutoEntryMsRef.current >= 45000
+              nowMs - lastAutoEntryMsRef.current >= 60000
             ) {
               lastAutoEntryMsRef.current = nowMs;
               await executeBotOrder(
