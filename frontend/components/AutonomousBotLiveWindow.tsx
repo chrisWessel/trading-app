@@ -237,6 +237,7 @@ export default function AutonomousBotLiveWindow({
   const lastAutoEntryMsRef = useRef<number>(0);
   const lastAutoActionMsRef = useRef<number>(0);
   const lastLogHeadlineRef = useRef<string>('');
+  const failedDirectionLockoutRef = useRef<{ dir: 'BUY' | 'SELL'; untilMs: number; reason: string } | null>(null);
 
   useEffect(() => {
     activeTradeRef.current = activeTrade;
@@ -985,29 +986,19 @@ export default function AutonomousBotLiveWindow({
               (trade.direction === 'SELL' &&
                 trade.currentPrice <= trade.breakevenTriggerPrice));
 
-          // 1. FAST REACTION TO SHARP TURNS (Never turn a blind eye to sharp reversals!):
-          // If the trade enters negative territory (-$0.30 or worse) AND the market order flow flips
-          // (engineDir !== trade.direction OR opposing trend exhaustion/FVG formed),
-          // CUT THE TRADE IMMEDIATELY with a micro-scratch loss (-$0.30 to -$0.50) to protect account capital!
-          const sharpTurnAgainstTrade =
-            !inGracePeriod &&
-            trade.floatingPnlDollars <= -0.30 &&
-            ((trade.direction === 'BUY' && engineDir === 'SELL') ||
-              (trade.direction === 'SELL' && engineDir === 'BUY') ||
-              (trade.direction === 'BUY' && smc?.trendExhaustion.action === 'TAKE_PROFIT_AND_SELL') ||
-              (trade.direction === 'SELL' && smc?.trendExhaustion.action === 'TAKE_PROFIT_AND_BUY'));
-
-          // 2. SMALL-ACCOUNT PROPORTIONAL CATASTROPHIC CIRCUIT BREAKER:
+          // 1. SMALL-ACCOUNT PROPORTIONAL CATASTROPHIC CIRCUIT BREAKER:
           // Strictly proportional to account size:
-          // On a $10.22 account: max allowed loss is capped at $0.85 (under 8.5% of account, NEVER $2.20!)
+          // On a $10.22 account: max allowed loss is capped at $0.95 (under 10% of account, NEVER $2.20!)
           // On a $40 account: max allowed loss is capped at $1.50
           const maxAllowedLossDollars = Math.min(
-            accountBalance <= 15 ? 0.85 : accountBalance <= 30 ? 1.35 : 2.20,
-            Math.max(0.60, accountBalance * (riskPercent / 100) * 1.5)
+            accountBalance <= 15 ? 0.95 : accountBalance <= 30 ? 1.50 : 2.50,
+            Math.max(0.75, accountBalance * (riskPercent / 100) * 1.5)
           );
           const catastrophicLossBreached = trade.floatingPnlDollars <= -maxAllowedLossDollars;
 
-          // Confirmed structural invalidation (beyond soft structure stop)
+          // 2. CONFIRMED STRUCTURAL INVALIDATION (Beyond Soft Structure Stop):
+          // Triggers ONLY when price has genuinely crossed swing structure (softStructureSl) AND order flow confirms opposing direction.
+          // Never cuts on -$0.30 noise! Trades have space to breathe between Entry and Stop Loss.
           const confirmedStructureBreak =
             !inGracePeriod &&
             ((trade.direction === 'BUY' &&
@@ -1019,19 +1010,60 @@ export default function AutonomousBotLiveWindow({
               (trade.direction === 'BUY' && trade.currentPrice <= trade.hardBrokerSl) ||
               (trade.direction === 'SELL' && trade.currentPrice >= trade.hardBrokerSl));
 
-          if (sharpTurnAgainstTrade) {
+          if (hitTp1 || hitExhaustionInProfit) {
+            setAiCurrentCommand({
+              badge: 'TAKE MONEY NOW',
+              color: 'emerald',
+              title: `💰 AI COMMAND: TAKE PROFIT NOW (+$${trade.floatingPnlDollars.toFixed(2)})`,
+              explanation: hitTp1
+                ? `Price reached TP1 ($${trade.tp1Price.toFixed(precision)})! Closing position automatically to bank profit.`
+                : `Trend reached opposing Fair Value Gap exhaustion in profit (+$${trade.floatingPnlDollars.toFixed(2)})! Banking profit now.`,
+            });
+            if (autopilotRef.current && nowMs - lastAutoActionMsRef.current > 6000) {
+              lastAutoActionMsRef.current = nowMs;
+              await closeActiveBotTrade(
+                'TAKE_PROFIT',
+                `Target reached at $${trade.currentPrice.toFixed(precision)} (+$${trade.floatingPnlDollars.toFixed(2)} banked).`
+              );
+            }
+          } else if (confirmedStructureBreak) {
+            const failedDir = trade.direction;
+            const reversalDir: 'BUY' | 'SELL' = failedDir === 'BUY' ? 'SELL' : 'BUY';
+
             setAiCurrentCommand({
               badge: 'STOP & EXIT NOW',
               color: 'rose',
-              title: `⚡ SHARP TURN DETECTED: Cutting Loss Fast (-$${Math.abs(trade.floatingPnlDollars).toFixed(2)})`,
-              explanation: `Market order flow flipped to ${engineDir} against our ${trade.direction}. Cutting trade fast at -$${Math.abs(trade.floatingPnlDollars).toFixed(2)} to protect capital from runaway drawdown!`,
+              title: `🔄 CHoCH BREAK: Closing ${failedDir} & Flipping to ${reversalDir}`,
+              explanation: `Market structure broke beyond $${trade.softStructureSl.toFixed(precision)} with confirmed ${reversalDir} order flow. Exiting ${failedDir} and executing ${reversalDir} reversal!`,
             });
-            if (autopilotRef.current && nowMs - lastAutoActionMsRef.current > 2500) {
+
+            if (autopilotRef.current && nowMs - lastAutoActionMsRef.current > 3500) {
               lastAutoActionMsRef.current = nowMs;
+
+              // Lock out the failed direction for 3 minutes to strictly prevent re-entering the losing direction
+              failedDirectionLockoutRef.current = {
+                dir: failedDir,
+                untilMs: nowMs + 180000,
+                reason: `Structure broke against ${failedDir} on CHoCH.`,
+              };
+
+              // 1. Close the failing trade
               await closeActiveBotTrade(
                 'STOP_REVERSE',
-                `Sharp market turn: Order flow flipped to ${engineDir} against ${trade.direction}. Cut fast at -$${Math.abs(trade.floatingPnlDollars).toFixed(2)}.`
+                `Confirmed ${reversalDir} CHoCH structure break beyond $${trade.softStructureSl.toFixed(precision)}.`
               );
+
+              // 2. Immediately execute the opposing reversal trade!
+              if (autopilotRef.current) {
+                await executeBotOrder(
+                  reversalDir,
+                  tickNow,
+                  (analysis.trade_params as any)?.swing_low ?? analysis.support,
+                  (analysis.trade_params as any)?.swing_high ?? analysis.resistance,
+                  (analysis.trade_params as any)?.atr,
+                  `AI Autopilot Reversal to ${reversalDir} (Confirmed CHoCH Break)`
+                );
+              }
             }
           } else if (catastrophicLossBreached) {
             setAiCurrentCommand({
@@ -1042,39 +1074,14 @@ export default function AutonomousBotLiveWindow({
             });
             if (nowMs - lastAutoActionMsRef.current > 2500) {
               lastAutoActionMsRef.current = nowMs;
+              failedDirectionLockoutRef.current = {
+                dir: trade.direction,
+                untilMs: nowMs + 180000,
+                reason: `Emergency stop loss breached on ${trade.direction}.`,
+              };
               await closeActiveBotTrade(
                 'STOP_REVERSE',
                 `Emergency circuit breaker: Loss -$${Math.abs(trade.floatingPnlDollars).toFixed(2)} exceeded safety limit -$${maxAllowedLossDollars.toFixed(2)}.`
-              );
-            }
-          } else if (hitTp1 || hitExhaustionInProfit) {
-            setAiCurrentCommand({
-              badge: 'TAKE MONEY NOW',
-              color: 'emerald',
-              title: `💰 AI COMMAND: TAKE PROFIT NOW (+$${trade.floatingPnlDollars.toFixed(2)})`,
-              explanation: hitTp1
-                ? `Price reached TP1 ($${trade.tp1Price.toFixed(precision)})! Closing position automatically to bank profit.`
-                : `Trend reached opposing Fair Value Gap exhaustion in profit (+$${trade.floatingPnlDollars.toFixed(2)})! Banking profit now.`,
-            });
-            if (autopilotRef.current && nowMs - lastAutoActionMsRef.current > 8000) {
-              lastAutoActionMsRef.current = nowMs;
-              await closeActiveBotTrade(
-                'TAKE_PROFIT',
-                `Target reached at $${trade.currentPrice.toFixed(precision)} (+$${trade.floatingPnlDollars.toFixed(2)} banked).`
-              );
-            }
-          } else if (confirmedStructureBreak) {
-            setAiCurrentCommand({
-              badge: 'STOP & EXIT NOW',
-              color: 'rose',
-              title: `🛑 AI COMMAND: STOP / CLOSE POSITION NOW (Structure Invalidated)`,
-              explanation: `Candle closed beyond Swing Structure ($${trade.softStructureSl.toFixed(precision)}) and order flow flipped to ${engineDir}. Exiting to protect account balance!`,
-            });
-            if (autopilotRef.current && nowMs - lastAutoActionMsRef.current > 8000) {
-              lastAutoActionMsRef.current = nowMs;
-              await closeActiveBotTrade(
-                'STOP_REVERSE',
-                `Confirmed ${engineDir} CHoCH structure break beyond $${trade.softStructureSl.toFixed(precision)}.`
               );
             }
           } else if (hitBreakevenTrigger) {
@@ -1120,12 +1127,28 @@ export default function AutonomousBotLiveWindow({
 
           // No open trade — evaluate state strictly from live ref to eliminate stale closure mismatch
           const isAutopilotOn = Boolean(autopilotRef.current);
+          const isDirLockedOut =
+            failedDirectionLockoutRef.current &&
+            failedDirectionLockoutRef.current.dir === engineDir &&
+            nowMs < failedDirectionLockoutRef.current.untilMs;
+
           if (!isAutopilotOn) {
             setAiCurrentCommand({
               badge: 'SCANNING ENTRY',
               color: 'blue',
               title: `⏸️ AUTOPILOT IS OFF: ${engineDir} ${symbol} (${analysis.probability}% Confluence)`,
               explanation: `Market setup detected, but AI Autopilot is OFF. The bot will NOT place any trades on its own. Click "START FULL AI AUTOPILOT" to enable auto-trading.`,
+            });
+          } else if (isDirLockedOut) {
+            const remainingSec = Math.max(
+              1,
+              Math.round((failedDirectionLockoutRef.current!.untilMs - nowMs) / 1000)
+            );
+            setAiCurrentCommand({
+              badge: 'SCANNING ENTRY',
+              color: 'amber',
+              title: `⏳ REVERSAL COOLDOWN: ${engineDir} Paused (${remainingSec}s)`,
+              explanation: `Recent ${engineDir} setup failed structure break. Re-entry into ${engineDir} is locked for ${remainingSec}s to prevent same-direction re-entry loops. Scanning for reversal (${engineDir === 'BUY' ? 'SELL' : 'BUY'}).`,
             });
           } else {
             setAiCurrentCommand({
