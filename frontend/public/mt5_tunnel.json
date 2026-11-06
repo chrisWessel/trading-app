@@ -1,9 +1,9 @@
 {
-  "tunnel_url": "https://julie-require-associations-undo.trycloudflare.com",
-  "webhook_url": "https://julie-require-associations-undo.trycloudflare.com/webhook/mt5",
-  "health_url": "https://julie-require-associations-undo.trycloudflare.com/health",
+  "tunnel_url": "https://owner-cute-sweet-smallest.trycloudflare.com",
+  "webhook_url": "https://owner-cute-sweet-smallest.trycloudflare.com/webhook/mt5",
+  "health_url": "https://owner-cute-sweet-smallest.trycloudflare.com/health",
   "port": 8001,
-  "updated_at_utc": "2026-11-02T04:59:26.828082+00:00",
+  "updated_at_utc": "2026-11-06T04:40:50.490954+00:00",
   "mt5_connected": true,
   "mt5_terminal_name": "MetaTrader 5 EXNESS",
   "mt5_account_login": 223995620,
