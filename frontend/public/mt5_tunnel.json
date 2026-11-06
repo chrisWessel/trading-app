@@ -3,7 +3,7 @@
   "webhook_url": "https://perth-reviewing-sending-genuine.trycloudflare.com/webhook/mt5",
   "health_url": "https://perth-reviewing-sending-genuine.trycloudflare.com/health",
   "port": 8001,
-  "updated_at_utc": "2026-11-06T11:03:27.638254+00:00",
+  "updated_at_utc": "2026-11-06T11:05:56.974675+00:00",
   "mt5_connected": true,
   "mt5_terminal_name": "MetaTrader 5 EXNESS",
   "mt5_account_login": 223995620,
